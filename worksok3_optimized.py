@@ -9,7 +9,6 @@ All legacy methods (original centerline, KD-tree, red circles) have been removed
 
 import os
 import numpy as np
-import networkx as nx
 from skimage import io, color, filters, morphology
 from skimage.morphology import binary_erosion, footprint_rectangle
 from scipy import interpolate

@@ -12,7 +12,6 @@ import numpy as np
 import base64
 from io import BytesIO
 from PIL import Image
-import json
 import tempfile
 import uuid
 
