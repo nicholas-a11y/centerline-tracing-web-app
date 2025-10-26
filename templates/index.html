@@ -356,15 +356,13 @@
                     <h3>🎨 Optimization</h3>
                     <div class="parameter">
                         <label>RDP Tolerance <span class="range-value" id="rdpToleranceValue">2.0</span></label>
-                        <input type="range" id="rdpTolerance" min="0.5" max="5" step="0.5" value="2.0">
+                        <input type="range" id="rdpTolerance" min="0.5" max="10.0" step="0.5" value="2.0">
+                        <small style="color: #666; font-size: 0.8em;">Higher values = fewer points in blue lines</small>
                     </div>
                     <div class="parameter">
                         <label>Smoothing Factor <span class="range-value" id="smoothingFactorValue">0.005</span></label>
-                        <input type="range" id="smoothingFactor" min="0.001" max="0.02" step="0.001" value="0.005">
-                    </div>
-                    <div class="parameter">
-                        <label>Top N Paths <span class="range-value" id="topNPathsValue">10</span></label>
-                        <input type="range" id="topNPaths" min="3" max="20" step="1" value="10">
+                        <input type="range" id="smoothingFactor" min="0.001" max="0.05" step="0.001" value="0.005">
+                        <small style="color: #666; font-size: 0.8em;">Higher values = smoother, fewer points</small>
                     </div>
                 </div>
 
@@ -386,14 +384,14 @@
 
                 <div class="loading" id="loadingArea">
                     <div class="spinner"></div>
-                    <div>Processing centerlines...</div>
+                    <div id="loadingText">Processing centerlines...</div>
+                    <div id="loadingDetails" style="font-size: 0.9em; color: #666; margin-top: 10px;"></div>
                 </div>
 
                 <div class="results-panel" id="resultsPanel" style="display: none;">
                     <h3>📊 Results</h3>
                     <div class="results-grid" id="resultsGrid"></div>
                     <div class="action-buttons">
-                        <button class="btn btn-success" id="generateSvgBtn" onclick="generateSVG()">🎨 Generate SVG</button>
                         <button class="btn btn-secondary" id="downloadBtn" onclick="downloadSVG()" style="display: none;">💾 Download SVG</button>
                     </div>
                 </div>
@@ -555,9 +553,12 @@
                 return;
             }
 
+            // Clear the previous result displays
+            clearResults();
+
             const parameters = getParameters();
-            showLoading(true);
-            showMessage('Processing centerlines...', 'info');
+            showLoading(true, 'Extracting skeleton paths...', 'Analyzing image structure and detecting paths');
+            showProgressMessage('Starting centerline processing...', 'info');
 
             fetch('/process', {
                 method: 'POST',
@@ -571,12 +572,24 @@
             })
             .then(response => response.json())
             .then(data => {
-                showLoading(false);
                 if (data.success) {
+                    showLoading(false);
                     displayResults(data);
-                    showMessage('Processing complete!', 'success');
-                    document.getElementById('generateSvgBtn').disabled = false;
+                    
+                    // Show detailed progress info
+                    const reductionText = data.point_reduction_percentage ? 
+                        ` (${data.point_reduction_percentage}% point reduction)` : '';
+                    showProgressMessage(`Processing complete! Found ${data.paths_count} optimized paths${reductionText}. Auto-generating SVG...`, 'success');
+                    
+                    // Show SVG generation progress
+                    showLoading(true, 'Generating SVG visualization...', 'Creating interactive SVG output');
+                    
+                    // Auto-generate SVG after processing
+                    setTimeout(() => {
+                        generateSVG();
+                    }, 500);
                 } else {
+                    showLoading(false);
                     showMessage(data.error, 'error');
                 }
             })
@@ -591,8 +604,7 @@
                 dark_threshold: parseFloat(document.getElementById('darkThreshold').value),
                 rdp_tolerance: parseFloat(document.getElementById('rdpTolerance').value),
                 smoothing_factor: parseFloat(document.getElementById('smoothingFactor').value),
-                min_path_length: parseInt(document.getElementById('minPathLength').value),
-                optimize_top_n_paths: parseInt(document.getElementById('topNPaths').value)
+                min_path_length: parseInt(document.getElementById('minPathLength').value)
             };
         }
 
@@ -621,6 +633,14 @@
                     <div class="stat-value">${data.paths_count}</div>
                     <div class="stat-label">Output Paths</div>
                 </div>
+                <div class="stat-card">
+                    <div class="stat-value">${data.optimized_points || 'N/A'}</div>
+                    <div class="stat-label">Blue Line Points</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${data.point_reduction_percentage || 0}%</div>
+                    <div class="stat-label">Points Reduced</div>
+                </div>
             `;
             
             resultsPanel.style.display = 'block';
@@ -631,8 +651,6 @@
                 showMessage('No session available', 'error');
                 return;
             }
-
-            showMessage('Generating SVG visualization...', 'info');
 
             fetch('/generate_svg', {
                 method: 'POST',
@@ -645,15 +663,17 @@
             })
             .then(response => response.json())
             .then(data => {
+                showLoading(false); // Hide loading indicator
                 if (data.success) {
                     displaySVG(data.svg_content);
-                    showMessage('SVG generated successfully!', 'success');
+                    showProgressMessage('SVG visualization generated successfully! Ready for download.', 'success');
                     document.getElementById('downloadBtn').style.display = 'inline-block';
                 } else {
                     showMessage(data.error, 'error');
                 }
             })
             .catch(error => {
+                showLoading(false); // Hide loading indicator
                 showMessage(`SVG generation error: ${error.message}`, 'error');
             });
         }
@@ -681,12 +701,44 @@
             }, 5000);
         }
 
-        function showLoading(show) {
+        function showProgressMessage(message, type) {
+            const messageArea = document.getElementById('messageArea');
+            messageArea.innerHTML = `<div class="${type}">${message}</div>`;
+            // Don't auto-clear progress messages
+        }
+
+        function clearResults() {
+            // Clear previous SVG display
+            const svgDisplay = document.getElementById('svgDisplay');
+            svgDisplay.innerHTML = '';
+            svgDisplay.style.display = 'none';
+            
+            // Hide results panel
+            const resultsPanel = document.getElementById('resultsPanel');
+            resultsPanel.style.display = 'none';
+            
+            // Hide download button
+            const downloadBtn = document.getElementById('downloadBtn');
+            downloadBtn.style.display = 'none';
+            
+            // Clear any lingering messages
+            const messageArea = document.getElementById('messageArea');
+            messageArea.innerHTML = '';
+        }
+
+        function showLoading(show, message = null, details = null) {
             const loadingArea = document.getElementById('loadingArea');
+            const loadingText = document.getElementById('loadingText');
+            const loadingDetails = document.getElementById('loadingDetails');
+            
             if (show) {
                 loadingArea.classList.add('show');
+                if (message) loadingText.textContent = message;
+                if (details) loadingDetails.textContent = details;
             } else {
                 loadingArea.classList.remove('show');
+                loadingText.textContent = 'Processing centerlines...';
+                loadingDetails.textContent = '';
             }
         }
     </script>

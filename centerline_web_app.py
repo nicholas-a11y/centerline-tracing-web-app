@@ -36,10 +36,9 @@ class CenterlineSession:
         self.results = None
         self.parameters = {
             'dark_threshold': 0.20,
-            'rdp_tolerance': 2.0,
-            'smoothing_factor': 0.005,
-            'min_path_length': 3,
-            'optimize_top_n_paths': 10
+            'rdp_tolerance': 2.0,      # Increase to 5.0-10.0 for fewer points
+            'smoothing_factor': 0.005,  # Increase to 0.02-0.05 for fewer points
+            'min_path_length': 3       # Increase to 8-15 for longer segments
         }
 
 def load_and_process_image(image_path):
@@ -92,35 +91,29 @@ def process_centerlines(session):
     if len(path_scores) == 0:
         return {'error': 'No path scores computed.'}
     
-    # Fast optimization: Only optimize top N paths
-    fast_optimize_count = min(5, len(valid_paths))
+    # Optimize ALL valid paths instead of limiting to top N
     sorted_indices = np.argsort(path_scores)[::-1]  # Best first
-    top_indices = sorted_indices[:fast_optimize_count]
     
     optimized_paths = []
     optimized_scores = []
     
-    for i, idx in enumerate(top_indices):
+    print(f"Optimizing all {len(valid_paths)} valid paths...")
+    
+    for i, idx in enumerate(sorted_indices):
         path = valid_paths[idx]
         original_score = path_scores[idx]
         
-        optimized_path, optimized_score = optimize_path_with_circles(path, circle_system)
+        print(f"  Path {i+1}/{len(valid_paths)}:")
+        # Apply custom parameters for optimization
+        optimized_path, optimized_score = optimize_path_with_custom_params(
+            path, circle_system, params
+        )
         
         optimized_paths.append(optimized_path)
         optimized_scores.append(optimized_score)
     
-    # Add remaining unoptimized paths for visualization
-    remaining_count = min(params['optimize_top_n_paths'] - len(optimized_paths), 
-                         len(valid_paths) - len(optimized_paths))
-    if remaining_count > 0:
-        remaining_indices = sorted_indices[len(optimized_paths):len(optimized_paths) + remaining_count]
-        for idx in remaining_indices:
-            optimized_paths.append(valid_paths[idx])
-            optimized_scores.append(path_scores[idx])
-    
-    # Get corresponding pre-optimization paths for visualization
-    all_indices = sorted_indices[:len(optimized_paths)]
-    top_pre_optimization_paths = [valid_paths[idx] for idx in all_indices]
+    # Get corresponding pre-optimization paths for visualization (in same order)
+    top_pre_optimization_paths = [valid_paths[idx] for idx in sorted_indices]
     
     # Prepare results
     results = {
@@ -136,6 +129,59 @@ def process_centerlines(session):
     }
     
     return results
+
+def optimize_path_with_custom_params(path, circle_system, params):
+    """Optimize path using custom parameters from the frontend."""
+    from worksok3_optimized import rdp_simplify, smooth_path_spline, fit_curve_to_path
+    
+    current_path = path
+    best_score = circle_system.evaluate_path(current_path)
+    
+    print(f"    Optimizing path: {len(path)} points, initial score: {best_score:.2f}")
+    
+    # Apply RDP simplification with user tolerance
+    rdp_tolerance = params.get('rdp_tolerance', 2.0)
+    try:
+        simplified_path = rdp_simplify(current_path, rdp_tolerance)
+        if len(simplified_path) >= params.get('min_path_length', 3):
+            rdp_score = circle_system.evaluate_path(simplified_path)
+            print(f"      RDP: {len(current_path)} -> {len(simplified_path)} points, score: {rdp_score:.2f}")
+            if rdp_score > best_score:
+                current_path = simplified_path
+                best_score = rdp_score
+    except Exception as e:
+        print(f"      RDP failed: {e}")
+    
+    # Apply smoothing with user factor - try multiple approaches
+    smoothing_factor = params.get('smoothing_factor', 0.005)
+    
+    # Method 1: Spline smoothing
+    try:
+        smoothed_path = smooth_path_spline(current_path, smoothing_factor)
+        if len(smoothed_path) >= params.get('min_path_length', 3):
+            smooth_score = circle_system.evaluate_path(smoothed_path)
+            print(f"      Spline smooth: {len(current_path)} -> {len(smoothed_path)} points, score: {smooth_score:.2f}")
+            if smooth_score > best_score * 0.95:  # Accept if within 95% of best score
+                current_path = smoothed_path
+                best_score = smooth_score
+    except Exception as e:
+        print(f"      Spline smoothing failed: {e}")
+    
+    # Method 2: Polynomial curve fitting for longer paths
+    if len(current_path) >= 6:
+        try:
+            poly_path = fit_curve_to_path(current_path, 'polynomial', degree=3)
+            if len(poly_path) >= params.get('min_path_length', 3):
+                poly_score = circle_system.evaluate_path(poly_path)
+                print(f"      Polynomial: {len(current_path)} -> {len(poly_path)} points, score: {poly_score:.2f}")
+                if poly_score > best_score * 0.95:  # Accept if within 95% of best score
+                    current_path = poly_path
+                    best_score = poly_score
+        except Exception as e:
+            print(f"      Polynomial fitting failed: {e}")
+    
+    print(f"    Final: {len(current_path)} points, score: {best_score:.2f}")
+    return current_path, best_score
 
 @app.route('/')
 def index():
@@ -210,6 +256,11 @@ def process():
         if results and 'error' not in results:
             session.results = results
             
+            # Calculate point reduction statistics
+            original_points = sum(len(path) for path in results.get('pre_optimization_paths', []))
+            optimized_points = sum(len(path) for path in results.get('optimized_paths', []))
+            reduction_percentage = ((original_points - optimized_points) / max(original_points, 1)) * 100 if original_points > 0 else 0
+            
             # Prepare response data
             response = {
                 'success': True,
@@ -218,7 +269,10 @@ def process():
                 'merged_paths_count': results['merged_paths_count'],
                 'valid_paths_count': results['valid_paths_count'],
                 'best_score': results['best_score'],
-                'paths_count': len(results['optimized_paths'])
+                'paths_count': len(results['optimized_paths']),
+                'original_points': original_points,
+                'optimized_points': optimized_points,
+                'point_reduction_percentage': round(reduction_percentage, 1)
             }
             
             return jsonify(response)
