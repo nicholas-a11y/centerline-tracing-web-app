@@ -39,7 +39,7 @@ class CenterlineSession:
             'rdp_tolerance': 2.0,      # Increase to 5.0-10.0 for fewer points
             'smoothing_factor': 0.005,  # Increase to 0.02-0.05 for fewer points
             'min_path_length': 3,      # Increase to 8-15 for longer segments
-            'show_pre_optimization': True,  # Show unoptimized paths in SVG
+            'show_pre_optimization': False,  # Show unoptimized paths in SVG
             'include_image': False     # Include original image in SVG background
         }
 
@@ -314,7 +314,7 @@ def generate_svg():
         
         wo.OUTPUT_PATH = temp_svg
         wo.SHOW_BITMAP = session.parameters.get('include_image', False)  # User-controlled
-        wo.SHOW_PRE_OPTIMIZATION_PATHS = session.parameters.get('show_pre_optimization', True)  # User-controlled
+        wo.SHOW_PRE_OPTIMIZATION_PATHS = session.parameters.get('show_pre_optimization', False)  # User-controlled
         
         # Generate SVG
         create_svg_output(
@@ -375,7 +375,7 @@ def download_svg(session_id):
         
         wo.OUTPUT_PATH = temp_svg
         wo.SHOW_BITMAP = session.parameters.get('include_image', False)  # User-controlled
-        wo.SHOW_PRE_OPTIMIZATION_PATHS = session.parameters.get('show_pre_optimization', True)
+        wo.SHOW_PRE_OPTIMIZATION_PATHS = session.parameters.get('show_pre_optimization', False)
         
         create_svg_output(
             session.image,
