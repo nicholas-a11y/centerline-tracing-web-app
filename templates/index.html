@@ -130,6 +130,10 @@
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         }
 
+        .btn-warning {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+
         .btn-success {
             background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
         }
@@ -214,8 +218,63 @@
 
         .image-display img {
             max-width: 100%;
-            max-height: 500px;
+            max-height: 80vh;
             border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.3s ease;
+            object-fit: contain;
+        }
+
+        .image-display img:hover {
+            transform: scale(1.02);
+        }
+
+        /* Modal styles for full-size image viewing */
+        .image-modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            cursor: pointer;
+        }
+
+        .image-modal-content {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            max-width: 95%;
+            max-height: 95%;
+            object-fit: contain;
+        }
+
+        .image-modal-close {
+            position: absolute;
+            top: 20px;
+            right: 35px;
+            color: #f1f1f1;
+            font-size: 40px;
+            font-weight: bold;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .image-modal-close:hover {
+            color: #bbb;
+        }
+
+        .image-info {
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 5px;
+            margin-top: 10px;
+            font-size: 0.9em;
+            display: inline-block;
         }
 
         .svg-display {
@@ -223,7 +282,18 @@
             border-radius: 10px;
             background: white;
             min-height: 400px;
-            overflow: auto;
+            overflow: hidden;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .svg-display svg {
+            max-width: 100%;
+            max-height: 100%;
+            width: auto;
+            height: auto;
         }
 
         .results-panel {
@@ -318,6 +388,24 @@
                 border-right: none;
                 border-bottom: 1px solid #e9ecef;
             }
+            
+            .image-display img {
+                max-height: 60vh;
+            }
+            
+            .container {
+                margin: 10px;
+                max-width: calc(100% - 20px);
+            }
+            
+            .content-area {
+                padding: 15px;
+            }
+            
+            .image-modal-content {
+                max-width: 98%;
+                max-height: 98%;
+            }
         }
     </style>
 </head>
@@ -345,10 +433,14 @@
                     <div class="parameter">
                         <label>Dark Threshold <span class="range-value" id="darkThresholdValue">0.20</span></label>
                         <input type="range" id="darkThreshold" min="0.05" max="0.8" step="0.05" value="0.20">
+                        <button class="btn btn-secondary" id="autoDetectBtn" onclick="autoDetectThreshold()" style="margin-top: 8px; padding: 6px 12px; font-size: 14px; display: none;" disabled>🎯 Auto-Detect</button>
+                        <small style="color: #666; font-size: 0.8em;">Automatically find the best threshold value</small>
                     </div>
                     <div class="parameter">
                         <label>Min Path Length <span class="range-value" id="minPathLengthValue">3</span></label>
                         <input type="range" id="minPathLength" min="1" max="20" step="1" value="3">
+                        <button class="btn btn-secondary" id="autoDetectMinLengthBtn" onclick="autoDetectMinPathLength()" style="margin-top: 8px; padding: 6px 12px; font-size: 14px; display: none;" disabled>🎯 Auto-Detect</button>
+                        <small style="color: #666; font-size: 0.8em;">Filter out short path segments (noise)</small>
                     </div>
                 </div>
 
@@ -366,8 +458,10 @@
                     </div>
                 </div>
 
+
+
                 <div class="parameter-group">
-                    <h3>📊 Output Options</h3>
+                    <h3>�📊 Output Options</h3>
                     <div class="parameter">
                         <label>
                             <input type="checkbox" id="enableOptimization" checked>
@@ -394,6 +488,7 @@
                 <div class="action-buttons">
                     <button class="btn" id="processBtn" onclick="processImage()" disabled>🚀 Process</button>
                     <button class="btn btn-secondary" id="autoProcessBtn" onclick="toggleAutoProcess()">🔄 Auto</button>
+                    <button class="btn btn-warning" id="stopOptBtn" onclick="stopOptimization()" style="display: none;">⏹️ Stop Optimization</button>
                 </div>
             </div>
 
@@ -405,6 +500,13 @@
                         <div style="font-size: 3em; margin-bottom: 10px;">🖼️</div>
                         <div>Upload an image to start</div>
                     </div>
+                </div>
+
+                <!-- Modal for full-size image viewing -->
+                <div class="image-modal" id="imageModal">
+                    <span class="image-modal-close" id="modalClose">&times;</span>
+                    <img class="image-modal-content" id="modalImage">
+                    <div id="imageInfoDisplay" style="position: absolute; bottom: 20px; left: 20px;"></div>
                 </div>
 
                 <div class="loading" id="loadingArea">
@@ -481,9 +583,11 @@
                 showLoading(false);
                 if (data.success) {
                     currentSessionId = data.session_id;
-                    displayImage(data.image_data);
+                    displayImage(data.image_data, data.image_shape);
                     updateParameters(data.parameters);
                     document.getElementById('processBtn').disabled = false;
+                    document.getElementById('autoDetectBtn').disabled = false;
+                    document.getElementById('autoDetectMinLengthBtn').disabled = false;
                     showMessage(`Image loaded: ${data.image_shape[0]}×${data.image_shape[1]} pixels`, 'success');
                     
                     if (autoProcessEnabled) {
@@ -499,10 +603,58 @@
             });
         }
 
-        function displayImage(imageData) {
+        function displayImage(imageData, imageShape) {
             const imageDisplay = document.getElementById('imageDisplay');
-            imageDisplay.innerHTML = `<img src="data:image/png;base64,${imageData}" alt="Uploaded Image">`;
+            const imgElement = `<img src="data:image/png;base64,${imageData}" alt="Uploaded Image" onclick="openImageModal(this.src)" id="mainImage">`;
+            const infoElement = imageShape ? `<div class="image-info">📐 Dimensions: ${imageShape[1]} × ${imageShape[0]} pixels</div>` : '';
+            imageDisplay.innerHTML = imgElement + infoElement;
         }
+
+        function openImageModal(imageSrc) {
+            const modal = document.getElementById('imageModal');
+            const modalImg = document.getElementById('modalImage');
+            const mainImg = document.getElementById('mainImage');
+            
+            modal.style.display = 'block';
+            modalImg.src = imageSrc;
+            
+            // Get image dimensions from the main image
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const img = new Image();
+            img.onload = function() {
+                document.getElementById('imageInfoDisplay').innerHTML = 
+                    `<div class="image-info">📐 Original Size: ${this.naturalWidth} × ${this.naturalHeight} pixels<br>💡 Click anywhere to close</div>`;
+            };
+            img.src = imageSrc;
+        }
+
+        function closeImageModal() {
+            document.getElementById('imageModal').style.display = 'none';
+        }
+
+        // Modal event handlers
+        document.addEventListener('DOMContentLoaded', function() {
+            const modal = document.getElementById('imageModal');
+            const closeBtn = document.getElementById('modalClose');
+            
+            // Close modal when clicking the X
+            closeBtn.onclick = closeImageModal;
+            
+            // Close modal when clicking outside the image
+            modal.onclick = function(event) {
+                if (event.target === modal) {
+                    closeImageModal();
+                }
+            };
+            
+            // Close modal with Escape key
+            document.addEventListener('keydown', function(event) {
+                if (event.key === 'Escape') {
+                    closeImageModal();
+                }
+            });
+        });
 
         function updateParameters(params) {
             Object.keys(params).forEach(key => {
@@ -559,16 +711,27 @@
         function handleOptimizationToggle() {
             const enableOptimization = document.getElementById('enableOptimization');
             const showPreOptimization = document.getElementById('showPreOptimization');
+            const overlapSection = document.getElementById('overlapControlSection');
             
             if (!enableOptimization.checked) {
                 // When optimization is off, force show unoptimized paths to be checked and disabled
                 showPreOptimization.checked = true;
                 showPreOptimization.disabled = true;
                 showPreOptimization.parentElement.style.opacity = '0.6';
+                
+                // Hide overlap controls since no merging will occur
+                if (overlapSection) {
+                    overlapSection.style.display = 'none';
+                }
             } else {
                 // When optimization is on, enable the show unoptimized paths checkbox
                 showPreOptimization.disabled = false;
                 showPreOptimization.parentElement.style.opacity = '1';
+                
+                // Show overlap controls
+                if (overlapSection) {
+                    overlapSection.style.display = 'block';
+                }
             }
         }
 
@@ -599,6 +762,127 @@
             }
         }
 
+        function autoDetectMinPathLength() {
+            if (!currentSessionId) {
+                showMessage('Please upload an image first', 'error');
+                return;
+            }
+
+            const autoDetectBtn = document.getElementById('autoDetectMinLengthBtn');
+            autoDetectBtn.disabled = true;
+            autoDetectBtn.textContent = '🔍 Detecting...';
+            
+            showLoading(true, 'Auto-detecting optimal min path length...', 'Analyzing path length distribution to filter noise');
+            showProgressMessage('Testing different minimum path lengths...', 'info');
+
+            fetch('/auto_detect_min_path_length', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: currentSessionId
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                showLoading(false);
+                autoDetectBtn.disabled = false;
+                autoDetectBtn.textContent = '🎯 Auto-Detect';
+                
+                if (data.success) {
+                    // Update the min path length slider
+                    const minLengthSlider = document.getElementById('minPathLength');
+                    minLengthSlider.value = data.detected_min_length;
+                    updateRangeValue('minPathLength');
+                    
+                    // Update session parameters
+                    updateParameters(data.updated_parameters);
+                    
+                    let statsText = '';
+                    if (data.path_stats) {
+                        statsText = ` (found ${data.path_stats.total_paths} paths, median length: ${data.path_stats.median_length})`;
+                    }
+                    
+                    const confidenceText = data.confidence_score > 0.3 ? 'high confidence' : 'moderate confidence';
+                    showProgressMessage(`Min path length set to ${data.detected_min_length} (${confidenceText})${statsText}`, 'success');
+                    
+                    // Auto-process if enabled
+                    if (autoProcessEnabled) {
+                        setTimeout(() => {
+                            processImage();
+                        }, 1000);
+                    }
+                } else {
+                    showMessage(data.error || 'Auto-detection failed', 'error');
+                }
+            })
+            .catch(error => {
+                showLoading(false);
+                autoDetectBtn.disabled = false;
+                autoDetectBtn.textContent = '🎯 Auto-Detect';
+                showMessage(`Auto-detection error: ${error.message}`, 'error');
+            });
+        }
+
+        function autoDetectThreshold() {
+            if (!currentSessionId) {
+                showMessage('Please upload an image first', 'error');
+                return;
+            }
+
+            const autoDetectBtn = document.getElementById('autoDetectBtn');
+            autoDetectBtn.disabled = true;
+            autoDetectBtn.textContent = '🔍 Detecting...';
+            
+            showLoading(true, 'Auto-detecting optimal threshold...', 'Analyzing image to find best dark threshold value');
+            showProgressMessage('Scanning different threshold values...', 'info');
+
+            fetch('/auto_detect_threshold', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: currentSessionId
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                showLoading(false);
+                autoDetectBtn.disabled = false;
+                autoDetectBtn.textContent = '🎯 Auto-Detect';
+                
+                if (data.success) {
+                    // Update the threshold slider
+                    const thresholdSlider = document.getElementById('darkThreshold');
+                    thresholdSlider.value = data.detected_threshold;
+                    updateRangeValue('darkThreshold');
+                    
+                    // Update session parameters
+                    updateParameters(data.updated_parameters);
+                    
+                    const confidenceText = data.confidence_score > 0.5 ? 'high confidence' : 'moderate confidence';
+                    showProgressMessage(`Auto-detection complete! Set threshold to ${data.detected_threshold.toFixed(3)} (${confidenceText})`, 'success');
+                    
+                    // Auto-process if enabled
+                    if (autoProcessEnabled) {
+                        setTimeout(() => {
+                            processImage();
+                        }, 1000);
+                    }
+                } else {
+                    showMessage(data.error || 'Auto-detection failed', 'error');
+                }
+            })
+            .catch(error => {
+                showLoading(false);
+                autoDetectBtn.disabled = false;
+                autoDetectBtn.textContent = '🎯 Auto-Detect';
+                showMessage(`Auto-detection error: ${error.message}`, 'error');
+            });
+        }
+
         function processImage() {
             if (!currentSessionId) {
                 showMessage('Please upload an image first', 'error');
@@ -609,10 +893,13 @@
             clearResults();
 
             const parameters = getParameters();
-            showLoading(true, 'Extracting skeleton paths...', 'Analyzing image structure and detecting paths');
-            showProgressMessage('Starting centerline processing...', 'info');
-
-            fetch('/process', {
+            
+            // Always use progressive mode for better user experience
+            console.log('Starting progressive processing mode...');
+            showLoading(true, 'Extracting initial paths...', 'Getting immediate skeleton paths');
+            showProgressMessage('Starting progressive processing...', 'info');
+            
+            fetch('/process_immediate', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -624,30 +911,138 @@
             })
             .then(response => response.json())
             .then(data => {
+                console.log('Progressive processing response:', data);
                 if (data.success) {
                     showLoading(false);
-                    displayResults(data);
                     
-                    // Show detailed progress info
-                    const reductionText = data.point_reduction_percentage ? 
-                        ` (${data.point_reduction_percentage}% point reduction)` : '';
-                    showProgressMessage(`Processing complete! Found ${data.paths_count} optimized paths${reductionText}. Auto-generating SVG...`, 'success');
+                    // Display immediate magenta results
+                    displayImmediateResults(data);
+                    showProgressMessage(`Found ${data.valid_paths_count} initial paths. Displaying immediately...`, 'success');
                     
-                    // Show SVG generation progress
-                    showLoading(true, 'Generating SVG visualization...', 'Creating interactive SVG output');
+                    // Generate immediate SVG (magenta only)
+                    generateSVG('immediate');
                     
-                    // Auto-generate SVG after processing
-                    setTimeout(() => {
-                        generateSVG();
-                    }, 500);
+                    if (data.optimization_started) {
+                        // Start progress monitoring
+                        startProgressMonitoring();
+                        showProgressMessage('Optimization started in background. Watch progress below...', 'info');
+                    } else {
+                        showProgressMessage('Raw paths extracted. Optimization disabled.', 'info');
+                    }
                 } else {
                     showLoading(false);
                     showMessage(data.error, 'error');
                 }
             })
             .catch(error => {
+                console.error('Progressive processing error:', error);
                 showLoading(false);
                 showMessage(`Processing error: ${error.message}`, 'error');
+            });
+        }
+
+        function displayImmediateResults(data) {
+            console.log('Displaying immediate results:', data);
+            const resultsPanel = document.getElementById('resultsPanel');
+            const resultsGrid = document.getElementById('resultsGrid');
+            
+            resultsGrid.innerHTML = `
+                <div class="result-item">
+                    <h3>Initial Paths Found</h3>
+                    <p><strong>${data.valid_paths_count}</strong> skeleton paths detected</p>
+                    <small>Magenta paths shown immediately</small>
+                </div>
+                <div class="result-item">
+                    <h3>Optimization Status</h3>
+                    <p id="optimization-status">${data.optimization_started ? 'Running in background...' : 'Disabled'}</p>
+                    <div id="progress-container" style="margin-top: 10px;">
+                        <div id="progress-messages" style="max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.8em; background: #f5f5f5; padding: 8px; border-radius: 4px;"></div>
+                    </div>
+                </div>
+            `;
+            
+            resultsPanel.style.display = 'block';
+            console.log('Results panel should now be visible');
+        }
+
+        let progressInterval;
+
+        function startProgressMonitoring() {
+            console.log('Starting progress monitoring...');
+            if (progressInterval) clearInterval(progressInterval);
+            
+            // Show stop button
+            const stopBtn = document.getElementById('stopOptBtn');
+            if (stopBtn) {
+                stopBtn.style.display = 'inline-block';
+                console.log('Stop button should now be visible');
+            } else {
+                console.error('Stop button not found!');
+            }
+            
+            progressInterval = setInterval(() => {
+                console.log('Checking progress...');
+                fetch(`/progress/${currentSessionId}`)
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Progress data:', data);
+                    if (data.messages && data.messages.length > 0) {
+                        const messagesDiv = document.getElementById('progress-messages');
+                        if (messagesDiv) {
+                            data.messages.forEach(message => {
+                                const msgDiv = document.createElement('div');
+                                msgDiv.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
+                                messagesDiv.appendChild(msgDiv);
+                            });
+                            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                        } else {
+                            console.error('Progress messages div not found!');
+                        }
+                    }
+                    
+                    if (data.optimized_count > 0) {
+                        // Update SVG with progressive results
+                        console.log(`Updating SVG with ${data.optimized_count} optimized paths`);
+                        generateSVG('progressive');
+                    }
+                    
+                    if (data.optimization_complete) {
+                        console.log('Optimization complete!');
+                        clearInterval(progressInterval);
+                        const statusEl = document.getElementById('optimization-status');
+                        if (statusEl) statusEl.textContent = 'Complete!';
+                        document.getElementById('stopOptBtn').style.display = 'none'; // Hide stop button
+                        showProgressMessage('Optimization complete! Final results displayed.', 'success');
+                        generateSVG('final');
+                    }
+                })
+                .catch(error => {
+                    console.error('Progress monitoring error:', error);
+                });
+            }, 1000); // Check every second
+        }
+
+        function stopOptimization() {
+            if (!currentSessionId) return;
+            
+            fetch('/stop_optimization', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: currentSessionId
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    clearInterval(progressInterval);
+                    document.getElementById('stopOptBtn').style.display = 'none';
+                    document.getElementById('optimization-status').textContent = 'Stopped by user';
+                    showProgressMessage('Optimization stopped. Current progress available for download.', 'warning');
+                    generateSVG('progressive'); // Show current state
+                }
             });
         }
 
@@ -701,43 +1096,114 @@
             resultsPanel.style.display = 'block';
         }
 
-        function generateSVG() {
+        function generateSVG(mode = 'final') {
+            console.log(`generateSVG called with mode: ${mode}`);
             if (!currentSessionId) {
+                console.error('No currentSessionId available');
                 showMessage('No session available', 'error');
                 return;
             }
 
+            console.log(`Making SVG request for session: ${currentSessionId}`);
             fetch('/generate_svg', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    session_id: currentSessionId
+                    session_id: currentSessionId,
+                    mode: mode
                 })
             })
-            .then(response => response.json())
+            .then(response => {
+                console.log('SVG response received:', response.status);
+                return response.json();
+            })
             .then(data => {
+                console.log('SVG data:', data);
                 showLoading(false); // Hide loading indicator
-                if (data.success) {
-                    displaySVG(data.svg_content);
-                    showProgressMessage('SVG visualization generated successfully! Ready for download.', 'success');
+                if (data.svg) {
+                    displaySVG(data.svg);
+                    
+                    if (mode === 'immediate') {
+                        showProgressMessage('Magenta skeleton paths displayed! Optimization running in background...', 'success');
+                    } else if (mode === 'progressive') {
+                        showProgressMessage('SVG updated with optimization progress...', 'info');
+                    } else {
+                        showProgressMessage('Final SVG visualization generated! Ready for download.', 'success');
+                    }
+                    
                     document.getElementById('downloadBtn').style.display = 'inline-block';
                 } else {
-                    showMessage(data.error, 'error');
+                    console.error('No SVG in response:', data);
+                    showMessage(data.error || 'SVG generation failed', 'error');
                 }
             })
             .catch(error => {
+                console.error('SVG generation error:', error);
                 showLoading(false); // Hide loading indicator
                 showMessage(`SVG generation error: ${error.message}`, 'error');
             });
         }
 
         function displaySVG(svgContent) {
+            console.log('displaySVG called with content length:', svgContent.length);
             const svgDisplay = document.getElementById('svgDisplay');
+            if (!svgDisplay) {
+                console.error('svgDisplay element not found!');
+                return;
+            }
             svgDisplay.innerHTML = svgContent;
             svgDisplay.style.display = 'block';
+            
+            // Auto-fit SVG to container bounds
+            autoFitSVG();
+            
+            console.log('SVG displayed with auto-fit');
         }
+
+        function autoFitSVG() {
+            const svg = document.querySelector('#svgDisplay svg');
+            if (!svg) return;
+            
+            // Get the SVG container dimensions
+            const container = document.getElementById('svgDisplay');
+            const containerRect = container.getBoundingClientRect();
+            const containerWidth = containerRect.width - 20; // 10px padding each side
+            const containerHeight = containerRect.height - 20; // 10px padding each side
+            
+            // Get the SVG viewBox or calculate from content bounds
+            let viewBox = svg.getAttribute('viewBox');
+            if (!viewBox) {
+                // If no viewBox, try to get bounds from width/height attributes
+                const width = svg.getAttribute('width') || '800';
+                const height = svg.getAttribute('height') || '600';
+                viewBox = `0 0 ${width} ${height}`;
+                svg.setAttribute('viewBox', viewBox);
+            }
+            
+            // Parse viewBox to get SVG dimensions
+            const [x, y, svgWidth, svgHeight] = viewBox.split(' ').map(Number);
+            
+            // Calculate scale to fit both width and height
+            const scaleX = containerWidth / svgWidth;
+            const scaleY = containerHeight / svgHeight;
+            const scale = Math.min(scaleX, scaleY, 1); // Don't scale up beyond 100%
+            
+            // Apply the calculated size
+            const finalWidth = svgWidth * scale;
+            const finalHeight = svgHeight * scale;
+            
+            svg.style.width = `${finalWidth}px`;
+            svg.style.height = `${finalHeight}px`;
+            
+            console.log(`Auto-fit SVG: ${svgWidth}x${svgHeight} -> ${finalWidth.toFixed(0)}x${finalHeight.toFixed(0)} (scale: ${(scale*100).toFixed(1)}%)`);
+        }
+
+        // Re-fit SVG when window is resized
+        window.addEventListener('resize', function() {
+            setTimeout(autoFitSVG, 100); // Small delay to let layout settle
+        });
 
         function downloadSVG() {
             if (!currentSessionId) {
