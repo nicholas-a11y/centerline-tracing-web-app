@@ -32,12 +32,15 @@ class CenterlineSession:
         self.session_id = session_id
         self.image = None
         self.image_path = None
+        self.original_filename = None
         self.results = None
         self.parameters = {
             'dark_threshold': 0.20,
             'rdp_tolerance': 2.0,      # Increase to 5.0-10.0 for fewer points
             'smoothing_factor': 0.005,  # Increase to 0.02-0.05 for fewer points
-            'min_path_length': 3       # Increase to 8-15 for longer segments
+            'min_path_length': 3,      # Increase to 8-15 for longer segments
+            'show_pre_optimization': True,  # Show unoptimized paths in SVG
+            'include_image': False     # Include original image in SVG background
         }
 
 def load_and_process_image(image_path):
@@ -201,6 +204,9 @@ def upload_file():
     session_id = str(uuid.uuid4())
     session = CenterlineSession(session_id)
     
+    # Store original filename
+    session.original_filename = file.filename
+    
     # Save uploaded file
     temp_dir = tempfile.gettempdir()
     temp_path = os.path.join(temp_dir, f"centerline_{session_id}_{file.filename}")
@@ -307,8 +313,8 @@ def generate_svg():
         original_show_pre = wo.SHOW_PRE_OPTIMIZATION_PATHS
         
         wo.OUTPUT_PATH = temp_svg
-        wo.SHOW_BITMAP = True  # Always show bitmap
-        wo.SHOW_PRE_OPTIMIZATION_PATHS = True  # Always show pre-optimization paths
+        wo.SHOW_BITMAP = session.parameters.get('include_image', False)  # User-controlled
+        wo.SHOW_PRE_OPTIMIZATION_PATHS = session.parameters.get('show_pre_optimization', True)  # User-controlled
         
         # Generate SVG
         create_svg_output(
@@ -352,13 +358,24 @@ def download_svg(session_id):
         return "No valid results", 404
     
     try:
+        # Create filename based on original upload
+        original_filename = session.original_filename or 'centerline_extraction'
+        # Remove extension and add _centerline.svg
+        name_without_ext = os.path.splitext(original_filename)[0]
+        download_filename = f"{name_without_ext}_centerline.svg"
+        
         # Create temporary SVG file
         temp_svg = os.path.join(tempfile.gettempdir(), f"centerline_download_{session_id}.svg")
         
-        # Generate SVG with fixed settings
+        # Generate SVG with user settings
         import worksok3_optimized as wo
         original_output = wo.OUTPUT_PATH
+        original_show_bitmap = wo.SHOW_BITMAP
+        original_show_pre = wo.SHOW_PRE_OPTIMIZATION_PATHS
+        
         wo.OUTPUT_PATH = temp_svg
+        wo.SHOW_BITMAP = session.parameters.get('include_image', False)  # User-controlled
+        wo.SHOW_PRE_OPTIMIZATION_PATHS = session.parameters.get('show_pre_optimization', True)
         
         create_svg_output(
             session.image,
@@ -369,8 +386,10 @@ def download_svg(session_id):
         )
         
         wo.OUTPUT_PATH = original_output
+        wo.SHOW_BITMAP = original_show_bitmap
+        wo.SHOW_PRE_OPTIMIZATION_PATHS = original_show_pre
         
-        return send_file(temp_svg, as_attachment=True, download_name='centerline_extraction.svg')
+        return send_file(temp_svg, as_attachment=True, download_name=download_filename)
         
     except Exception as e:
         return f"Error generating download: {str(e)}", 500

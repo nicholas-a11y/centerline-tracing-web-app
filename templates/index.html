@@ -366,6 +366,24 @@
                     </div>
                 </div>
 
+                <div class="parameter-group">
+                    <h3>📊 Output Options</h3>
+                    <div class="parameter">
+                        <label>
+                            <input type="checkbox" id="showPreOptimization" checked>
+                            Show Unoptimized Paths
+                        </label>
+                        <small style="color: #666; font-size: 0.8em;">Display original magenta paths in SVG</small>
+                    </div>
+                    <div class="parameter">
+                        <label>
+                            <input type="checkbox" id="includeImage">
+                            Include Original Image
+                        </label>
+                        <small style="color: #666; font-size: 0.8em;">Include the source image as background in SVG</small>
+                    </div>
+                </div>
+
                 <div class="action-buttons">
                     <button class="btn" id="processBtn" onclick="processImage()" disabled>🚀 Process</button>
                     <button class="btn btn-secondary" id="autoProcessBtn" onclick="toggleAutoProcess()">🔄 Auto</button>
@@ -604,7 +622,9 @@
                 dark_threshold: parseFloat(document.getElementById('darkThreshold').value),
                 rdp_tolerance: parseFloat(document.getElementById('rdpTolerance').value),
                 smoothing_factor: parseFloat(document.getElementById('smoothingFactor').value),
-                min_path_length: parseInt(document.getElementById('minPathLength').value)
+                min_path_length: parseInt(document.getElementById('minPathLength').value),
+                show_pre_optimization: document.getElementById('showPreOptimization').checked,
+                include_image: document.getElementById('includeImage').checked
             };
         }
 
