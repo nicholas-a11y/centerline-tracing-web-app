@@ -1,0 +1,12 @@
+{
+  "name": "centerline-extraction-app",
+  "version": "1.0.0",
+  "description": "Web-based centerline extraction tool",
+  "main": "centerline_web_app.py",
+  "scripts": {
+    "start": "python centerline_web_app.py"
+  },
+  "engines": {
+    "python": "3.8.x"
+  }
+}

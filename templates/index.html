@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Centerline Extraction Tool</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 300;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            min-height: 600px;
+        }
+
+        .sidebar {
+            background: #f8f9fa;
+            border-right: 1px solid #e9ecef;
+            padding: 30px;
+            overflow-y: auto;
+        }
+
+        .content-area {
+            padding: 30px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .upload-area {
+            border: 3px dashed #4facfe;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            background: #f8f9ff;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .upload-area:hover {
+            background: #f0f4ff;
+            border-color: #2196f3;
+        }
+
+        .upload-area.dragover {
+            background: #e3f2fd;
+            border-color: #1976d2;
+        }
+
+        .upload-icon {
+            font-size: 3em;
+            color: #4facfe;
+            margin-bottom: 15px;
+        }
+
+        .upload-text {
+            font-size: 1.2em;
+            color: #666;
+            margin-bottom: 15px;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(79, 172, 254, 0.3);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        }
+
+        .parameter-group {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .parameter-group h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.1em;
+            font-weight: 600;
+        }
+
+        .parameter {
+            margin-bottom: 15px;
+        }
+
+        .parameter label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #555;
+        }
+
+        .parameter input, .parameter select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 2px solid #e9ecef;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s ease;
+        }
+
+        .parameter input:focus, .parameter select:focus {
+            outline: none;
+            border-color: #4facfe;
+        }
+
+        .parameter input[type="range"] {
+            appearance: none;
+            height: 6px;
+            background: #e9ecef;
+            border-radius: 3px;
+        }
+
+        .parameter input[type="range"]::-webkit-slider-thumb {
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            background: #4facfe;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        .parameter input[type="checkbox"] {
+            width: auto;
+            margin-right: 8px;
+        }
+
+        .range-value {
+            font-weight: 600;
+            color: #4facfe;
+            float: right;
+        }
+
+        .image-display {
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            background: #f8f9fa;
+            min-height: 300px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        .image-display img {
+            max-width: 100%;
+            max-height: 500px;
+            border-radius: 8px;
+        }
+
+        .svg-display {
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            background: white;
+            min-height: 400px;
+            overflow: auto;
+        }
+
+        .results-panel {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+
+        .results-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        .stat-value {
+            font-size: 1.5em;
+            font-weight: 600;
+            color: #4facfe;
+        }
+
+        .stat-label {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #4facfe;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #fee;
+            color: #c33;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #c33;
+        }
+
+        .success {
+            background: #efe;
+            color: #363;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #363;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            
+            .sidebar {
+                border-right: none;
+                border-bottom: 1px solid #e9ecef;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎯 Centerline Extraction Tool</h1>
+            <p>Interactive circle-based centerline extraction with real-time parameter adjustment</p>
+        </div>
+        
+        <div class="main-content">
+            <div class="sidebar">
+                <div class="parameter-group">
+                    <h3>📁 Image Upload</h3>
+                    <div class="upload-area" id="uploadArea">
+                        <div class="upload-icon">📷</div>
+                        <div class="upload-text">Click or drag image here</div>
+                        <input type="file" id="fileInput" class="file-input" accept="image/*">
+                        <button class="btn" onclick="document.getElementById('fileInput').click()">Choose File</button>
+                    </div>
+                </div>
+
+                <div class="parameter-group">
+                    <h3>⚙️ Detection Parameters</h3>
+                    <div class="parameter">
+                        <label>Dark Threshold <span class="range-value" id="darkThresholdValue">0.20</span></label>
+                        <input type="range" id="darkThreshold" min="0.05" max="0.8" step="0.05" value="0.20">
+                    </div>
+                    <div class="parameter">
+                        <label>Min Path Length <span class="range-value" id="minPathLengthValue">3</span></label>
+                        <input type="range" id="minPathLength" min="1" max="20" step="1" value="3">
+                    </div>
+                </div>
+
+                <div class="parameter-group">
+                    <h3>🎨 Optimization</h3>
+                    <div class="parameter">
+                        <label>RDP Tolerance <span class="range-value" id="rdpToleranceValue">2.0</span></label>
+                        <input type="range" id="rdpTolerance" min="0.5" max="5" step="0.5" value="2.0">
+                    </div>
+                    <div class="parameter">
+                        <label>Smoothing Factor <span class="range-value" id="smoothingFactorValue">0.005</span></label>
+                        <input type="range" id="smoothingFactor" min="0.001" max="0.02" step="0.001" value="0.005">
+                    </div>
+                    <div class="parameter">
+                        <label>Top N Paths <span class="range-value" id="topNPathsValue">10</span></label>
+                        <input type="range" id="topNPaths" min="3" max="20" step="1" value="10">
+                    </div>
+                </div>
+
+                <div class="action-buttons">
+                    <button class="btn" id="processBtn" onclick="processImage()" disabled>🚀 Process</button>
+                    <button class="btn btn-secondary" id="autoProcessBtn" onclick="toggleAutoProcess()">🔄 Auto</button>
+                </div>
+            </div>
+
+            <div class="content-area">
+                <div id="messageArea"></div>
+                
+                <div class="image-display" id="imageDisplay">
+                    <div style="text-align: center; color: #999;">
+                        <div style="font-size: 3em; margin-bottom: 10px;">🖼️</div>
+                        <div>Upload an image to start</div>
+                    </div>
+                </div>
+
+                <div class="loading" id="loadingArea">
+                    <div class="spinner"></div>
+                    <div>Processing centerlines...</div>
+                </div>
+
+                <div class="results-panel" id="resultsPanel" style="display: none;">
+                    <h3>📊 Results</h3>
+                    <div class="results-grid" id="resultsGrid"></div>
+                    <div class="action-buttons">
+                        <button class="btn btn-success" id="generateSvgBtn" onclick="generateSVG()">🎨 Generate SVG</button>
+                        <button class="btn btn-secondary" id="downloadBtn" onclick="downloadSVG()" style="display: none;">💾 Download SVG</button>
+                    </div>
+                </div>
+
+                <div class="svg-display" id="svgDisplay" style="display: none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentSessionId = null;
+        let autoProcessEnabled = false;
+        let autoProcessTimeout = null;
+
+        // File upload handling
+        const fileInput = document.getElementById('fileInput');
+        const uploadArea = document.getElementById('uploadArea');
+
+        fileInput.addEventListener('change', handleFileSelect);
+        uploadArea.addEventListener('click', () => fileInput.click());
+        uploadArea.addEventListener('dragover', handleDragOver);
+        uploadArea.addEventListener('drop', handleDrop);
+        uploadArea.addEventListener('dragenter', e => e.preventDefault());
+        uploadArea.addEventListener('dragleave', handleDragLeave);
+
+        function handleDragOver(e) {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        }
+
+        function handleDragLeave(e) {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                fileInput.files = files;
+                handleFileSelect();
+            }
+        }
+
+        function handleFileSelect() {
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            showMessage('Uploading image...', 'info');
+            showLoading(true);
+
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                showLoading(false);
+                if (data.success) {
+                    currentSessionId = data.session_id;
+                    displayImage(data.image_data);
+                    updateParameters(data.parameters);
+                    document.getElementById('processBtn').disabled = false;
+                    showMessage(`Image loaded: ${data.image_shape[0]}×${data.image_shape[1]} pixels`, 'success');
+                    
+                    if (autoProcessEnabled) {
+                        processImage();
+                    }
+                } else {
+                    showMessage(data.error, 'error');
+                }
+            })
+            .catch(error => {
+                showLoading(false);
+                showMessage(`Upload error: ${error.message}`, 'error');
+            });
+        }
+
+        function displayImage(imageData) {
+            const imageDisplay = document.getElementById('imageDisplay');
+            imageDisplay.innerHTML = `<img src="data:image/png;base64,${imageData}" alt="Uploaded Image">`;
+        }
+
+        function updateParameters(params) {
+            Object.keys(params).forEach(key => {
+                const element = document.getElementById(key);
+                if (element) {
+                    if (element.type === 'checkbox') {
+                        element.checked = params[key];
+                    } else {
+                        element.value = params[key];
+                        updateRangeValue(key);
+                    }
+                }
+            });
+        }
+
+        // Parameter change handling
+        document.addEventListener('DOMContentLoaded', function() {
+            // Add event listeners to all range inputs
+            const ranges = document.querySelectorAll('input[type="range"]');
+            ranges.forEach(range => {
+                range.addEventListener('input', function() {
+                    updateRangeValue(this.id);
+                    if (autoProcessEnabled) {
+                        scheduleAutoProcess();
+                    }
+                });
+            });
+
+            // Add event listeners to checkboxes
+            const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+            checkboxes.forEach(checkbox => {
+                checkbox.addEventListener('change', function() {
+                    if (autoProcessEnabled) {
+                        scheduleAutoProcess();
+                    }
+                });
+            });
+
+            // Initialize range values
+            ranges.forEach(range => updateRangeValue(range.id));
+        });
+
+        function updateRangeValue(inputId) {
+            const input = document.getElementById(inputId);
+            const valueSpan = document.getElementById(inputId + 'Value');
+            if (input && valueSpan) {
+                valueSpan.textContent = input.value;
+            }
+        }
+
+        function scheduleAutoProcess() {
+            if (autoProcessTimeout) {
+                clearTimeout(autoProcessTimeout);
+            }
+            autoProcessTimeout = setTimeout(processImage, 1000); // 1 second delay
+        }
+
+        function toggleAutoProcess() {
+            autoProcessEnabled = !autoProcessEnabled;
+            const btn = document.getElementById('autoProcessBtn');
+            if (autoProcessEnabled) {
+                btn.textContent = '⏸️ Auto';
+                btn.style.background = 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)';
+            } else {
+                btn.textContent = '🔄 Auto';
+                btn.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
+            }
+        }
+
+        function processImage() {
+            if (!currentSessionId) {
+                showMessage('Please upload an image first', 'error');
+                return;
+            }
+
+            const parameters = getParameters();
+            showLoading(true);
+            showMessage('Processing centerlines...', 'info');
+
+            fetch('/process', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: currentSessionId,
+                    parameters: parameters
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                showLoading(false);
+                if (data.success) {
+                    displayResults(data);
+                    showMessage('Processing complete!', 'success');
+                    document.getElementById('generateSvgBtn').disabled = false;
+                } else {
+                    showMessage(data.error, 'error');
+                }
+            })
+            .catch(error => {
+                showLoading(false);
+                showMessage(`Processing error: ${error.message}`, 'error');
+            });
+        }
+
+        function getParameters() {
+            return {
+                dark_threshold: parseFloat(document.getElementById('darkThreshold').value),
+                rdp_tolerance: parseFloat(document.getElementById('rdpTolerance').value),
+                smoothing_factor: parseFloat(document.getElementById('smoothingFactor').value),
+                min_path_length: parseInt(document.getElementById('minPathLength').value),
+                optimize_top_n_paths: parseInt(document.getElementById('topNPaths').value)
+            };
+        }
+
+        function displayResults(data) {
+            const resultsPanel = document.getElementById('resultsPanel');
+            const resultsGrid = document.getElementById('resultsGrid');
+            
+            resultsGrid.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-value">${data.initial_paths_count}</div>
+                    <div class="stat-label">Initial Paths</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${data.merged_paths_count}</div>
+                    <div class="stat-label">Merged Paths</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${data.valid_paths_count}</div>
+                    <div class="stat-label">Valid Paths</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${data.best_score.toFixed(1)}</div>
+                    <div class="stat-label">Best Score</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${data.paths_count}</div>
+                    <div class="stat-label">Output Paths</div>
+                </div>
+            `;
+            
+            resultsPanel.style.display = 'block';
+        }
+
+        function generateSVG() {
+            if (!currentSessionId) {
+                showMessage('No session available', 'error');
+                return;
+            }
+
+            showMessage('Generating SVG visualization...', 'info');
+
+            fetch('/generate_svg', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: currentSessionId
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    displaySVG(data.svg_content);
+                    showMessage('SVG generated successfully!', 'success');
+                    document.getElementById('downloadBtn').style.display = 'inline-block';
+                } else {
+                    showMessage(data.error, 'error');
+                }
+            })
+            .catch(error => {
+                showMessage(`SVG generation error: ${error.message}`, 'error');
+            });
+        }
+
+        function displaySVG(svgContent) {
+            const svgDisplay = document.getElementById('svgDisplay');
+            svgDisplay.innerHTML = svgContent;
+            svgDisplay.style.display = 'block';
+        }
+
+        function downloadSVG() {
+            if (!currentSessionId) {
+                showMessage('No session available', 'error');
+                return;
+            }
+
+            window.open(`/download_svg/${currentSessionId}`, '_blank');
+        }
+
+        function showMessage(message, type) {
+            const messageArea = document.getElementById('messageArea');
+            messageArea.innerHTML = `<div class="${type}">${message}</div>`;
+            setTimeout(() => {
+                messageArea.innerHTML = '';
+            }, 5000);
+        }
+
+        function showLoading(show) {
+            const loadingArea = document.getElementById('loadingArea');
+            if (show) {
+                loadingArea.classList.add('show');
+            } else {
+                loadingArea.classList.remove('show');
+            }
+        }
+    </script>
+</body>
+</html>
