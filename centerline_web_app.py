@@ -39,6 +39,7 @@ class CenterlineSession:
             'rdp_tolerance': 2.0,      # Increase to 5.0-10.0 for fewer points
             'smoothing_factor': 0.005,  # Increase to 0.02-0.05 for fewer points
             'min_path_length': 3,      # Increase to 8-15 for longer segments
+            'enable_optimization': True,   # Enable path optimization and circle evaluation
             'show_pre_optimization': False,  # Show unoptimized paths in SVG
             'include_image': False     # Include original image in SVG background
         }
@@ -78,6 +79,26 @@ def process_centerlines(session):
     if len(valid_paths) == 0:
         return {'error': 'No valid paths after filtering. Try reducing minimum path length.'}
     
+    # Check if optimization is enabled
+    if not params.get('enable_optimization', True):
+        # Fast processing mode - skip circle evaluation and optimization
+        print(f"Fast processing mode: returning {len(valid_paths)} unoptimized paths...")
+        
+        # Return unoptimized paths directly
+        results = {
+            'initial_paths_count': len(initial_paths),
+            'merged_paths_count': len(merged_paths),
+            'valid_paths_count': len(valid_paths),
+            'stats': {'total_paths_evaluated': len(valid_paths)},
+            'best_score': 0,  # No scoring in fast mode
+            'optimized_paths': valid_paths,  # Use original paths as "optimized"
+            'optimized_scores': [1.0] * len(valid_paths),  # Dummy scores
+            'pre_optimization_paths': valid_paths,
+            'circle_system': None  # No circle system in fast mode
+        }
+        
+        return results
+
     # Initialize circle evaluation system with fixed parameters
     circle_system = CircleEvaluationSystem(
         gray, 
@@ -253,6 +274,10 @@ def process():
     # Update parameters
     if 'parameters' in data:
         session.parameters.update(data['parameters'])
+        
+        # Force show_pre_optimization to True when optimization is disabled
+        if not session.parameters.get('enable_optimization', True):
+            session.parameters['show_pre_optimization'] = True
     
     try:
         # Process centerlines
@@ -314,16 +339,31 @@ def generate_svg():
         
         wo.OUTPUT_PATH = temp_svg
         wo.SHOW_BITMAP = session.parameters.get('include_image', False)  # User-controlled
-        wo.SHOW_PRE_OPTIMIZATION_PATHS = session.parameters.get('show_pre_optimization', False)  # User-controlled
+        
+        # Force show pre-optimization paths when optimization is disabled
+        show_pre = session.parameters.get('show_pre_optimization', False)
+        if not session.parameters.get('enable_optimization', True):
+            show_pre = True
+        wo.SHOW_PRE_OPTIMIZATION_PATHS = show_pre
         
         # Generate SVG
-        create_svg_output(
-            session.image,
-            results['circle_system'],
-            results['optimized_paths'],
-            results['optimized_scores'],
-            results['pre_optimization_paths']
-        )
+        if results['circle_system'] is not None:
+            create_svg_output(
+                session.image,
+                results['circle_system'],
+                results['optimized_paths'],
+                results['optimized_scores'],
+                results['pre_optimization_paths']
+            )
+        else:
+            # Fast mode - create SVG without circle system
+            create_svg_output(
+                session.image,
+                None,  # No circle system
+                results['optimized_paths'],
+                results['optimized_scores'],
+                results['pre_optimization_paths']
+            )
         
         # Restore original configuration
         wo.OUTPUT_PATH = original_output
@@ -375,15 +415,30 @@ def download_svg(session_id):
         
         wo.OUTPUT_PATH = temp_svg
         wo.SHOW_BITMAP = session.parameters.get('include_image', False)  # User-controlled
-        wo.SHOW_PRE_OPTIMIZATION_PATHS = session.parameters.get('show_pre_optimization', False)
         
-        create_svg_output(
-            session.image,
-            results['circle_system'],
-            results['optimized_paths'],
-            results['optimized_scores'],
-            results['pre_optimization_paths']
-        )
+        # Force show pre-optimization paths when optimization is disabled
+        show_pre = session.parameters.get('show_pre_optimization', False)
+        if not session.parameters.get('enable_optimization', True):
+            show_pre = True
+        wo.SHOW_PRE_OPTIMIZATION_PATHS = show_pre
+        
+        if results['circle_system'] is not None:
+            create_svg_output(
+                session.image,
+                results['circle_system'],
+                results['optimized_paths'],
+                results['optimized_scores'],
+                results['pre_optimization_paths']
+            )
+        else:
+            # Fast mode - create SVG without circle system
+            create_svg_output(
+                session.image,
+                None,  # No circle system
+                results['optimized_paths'],
+                results['optimized_scores'],
+                results['pre_optimization_paths']
+            )
         
         wo.OUTPUT_PATH = original_output
         wo.SHOW_BITMAP = original_show_bitmap

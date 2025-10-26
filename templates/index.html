@@ -370,6 +370,13 @@
                     <h3>📊 Output Options</h3>
                     <div class="parameter">
                         <label>
+                            <input type="checkbox" id="enableOptimization" checked>
+                            Enable Optimization
+                        </label>
+                        <small style="color: #666; font-size: 0.8em;">Enable circle evaluation and path optimization (slower but better quality)</small>
+                    </div>
+                    <div class="parameter">
+                        <label>
                             <input type="checkbox" id="showPreOptimization">
                             Show Unoptimized Paths
                         </label>
@@ -509,6 +516,9 @@
                     }
                 }
             });
+            
+            // Handle optimization toggle after updating parameters
+            handleOptimizationToggle();
         }
 
         // Parameter change handling
@@ -528,15 +538,39 @@
             const checkboxes = document.querySelectorAll('input[type="checkbox"]');
             checkboxes.forEach(checkbox => {
                 checkbox.addEventListener('change', function() {
+                    // Handle optimization checkbox logic
+                    if (this.id === 'enableOptimization') {
+                        handleOptimizationToggle();
+                    }
+                    
                     if (autoProcessEnabled) {
                         scheduleAutoProcess();
                     }
                 });
             });
 
+            // Initialize optimization toggle state
+            handleOptimizationToggle();
+
             // Initialize range values
             ranges.forEach(range => updateRangeValue(range.id));
         });
+
+        function handleOptimizationToggle() {
+            const enableOptimization = document.getElementById('enableOptimization');
+            const showPreOptimization = document.getElementById('showPreOptimization');
+            
+            if (!enableOptimization.checked) {
+                // When optimization is off, force show unoptimized paths to be checked and disabled
+                showPreOptimization.checked = true;
+                showPreOptimization.disabled = true;
+                showPreOptimization.parentElement.style.opacity = '0.6';
+            } else {
+                // When optimization is on, enable the show unoptimized paths checkbox
+                showPreOptimization.disabled = false;
+                showPreOptimization.parentElement.style.opacity = '1';
+            }
+        }
 
         function updateRangeValue(inputId) {
             const input = document.getElementById(inputId);
@@ -623,6 +657,7 @@
                 rdp_tolerance: parseFloat(document.getElementById('rdpTolerance').value),
                 smoothing_factor: parseFloat(document.getElementById('smoothingFactor').value),
                 min_path_length: parseInt(document.getElementById('minPathLength').value),
+                enable_optimization: document.getElementById('enableOptimization').checked,
                 show_pre_optimization: document.getElementById('showPreOptimization').checked,
                 include_image: document.getElementById('includeImage').checked
             };
