@@ -1,0 +1,50 @@
+# macOS system files
+.DS_Store
+.CFUserTextEncoding
+.Trash/
+.zsh_history
+.zsh_sessions/
+.bash_profile
+.profile
+.zprofile*
+.viminfo
+.lesshst
+
+# User directories
+Applications/
+Desktop/
+Documents/
+Downloads/
+Movies/
+Music/
+Pictures/
+Public/
+Library/
+Dropbox/
+
+# Development files not related to centerline project
+TraceCL*.py
+centertrace*.py
+trace*.py
+worksok.py
+worksok2.py
+worksok3.py
+test*.py
+*.clb
+*.hprof
+
+# Rust/Cargo
+.cargo/
+.rustup/
+
+# Other development tools
+.LightBurn/
+.MillMage/
+.arduinoIDE/
+.cups/
+.dropbox/
+.gitconfig
+smarttrace/
+
+# Deployment scripts (keep specific ones in repo)
+deploy.sh
