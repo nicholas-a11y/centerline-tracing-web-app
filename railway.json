@@ -1,0 +1,13 @@
+{
+  "name": "centerline-tracing-web-app",
+  "buildScript": "pip install -r requirements.txt",
+  "startCommand": "python centerline_web_app.py",
+  "environment": "python",
+  "python": {
+    "version": "3.11"
+  },
+  "healthCheck": {
+    "port": 5000,
+    "path": "/"
+  }
+}
