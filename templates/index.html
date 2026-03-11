@@ -994,6 +994,9 @@
             const inkContrast = typeof preprocessing.ink_contrast === 'number'
                 ? preprocessing.ink_contrast.toFixed(3)
                 : 'n/a';
+            const bgTexture = typeof preprocessing.background_texture === 'number'
+                ? preprocessing.background_texture.toFixed(4)
+                : 'n/a';
 
             const metricLine = `
                 <small>
@@ -1002,6 +1005,7 @@
                     <span class="metric-help" title="Average edge strength in background illumination only (not stroke edges). Higher means uneven lighting.">illumination</span>: ${illumGrad},
                     <span class="metric-help" title="Estimated proportion of darker-than-paper pixels. Helps avoid over-normalizing dense/dark images.">dark ratio</span>: ${darkRatio},
                     <span class="metric-help" title="Estimated separation between darker ink tones and brighter paper tones. Lower values indicate faint, low-contrast lines.">ink contrast</span>: ${inkContrast},
+                    <span class="metric-help" title="Fine-grained texture/noise level in bright paper regions. Camera photos typically score higher than clean digital line art.">bg texture</span>: ${bgTexture},
                     <span class="metric-help" title="Combined trigger score for normalization decision.">score</span>: ${score}
                 </small>
             `;

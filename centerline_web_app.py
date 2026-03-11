@@ -489,11 +489,13 @@ def _normalize_background_if_needed(gray_image):
     # Estimate slow background shading using a large blur.
     background = filters.gaussian(gray, sigma=24.0, preserve_range=True)
 
-    # Measure background metrics on bright/paper-like pixels when possible.
-    # This avoids dark strokes inflating the "background range" and falsely
-    # triggering normalization on already-clean line art.
+    # Measure background metrics on bright, low-edge pixels.
+    # Restricting to non-edge regions avoids dark strokes and anti-aliased
+    # contours inflating shading estimates on already-clean line art.
+    edge_strength = np.abs(filters.sobel(gray))
     bright_cutoff = float(np.quantile(gray, 0.70))
-    bright_mask = gray >= bright_cutoff
+    edge_cutoff = float(np.quantile(edge_strength, 0.60))
+    bright_mask = (gray >= bright_cutoff) & (edge_strength <= edge_cutoff)
     bright_background = background[bright_mask]
 
     if bright_background.size >= 500:
@@ -507,9 +509,27 @@ def _normalize_background_if_needed(gray_image):
 
     illumination_gradient = float(np.mean(np.abs(filters.sobel(background))))
     dark_ratio = float(np.mean(gray < 0.65))
-    ink_p15 = float(np.percentile(gray, 15))
-    paper_p85 = float(np.percentile(gray, 85))
-    ink_contrast = max(0.0, paper_p85 - ink_p15)
+
+    # Robust ink-vs-paper contrast estimate for sparse line drawings.
+    # Percentile-15 can miss sparse ink entirely; use dark-pixel candidates
+    # with a fallback to a low global percentile.
+    paper_level = float(np.percentile(gray, 90))
+    ink_candidates = gray[gray <= (paper_level - 0.08)]
+    if ink_candidates.size >= 200:
+        ink_level = float(np.percentile(ink_candidates, 25))
+    else:
+        ink_level = float(np.percentile(gray, 2))
+    ink_contrast = max(0.0, paper_level - ink_level)
+
+    # Estimate fine-grained background texture/noise in bright paper regions.
+    # Phone-camera captures tend to have more texture than clean digital line art.
+    local_trend = filters.gaussian(gray, sigma=1.6, preserve_range=True)
+    texture_residual = gray - local_trend
+    bright_texture = texture_residual[bright_mask]
+    if bright_texture.size >= 500:
+        background_texture = float(np.std(bright_texture))
+    else:
+        background_texture = float(np.std(texture_residual))
 
     # Weighted trigger to reduce false positives on already-uniform images.
     # Tuned for scanned drawings with mostly bright paper and sparse dark ink.
@@ -531,33 +551,79 @@ def _normalize_background_if_needed(gray_image):
     # Low-contrast ink plus noticeable shading usually benefits from normalization,
     # even if the drawing is sparse.
     low_contrast_shaded = bool(
-        ink_contrast < 0.30 and
-        (bg_range > 0.028 or illumination_gradient > 0.0045)
+        ink_contrast < 0.24 and
+        (bg_range > 0.040 or illumination_gradient > 0.0060 or background_texture > 0.0060)
     )
     force_normalize = bool(
         low_contrast_shaded and
-        (decision_score >= 0.20 or bg_range > 0.040)
+        (decision_score >= 0.28 or bg_range > 0.055 or background_texture > 0.0065)
     )
+
+    # Very sparse, faint ink can still benefit from normalization even when
+    # global shading metrics look small. This captures low-coverage sketches
+    # that otherwise get skipped by the sparse line-art guard.
+    faint_sparse_ink = bool(
+        dark_ratio < 0.030 and
+        ink_contrast < 0.40 and
+        bg_range > 0.030 and
+        background_texture > 0.0010
+    )
+    if faint_sparse_ink:
+        force_normalize = True
+
     if force_normalize:
         should_normalize = True
+
+    # Explicit skip for crisp, high-contrast digital-style line art.
+    # Mild global shading in the background should not force normalization here.
+    high_contrast_clean_line_art = bool(
+        ink_contrast >= 0.42 and
+        dark_ratio < 0.30 and
+        background_texture < 0.0058 and
+        bg_std < 0.024 and
+        illumination_gradient < 0.011
+    )
+    if high_contrast_clean_line_art and not force_normalize:
+        should_normalize = False
+
+    # Some clean vector-like drawings produce a large blurred "range" simply
+    # because thick dark strokes span big regions, not because paper shading is
+    # uneven. Detect that pattern and skip normalization.
+    inflated_range_clean_art = bool(
+        ink_contrast >= 0.70 and
+        dark_ratio < 0.16 and
+        illumination_gradient < 0.0032 and
+        background_texture < 0.020
+    )
+    if inflated_range_clean_art and not force_normalize:
+        should_normalize = False
 
     # Safety guard: sparse line art on a truly uniform page should not be normalized.
     # In those cases, normalization can increase fragmentation and make extraction slower.
     line_art_guard = bool(
         dark_ratio < 0.22 and
-        bg_std < 0.014 and
-        illumination_gradient < 0.0065 and
-        bg_range < 0.060
+        bg_std < 0.017 and
+        illumination_gradient < 0.0085 and
+        bg_range < 0.080 and
+        background_texture < 0.0050 and
+        (decision_score < 0.32 or ink_contrast >= 0.15)
     )
     if line_art_guard and not force_normalize:
         should_normalize = False
 
     if force_normalize:
-        reason = 'low-contrast ink with background shading'
+        if faint_sparse_ink:
+            reason = 'faint sparse ink detail'
+        else:
+            reason = 'low-contrast ink with background shading'
     elif should_normalize and bg_range > 0.075:
         reason = 'strong background shading range'
     elif should_normalize:
         reason = 'combined background variance score'
+    elif inflated_range_clean_art:
+        reason = 'clean high-contrast drawing (range inflated by line structure)'
+    elif high_contrast_clean_line_art:
+        reason = 'high-contrast clean line-art'
     elif line_art_guard:
         reason = 'sparse line-art on uniform background'
     else:
@@ -571,6 +637,7 @@ def _normalize_background_if_needed(gray_image):
         'normalization_score': decision_score,
         'dark_ratio': round(dark_ratio, 4),
         'ink_contrast': round(ink_contrast, 4),
+        'background_texture': round(background_texture, 4),
         'reason': reason,
         'mode': 'none'
     }
