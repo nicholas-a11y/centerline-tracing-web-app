@@ -489,11 +489,27 @@ def _normalize_background_if_needed(gray_image):
     # Estimate slow background shading using a large blur.
     background = filters.gaussian(gray, sigma=24.0, preserve_range=True)
 
-    bg_p05, bg_p95 = np.percentile(background, [5, 95])
-    bg_range = float(bg_p95 - bg_p05)
-    bg_std = float(np.std(background))
+    # Measure background metrics on bright/paper-like pixels when possible.
+    # This avoids dark strokes inflating the "background range" and falsely
+    # triggering normalization on already-clean line art.
+    bright_cutoff = float(np.quantile(gray, 0.70))
+    bright_mask = gray >= bright_cutoff
+    bright_background = background[bright_mask]
+
+    if bright_background.size >= 500:
+        bg_p05, bg_p95 = np.percentile(bright_background, [5, 95])
+        bg_range = float(bg_p95 - bg_p05)
+        bg_std = float(np.std(bright_background))
+    else:
+        bg_p05, bg_p95 = np.percentile(background, [5, 95])
+        bg_range = float(bg_p95 - bg_p05)
+        bg_std = float(np.std(background))
+
     illumination_gradient = float(np.mean(np.abs(filters.sobel(background))))
     dark_ratio = float(np.mean(gray < 0.65))
+    ink_p15 = float(np.percentile(gray, 15))
+    paper_p85 = float(np.percentile(gray, 85))
+    ink_contrast = max(0.0, paper_p85 - ink_p15)
 
     # Weighted trigger to reduce false positives on already-uniform images.
     # Tuned for scanned drawings with mostly bright paper and sparse dark ink.
@@ -512,10 +528,38 @@ def _normalize_background_if_needed(gray_image):
 
     should_normalize = bool(decision_score >= 0.35 or bg_range > 0.075)
 
-    if should_normalize and bg_range > 0.075:
+    # Low-contrast ink plus noticeable shading usually benefits from normalization,
+    # even if the drawing is sparse.
+    low_contrast_shaded = bool(
+        ink_contrast < 0.30 and
+        (bg_range > 0.028 or illumination_gradient > 0.0045)
+    )
+    force_normalize = bool(
+        low_contrast_shaded and
+        (decision_score >= 0.20 or bg_range > 0.040)
+    )
+    if force_normalize:
+        should_normalize = True
+
+    # Safety guard: sparse line art on a truly uniform page should not be normalized.
+    # In those cases, normalization can increase fragmentation and make extraction slower.
+    line_art_guard = bool(
+        dark_ratio < 0.22 and
+        bg_std < 0.014 and
+        illumination_gradient < 0.0065 and
+        bg_range < 0.060
+    )
+    if line_art_guard and not force_normalize:
+        should_normalize = False
+
+    if force_normalize:
+        reason = 'low-contrast ink with background shading'
+    elif should_normalize and bg_range > 0.075:
         reason = 'strong background shading range'
     elif should_normalize:
         reason = 'combined background variance score'
+    elif line_art_guard:
+        reason = 'sparse line-art on uniform background'
     else:
         reason = 'background uniform enough'
 
@@ -526,6 +570,7 @@ def _normalize_background_if_needed(gray_image):
         'illumination_gradient': round(illumination_gradient, 4),
         'normalization_score': decision_score,
         'dark_ratio': round(dark_ratio, 4),
+        'ink_contrast': round(ink_contrast, 4),
         'reason': reason,
         'mode': 'none'
     }
@@ -755,7 +800,7 @@ def process_centerlines(session):
     
     return results
 
-def optimize_path_with_custom_params(path, circle_system, params):
+def optimize_path_with_custom_params(path, circle_system, params, initial_score=None):
     """
     Optimize path with a conservative RDP pre-simplification followed by a high-quality spline fit.
     This approach prioritizes smoothness and fidelity over aggressive point reduction.
@@ -763,7 +808,7 @@ def optimize_path_with_custom_params(path, circle_system, params):
     from worksok3_optimized import rdp_simplify, smooth_path_spline, fit_curve_to_path
     
     current_path = path
-    best_score = circle_system.evaluate_path(current_path)
+    best_score = float(initial_score) if initial_score is not None else circle_system.evaluate_path(current_path)
     
     print(f"    Optimizing path: {len(path)} points, initial score: {best_score:.2f}")
     
@@ -1357,19 +1402,16 @@ def background_optimization(session):
         )
         
         session.progress_queue.put("Circle evaluation system initialized...")
-        
-        # Evaluate paths
-        session.progress_queue.put("Evaluating path quality...")
-        path_scores, stats = circle_system.evaluate_all_paths(valid_paths)
-        
-        if len(path_scores) == 0:
-            session.progress_queue.put("ERROR: No path scores computed")
-            return
-        
-        # Sort paths by score
-        sorted_indices = np.argsort(path_scores)[::-1]
+
+        # Avoid a full upfront scoring pass so the first path starts sooner.
+        # Longer paths tend to matter most visually, so prioritize them first.
+        sorted_indices = sorted(
+            range(len(valid_paths)),
+            key=lambda idx: len(valid_paths[idx]),
+            reverse=True,
+        )
         max_path_length = max((len(p) for p in valid_paths), default=1)
-        
+        session.progress_queue.put("Prioritizing longer paths first...")
         session.progress_queue.put(f"Optimizing {len(valid_paths)} paths...")
         
         # Optimize paths one by one with progress updates
@@ -1379,7 +1421,7 @@ def background_optimization(session):
                 break
                 
             path = valid_paths[idx]
-            original_score = path_scores[idx]
+            original_score = circle_system.evaluate_path(path)
             
             session.progress_queue.put(f"Optimizing path {i+1}/{len(valid_paths)} ({len(path)} points, score: {original_score:.3f})")
             
@@ -1400,7 +1442,7 @@ def background_optimization(session):
             }
             
             optimized_path, optimized_score = optimize_path_with_custom_params(
-                path, circle_system, balanced_params
+                path, circle_system, balanced_params, initial_score=original_score
             )
             
             # Add to partial results - always add, even if not dramatically different
@@ -1421,7 +1463,7 @@ def background_optimization(session):
             session.progress_queue.put(f"Progress: {progress_percent:.1f}% - {i+1}/{len(valid_paths)} paths completed")
             
             # Add small delay to make progress visible (optional)
-            time.sleep(0.1)  # 100ms delay to see progress
+            # No artificial delay: keep optimization throughput high.
         
         session.optimization_complete = True
         session.progress_queue.put("Optimization complete!")
