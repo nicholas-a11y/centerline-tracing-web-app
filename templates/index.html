@@ -138,6 +138,33 @@
             background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
         }
 
+        .download-btn-magenta {
+            background: linear-gradient(135deg, #d63384 0%, #f06595 100%) !important;
+            box-shadow: 0 6px 14px rgba(214, 51, 132, 0.28);
+        }
+
+        .download-btn-magenta:hover {
+            box-shadow: 0 10px 20px rgba(214, 51, 132, 0.35);
+        }
+
+        .download-btn-complete {
+            background: linear-gradient(135deg, #d63384 0%, #4facfe 100%) !important;
+            box-shadow: 0 6px 14px rgba(79, 172, 254, 0.28);
+        }
+
+        .download-btn-complete:hover {
+            box-shadow: 0 10px 20px rgba(79, 172, 254, 0.35);
+        }
+
+        .download-btn-blue {
+            background: linear-gradient(135deg, #3a86ff 0%, #4facfe 100%) !important;
+            box-shadow: 0 6px 14px rgba(79, 172, 254, 0.28);
+        }
+
+        .download-btn-blue:hover {
+            box-shadow: 0 10px 20px rgba(79, 172, 254, 0.35);
+        }
+
         .parameter-group {
             background: white;
             border-radius: 10px;
@@ -340,6 +367,12 @@
             display: block;
         }
 
+        .loading-actions {
+            display: flex;
+            justify-content: center;
+            margin-top: 14px;
+        }
+
         .spinner {
             border: 3px solid #f3f3f3;
             border-top: 3px solid #4facfe;
@@ -407,6 +440,41 @@
                 max-height: 98%;
             }
         }
+
+        /* Drag and drop overlay */
+        .drag-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(79, 172, 254, 0.3);
+            backdrop-filter: blur(2px);
+            border: 3px dashed #4facfe;
+            z-index: 9999;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+
+        .drag-overlay.active {
+            display: flex;
+        }
+
+        .drag-overlay-text {
+            font-size: 2em;
+            color: #2196f3;
+            font-weight: 500;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .drag-overlay-subtext {
+            font-size: 1.1em;
+            color: #1976d2;
+            margin-top: 10px;
+            opacity: 0.8;
+        }
     </style>
 </head>
 <body>
@@ -423,8 +491,8 @@
                     <div class="upload-area" id="uploadArea">
                         <div class="upload-icon">📷</div>
                         <div class="upload-text">Click or drag image here</div>
-                        <input type="file" id="fileInput" class="file-input" accept="image/*">
-                        <button class="btn" onclick="document.getElementById('fileInput').click()">Choose File</button>
+                        <input type="file" id="fileInput" class="file-input" accept="image/*,.pdf,application/pdf">
+                        <label for="fileInput" class="btn" id="chooseFileBtn">Choose File</label>
                     </div>
                 </div>
 
@@ -447,14 +515,54 @@
                 <div class="parameter-group">
                     <h3>🎨 Optimization</h3>
                     <div class="parameter">
-                        <label>RDP Tolerance <span class="range-value" id="rdpToleranceValue">2.0</span></label>
-                        <input type="range" id="rdpTolerance" min="0.5" max="10.0" step="0.5" value="2.0">
-                        <small style="color: #666; font-size: 0.8em;">Higher values = fewer points in blue lines</small>
+                        <label>Tolerance <span class="range-value" id="rdpToleranceValue">2.5</span></label>
+                        <input type="range" id="rdpTolerance" min="0.5" max="10.0" step="0.5" value="2.5">
+                        <small style="color: #666; font-size: 0.8em;">Higher values for a closer fit and larger file size.</small>
                     </div>
-                    <div class="parameter">
-                        <label>Smoothing Factor <span class="range-value" id="smoothingFactorValue">0.005</span></label>
-                        <input type="range" id="smoothingFactor" min="0.001" max="0.05" step="0.001" value="0.005">
-                        <small style="color: #666; font-size: 0.8em;">Higher values = smoother, fewer points</small>
+                    <div style="margin-top: 10px;">
+                        <button type="button" id="advancedToggleBtn" onclick="toggleAdvancedSettings()" style="background: none; border: none; color: #4facfe; cursor: pointer; font-size: 0.85em; padding: 0;">⚙️ Advanced settings ▼</button>
+                    </div>
+                    <div id="advancedSettings" style="display: none; margin-top: 8px;">
+                        <div class="parameter">
+                            <label>Smoothing Factor <span class="range-value" id="smoothingFactorValue">0.006</span></label>
+                            <input type="range" id="smoothingFactor" min="0.001" max="0.05" step="0.001" value="0.006">
+                            <small style="color: #666; font-size: 0.8em;">Controls how smooth curves appear in the output.</small>
+                        </div>
+                        <div class="parameter">
+                            <label>Simplification Strength <span class="range-value" id="simplificationStrengthValue">50</span></label>
+                            <input type="range" id="simplificationStrength" min="0" max="100" step="1" value="50">
+                            <small style="color: #666; font-size: 0.8em;">Overall vertex reduction target for the blue paths.</small>
+                        </div>
+                        <div class="parameter">
+                            <label>Arc Fit Strength <span class="range-value" id="arcFitStrengthValue">72</span></label>
+                            <input type="range" id="arcFitStrength" min="0" max="100" step="1" value="72">
+                            <small style="color: #666; font-size: 0.8em;">Higher values favor arc-like spline fitting and smoother curved blue paths.</small>
+                        </div>
+                        <div class="parameter">
+                            <label>Line Fit Strength <span class="range-value" id="lineFitStrengthValue">22</span></label>
+                            <input type="range" id="lineFitStrength" min="0" max="100" step="1" value="22">
+                            <small style="color: #666; font-size: 0.8em;">Controls how much straight-segment fitting is allowed.</small>
+                        </div>
+                        <div class="parameter">
+                            <label>Short Path Protection <span class="range-value" id="shortPathProtectionValue">65</span></label>
+                            <input type="range" id="shortPathProtection" min="0" max="100" step="1" value="65">
+                            <small style="color: #666; font-size: 0.8em;">Higher values keep more vertices on short jagged paths.</small>
+                        </div>
+                        <div class="parameter">
+                            <label>Mean Closeness Guard (px) <span class="range-value" id="meanClosenessPxValue">1.8</span></label>
+                            <input type="range" id="meanClosenessPx" min="0.5" max="6.0" step="0.1" value="1.8">
+                            <small style="color: #666; font-size: 0.8em;">Average allowed distance from the blue path to the magenta path.</small>
+                        </div>
+                        <div class="parameter">
+                            <label>Peak Drift Guard (px) <span class="range-value" id="peakClosenessPxValue">4.5</span></label>
+                            <input type="range" id="peakClosenessPx" min="1.0" max="12.0" step="0.1" value="4.5">
+                            <small style="color: #666; font-size: 0.8em;">95th-percentile allowed drift from magenta for accepted blue fits.</small>
+                        </div>
+                        <div class="parameter">
+                            <label>Score Preservation (%) <span class="range-value" id="scorePreservationValue">80</span></label>
+                            <input type="range" id="scorePreservation" min="70" max="99" step="1" value="80">
+                            <small style="color: #666; font-size: 0.8em;">Higher values keep the blue path more faithful to the original centerline score.</small>
+                        </div>
                     </div>
                 </div>
 
@@ -465,9 +573,9 @@
                     <div class="parameter">
                         <label>
                             <input type="checkbox" id="enableOptimization" checked>
-                            Enable Optimization
+                            Enable path refinement
                         </label>
-                        <small style="color: #666; font-size: 0.8em;">Enable circle evaluation and path optimization (slower but better quality)</small>
+                        <small style="color: #666; font-size: 0.8em;">Iteratively fits and scores paths for better quality output</small>
                     </div>
                     <div class="parameter">
                         <label>
@@ -513,6 +621,9 @@
                     <div class="spinner"></div>
                     <div id="loadingText">Processing centerlines...</div>
                     <div id="loadingDetails" style="font-size: 0.9em; color: #666; margin-top: 10px;"></div>
+                    <div class="loading-actions" id="loadingActions" style="display: none;">
+                        <button class="btn btn-secondary" id="skipAutoTuneBtn" onclick="skipAutoTune()">Skip</button>
+                    </div>
                 </div>
 
                 <div class="results-panel" id="resultsPanel" style="display: none;">
@@ -528,21 +639,84 @@
         </div>
     </div>
 
+    <!-- Drag and drop overlay -->
+    <div class="drag-overlay" id="dragOverlay">
+        <div class="drag-overlay-text">📥 Drop image here</div>
+        <div class="drag-overlay-subtext">Release to upload</div>
+    </div>
+
     <script>
         let currentSessionId = null;
-        let autoProcessEnabled = false;
+        let autoProcessEnabled = true;
         let autoProcessTimeout = null;
+        let optimizationReached100 = false;
+        let lastRenderedSvgMode = null;
+        let autoTuneState = {
+            active: false,
+            token: 0,
+            shouldProcessAfter: false
+        };
 
         // File upload handling
         const fileInput = document.getElementById('fileInput');
+        const chooseFileBtn = document.getElementById('chooseFileBtn');
         const uploadArea = document.getElementById('uploadArea');
+        const dragOverlay = document.getElementById('dragOverlay');
+        let dragCounter = 0;
 
         fileInput.addEventListener('change', handleFileSelect);
+        chooseFileBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            fileInput.click();
+        });
         uploadArea.addEventListener('click', () => fileInput.click());
         uploadArea.addEventListener('dragover', handleDragOver);
         uploadArea.addEventListener('drop', handleDrop);
         uploadArea.addEventListener('dragenter', e => e.preventDefault());
         uploadArea.addEventListener('dragleave', handleDragLeave);
+
+        // Clipboard paste support
+        document.addEventListener('paste', handlePaste);
+
+        // Full-window drag-and-drop support
+        document.addEventListener('dragenter', handleWindowDragEnter);
+        document.addEventListener('dragover', handleWindowDragOver);
+        document.addEventListener('dragleave', handleWindowDragLeave);
+        document.addEventListener('drop', handleWindowDrop);
+
+        function handleWindowDragEnter(e) {
+            if (!isFileDrag(e)) return;
+            dragCounter += 1;
+            dragOverlay.classList.add('active');
+        }
+
+        function handleWindowDragOver(e) {
+            if (!isFileDrag(e)) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        }
+
+        function handleWindowDragLeave(e) {
+            if (!isFileDrag(e)) return;
+            dragCounter = Math.max(0, dragCounter - 1);
+            if (dragCounter === 0) {
+                dragOverlay.classList.remove('active');
+            }
+        }
+
+        function handleWindowDrop(e) {
+            if (!isFileDrag(e)) return;
+            e.preventDefault();
+            dragCounter = 0;
+            dragOverlay.classList.remove('active');
+            uploadArea.classList.remove('dragover');
+            assignFirstSupportedFileAndUpload(e.dataTransfer.files);
+        }
+
+        function isFileDrag(e) {
+            return Boolean(e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('Files'));
+        }
 
         function handleDragOver(e) {
             e.preventDefault();
@@ -557,21 +731,74 @@
         function handleDrop(e) {
             e.preventDefault();
             uploadArea.classList.remove('dragover');
-            const files = e.dataTransfer.files;
-            if (files.length > 0) {
-                fileInput.files = files;
+            assignFirstSupportedFileAndUpload(e.dataTransfer.files);
+        }
+
+        function handlePaste(e) {
+            const items = e.clipboardData?.items;
+            if (!items) return;
+
+            for (let i = 0; i < items.length; i++) {
+                if (!items[i].type.startsWith('image/')) continue;
+
+                const blob = items[i].getAsFile();
+                if (!blob) continue;
+
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+                const fileType = blob.type || 'image/png';
+                const extension = fileType.split('/')[1] || 'png';
+                const file = new File([blob], `pasted-image-${timestamp}.${extension}`, { type: fileType });
+
+                const dataTransfer = new DataTransfer();
+                dataTransfer.items.add(file);
+                fileInput.files = dataTransfer.files;
+
+                showMessage('Image pasted! Uploading...', 'info');
                 handleFileSelect();
+                e.preventDefault();
+                return;
             }
+        }
+
+        function isSupportedUploadFile(file) {
+            if (!file) return false;
+
+            const mimeType = (file.type || '').toLowerCase();
+            const fileName = (file.name || '').toLowerCase();
+
+            return mimeType.startsWith('image/') || mimeType === 'application/pdf' || fileName.endsWith('.pdf');
+        }
+
+        function assignFirstSupportedFileAndUpload(files) {
+            if (!files || files.length === 0) return;
+
+            for (let i = 0; i < files.length; i++) {
+                if (!isSupportedUploadFile(files[i])) continue;
+
+                const dataTransfer = new DataTransfer();
+                dataTransfer.items.add(files[i]);
+                fileInput.files = dataTransfer.files;
+                handleFileSelect();
+                return;
+            }
+
+            showMessage('Please drop an image or PDF file.', 'warning');
         }
 
         function handleFileSelect() {
             const file = fileInput.files[0];
             if (!file) return;
 
+            // New upload should always start from a clean UI state.
+            clearResults();
+            autoTuneState.token += 1;
+            autoTuneState.active = false;
+            autoTuneState.shouldProcessAfter = false;
+
             const formData = new FormData();
             formData.append('file', file);
 
-            showMessage('Uploading image...', 'info');
+            showMessage('Uploading file...', 'info');
             showLoading(true);
 
             fetch('/upload', {
@@ -580,20 +807,19 @@
             })
             .then(response => response.json())
             .then(data => {
-                showLoading(false);
                 if (data.success) {
+                    autoTuneState.token += 1;
+                    autoTuneState.active = false;
                     currentSessionId = data.session_id;
                     displayImage(data.image_data, data.image_shape);
                     updateParameters(data.parameters);
                     document.getElementById('processBtn').disabled = false;
                     document.getElementById('autoDetectBtn').disabled = false;
                     document.getElementById('autoDetectMinLengthBtn').disabled = false;
-                    showMessage(`Image loaded: ${data.image_shape[0]}×${data.image_shape[1]} pixels`, 'success');
-                    
-                    if (autoProcessEnabled) {
-                        processImage();
-                    }
+                    showMessage(`File loaded: ${data.image_shape[0]}x${data.image_shape[1]} pixels`, 'success');
+                    startUploadAutoTune(autoProcessEnabled);
                 } else {
+                    showLoading(false);
                     showMessage(data.error, 'error');
                 }
             })
@@ -601,6 +827,103 @@
                 showLoading(false);
                 showMessage(`Upload error: ${error.message}`, 'error');
             });
+        }
+
+        function setLoadingActionButton(show, text = 'Skip') {
+            const loadingActions = document.getElementById('loadingActions');
+            const skipButton = document.getElementById('skipAutoTuneBtn');
+
+            if (!loadingActions || !skipButton) return;
+
+            skipButton.textContent = text;
+            loadingActions.style.display = show ? 'flex' : 'none';
+        }
+
+        function startUploadAutoTune(shouldProcessAfter = false) {
+            if (!currentSessionId) {
+                return;
+            }
+
+            const requestToken = autoTuneState.token + 1;
+            autoTuneState.token = requestToken;
+            autoTuneState.active = true;
+            autoTuneState.shouldProcessAfter = shouldProcessAfter;
+
+            showLoading(true, 'Auto tuning...', 'Auto-setting best threshold and minimum path length');
+            setLoadingActionButton(true, 'Skip');
+            showProgressMessage('Auto tuning upload parameters...', 'info');
+
+            fetch('/auto_tune_extraction', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: currentSessionId
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (requestToken !== autoTuneState.token) {
+                    return;
+                }
+
+                autoTuneState.active = false;
+                setLoadingActionButton(false);
+                showLoading(false);
+
+                if (data.success) {
+                    updateParameters(data.updated_parameters);
+
+                    const confidenceText = data.confidence_score >= 0.18 ? 'high confidence' :
+                        data.confidence_score >= 0.08 ? 'moderate confidence' : 'low confidence';
+                    showProgressMessage(
+                        `Auto-tuned threshold to ${data.detected_threshold.toFixed(3)} and min path length to ${data.detected_min_length} (${confidenceText})`,
+                        'success'
+                    );
+
+                    if (autoTuneState.shouldProcessAfter) {
+                        processImage({ fromAutoTune: true });
+                    }
+                } else {
+                    showMessage(data.error || 'Auto tuning failed', 'error');
+                    if (autoTuneState.shouldProcessAfter) {
+                        processImage({ fromAutoTune: true });
+                    }
+                }
+            })
+            .catch(error => {
+                if (requestToken !== autoTuneState.token) {
+                    return;
+                }
+
+                autoTuneState.active = false;
+                setLoadingActionButton(false);
+                showLoading(false);
+                showMessage(`Auto-tuning error: ${error.message}`, 'error');
+
+                if (autoTuneState.shouldProcessAfter) {
+                    processImage({ fromAutoTune: true });
+                }
+            });
+        }
+
+        function skipAutoTune() {
+            if (!autoTuneState.active) {
+                return;
+            }
+
+            const shouldProcessAfter = autoTuneState.shouldProcessAfter;
+            autoTuneState.token += 1;
+            autoTuneState.active = false;
+            autoTuneState.shouldProcessAfter = false;
+            setLoadingActionButton(false);
+            showLoading(false);
+            showProgressMessage('Auto tuning skipped. Using current settings.', 'warning');
+
+            if (shouldProcessAfter) {
+                processImage({ fromAutoTune: true });
+            }
         }
 
         function displayImage(imageData, imageShape) {
@@ -656,15 +979,21 @@
             });
         });
 
+        function snakeToCamel(str) {
+            return str.replace(/_([a-z])/g, (match, letter) => letter.toUpperCase());
+        }
+
         function updateParameters(params) {
             Object.keys(params).forEach(key => {
-                const element = document.getElementById(key);
+                // Convert snake_case parameter names to camelCase element IDs
+                const elementId = snakeToCamel(key);
+                const element = document.getElementById(elementId);
                 if (element) {
                     if (element.type === 'checkbox') {
                         element.checked = params[key];
                     } else {
                         element.value = params[key];
-                        updateRangeValue(key);
+                        updateRangeValue(elementId);
                     }
                 }
             });
@@ -692,7 +1021,19 @@
                 checkbox.addEventListener('change', function() {
                     // Handle optimization checkbox logic
                     if (this.id === 'enableOptimization') {
+                        const optimizationWasRunning = isOptimizationRunning();
                         handleOptimizationToggle();
+
+                        if (!this.checked && optimizationWasRunning) {
+                            stopOptimization('Optimization stopped because Enable Optimization was unchecked.', 'Stopped because optimization was disabled');
+                            return;
+                        }
+                    }
+
+                    // These toggles only affect SVG visibility/layers, not optimization results.
+                    if (isDisplayOnlyToggle(this.id)) {
+                        refreshSvgForDisplayToggles();
+                        return;
                     }
                     
                     if (autoProcessEnabled) {
@@ -706,6 +1047,9 @@
 
             // Initialize range values
             ranges.forEach(range => updateRangeValue(range.id));
+
+            // Auto mode starts enabled by default
+            setAutoProcessButtonState();
         });
 
         function handleOptimizationToggle() {
@@ -735,6 +1079,27 @@
             }
         }
 
+        function isOptimizationRunning() {
+            const stopBtn = document.getElementById('stopOptBtn');
+            return Boolean(progressInterval || (stopBtn && stopBtn.style.display !== 'none'));
+        }
+
+        function isDisplayOnlyToggle(toggleId) {
+            return toggleId === 'showPreOptimization' || toggleId === 'includeImage';
+        }
+
+        function refreshSvgForDisplayToggles() {
+            if (!currentSessionId) return;
+
+            const svgDisplay = document.getElementById('svgDisplay');
+            if (!svgDisplay || svgDisplay.style.display === 'none') return;
+
+            // Re-render in the same mode currently shown so display-only toggles
+            // (like includeImage) update the browser preview immediately.
+            const mode = lastRenderedSvgMode || (optimizationReached100 ? 'final' : 'progressive');
+            generateSVG(mode);
+        }
+
         function updateRangeValue(inputId) {
             const input = document.getElementById(inputId);
             const valueSpan = document.getElementById(inputId + 'Value');
@@ -750,9 +1115,10 @@
             autoProcessTimeout = setTimeout(processImage, 1000); // 1 second delay
         }
 
-        function toggleAutoProcess() {
-            autoProcessEnabled = !autoProcessEnabled;
+        function setAutoProcessButtonState() {
             const btn = document.getElementById('autoProcessBtn');
+            if (!btn) return;
+
             if (autoProcessEnabled) {
                 btn.textContent = '⏸️ Auto';
                 btn.style.background = 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)';
@@ -760,6 +1126,11 @@
                 btn.textContent = '🔄 Auto';
                 btn.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
             }
+        }
+
+        function toggleAutoProcess() {
+            autoProcessEnabled = !autoProcessEnabled;
+            setAutoProcessButtonState();
         }
 
         function autoDetectMinPathLength() {
@@ -825,72 +1196,23 @@
             });
         }
 
-        function autoDetectThreshold() {
+        function processImage(options = {}) {
             if (!currentSessionId) {
                 showMessage('Please upload an image first', 'error');
                 return;
             }
 
-            const autoDetectBtn = document.getElementById('autoDetectBtn');
-            autoDetectBtn.disabled = true;
-            autoDetectBtn.textContent = '🔍 Detecting...';
-            
-            showLoading(true, 'Auto-detecting optimal threshold...', 'Analyzing image to find best dark threshold value');
-            showProgressMessage('Scanning different threshold values...', 'info');
-
-            fetch('/auto_detect_threshold', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    session_id: currentSessionId
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                showLoading(false);
-                autoDetectBtn.disabled = false;
-                autoDetectBtn.textContent = '🎯 Auto-Detect';
-                
-                if (data.success) {
-                    // Update the threshold slider
-                    const thresholdSlider = document.getElementById('darkThreshold');
-                    thresholdSlider.value = data.detected_threshold;
-                    updateRangeValue('darkThreshold');
-                    
-                    // Update session parameters
-                    updateParameters(data.updated_parameters);
-                    
-                    const confidenceText = data.confidence_score > 0.5 ? 'high confidence' : 'moderate confidence';
-                    showProgressMessage(`Auto-detection complete! Set threshold to ${data.detected_threshold.toFixed(3)} (${confidenceText})`, 'success');
-                    
-                    // Auto-process if enabled
-                    if (autoProcessEnabled) {
-                        setTimeout(() => {
-                            processImage();
-                        }, 1000);
-                    }
-                } else {
-                    showMessage(data.error || 'Auto-detection failed', 'error');
-                }
-            })
-            .catch(error => {
-                showLoading(false);
-                autoDetectBtn.disabled = false;
-                autoDetectBtn.textContent = '🎯 Auto-Detect';
-                showMessage(`Auto-detection error: ${error.message}`, 'error');
-            });
-        }
-
-        function processImage() {
-            if (!currentSessionId) {
-                showMessage('Please upload an image first', 'error');
-                return;
+            if (autoTuneState.active && !options.fromAutoTune) {
+                autoTuneState.token += 1;
+                autoTuneState.active = false;
+                autoTuneState.shouldProcessAfter = false;
+                setLoadingActionButton(false);
+                showProgressMessage('Auto tuning cancelled. Processing with current settings.', 'warning');
             }
 
             // Clear the previous result displays
             clearResults();
+            optimizationReached100 = false;
 
             const parameters = getParameters();
             
@@ -1009,6 +1331,8 @@
                     if (data.optimization_complete) {
                         console.log('Optimization complete!');
                         clearInterval(progressInterval);
+                        progressInterval = null;
+                        optimizationReached100 = true;
                         const statusEl = document.getElementById('optimization-status');
                         if (statusEl) statusEl.textContent = 'Complete!';
                         document.getElementById('stopOptBtn').style.display = 'none'; // Hide stop button
@@ -1022,7 +1346,7 @@
             }, 1000); // Check every second
         }
 
-        function stopOptimization() {
+        function stopOptimization(message = 'Optimization stopped. Current progress available for download.', statusText = 'Stopped by user') {
             if (!currentSessionId) return;
             
             fetch('/stop_optimization', {
@@ -1038,12 +1362,43 @@
             .then(data => {
                 if (data.success) {
                     clearInterval(progressInterval);
+                    progressInterval = null;
+                    optimizationReached100 = false;
                     document.getElementById('stopOptBtn').style.display = 'none';
-                    document.getElementById('optimization-status').textContent = 'Stopped by user';
-                    showProgressMessage('Optimization stopped. Current progress available for download.', 'warning');
+                    document.getElementById('optimization-status').textContent = statusText;
+                    showProgressMessage(message, 'warning');
                     generateSVG('progressive'); // Show current state
                 }
             });
+        }
+
+        function setDownloadButtonAccent(isOptimizationComplete = false) {
+            const downloadBtn = document.getElementById('downloadBtn');
+            if (!downloadBtn) return;
+
+            const showPreOptimization = document.getElementById('showPreOptimization');
+            const magentaVisible = !showPreOptimization || showPreOptimization.checked;
+
+            downloadBtn.classList.remove('download-btn-magenta', 'download-btn-complete', 'download-btn-blue');
+
+            if (!magentaVisible) {
+                downloadBtn.classList.add('download-btn-blue');
+            } else if (isOptimizationComplete) {
+                downloadBtn.classList.add('download-btn-complete');
+            } else {
+                downloadBtn.classList.add('download-btn-magenta');
+            }
+        }
+
+        function shouldShowDownloadButton() {
+            const showPreOptimization = document.getElementById('showPreOptimization');
+            const magentaVisible = !showPreOptimization || showPreOptimization.checked;
+
+            if (!magentaVisible && !optimizationReached100) {
+                return false;
+            }
+
+            return true;
         }
 
         function getParameters() {
@@ -1051,6 +1406,13 @@
                 dark_threshold: parseFloat(document.getElementById('darkThreshold').value),
                 rdp_tolerance: parseFloat(document.getElementById('rdpTolerance').value),
                 smoothing_factor: parseFloat(document.getElementById('smoothingFactor').value),
+                simplification_strength: parseFloat(document.getElementById('simplificationStrength').value),
+                arc_fit_strength: parseFloat(document.getElementById('arcFitStrength').value),
+                line_fit_strength: parseFloat(document.getElementById('lineFitStrength').value),
+                short_path_protection: parseFloat(document.getElementById('shortPathProtection').value),
+                mean_closeness_px: parseFloat(document.getElementById('meanClosenessPx').value),
+                peak_closeness_px: parseFloat(document.getElementById('peakClosenessPx').value),
+                score_preservation: parseFloat(document.getElementById('scorePreservation').value),
                 min_path_length: parseInt(document.getElementById('minPathLength').value),
                 enable_optimization: document.getElementById('enableOptimization').checked,
                 show_pre_optimization: document.getElementById('showPreOptimization').checked,
@@ -1105,6 +1467,7 @@
             }
 
             console.log(`Making SVG request for session: ${currentSessionId}`);
+            const parameters = getParameters();
             fetch('/generate_svg', {
                 method: 'POST',
                 headers: {
@@ -1112,7 +1475,8 @@
                 },
                 body: JSON.stringify({
                     session_id: currentSessionId,
-                    mode: mode
+                    mode: mode,
+                    parameters: parameters
                 })
             })
             .then(response => {
@@ -1124,6 +1488,7 @@
                 showLoading(false); // Hide loading indicator
                 if (data.svg) {
                     displaySVG(data.svg);
+                    lastRenderedSvgMode = mode;
                     
                     if (mode === 'immediate') {
                         showProgressMessage('Magenta skeleton paths displayed! Optimization running in background...', 'success');
@@ -1133,7 +1498,9 @@
                         showProgressMessage('Final SVG visualization generated! Ready for download.', 'success');
                     }
                     
-                    document.getElementById('downloadBtn').style.display = 'inline-block';
+                    const downloadBtn = document.getElementById('downloadBtn');
+                    setDownloadButtonAccent(optimizationReached100);
+                    downloadBtn.style.display = shouldShowDownloadButton() ? 'inline-block' : 'none';
                 } else {
                     console.error('No SVG in response:', data);
                     showMessage(data.error || 'SVG generation failed', 'error');
@@ -1228,7 +1595,22 @@
             // Don't auto-clear progress messages
         }
 
+        function toggleAdvancedSettings() {
+            const panel = document.getElementById('advancedSettings');
+            const btn = document.getElementById('advancedToggleBtn');
+            const isOpen = panel.style.display !== 'none';
+            panel.style.display = isOpen ? 'none' : 'block';
+            btn.textContent = isOpen ? '⚙️ Advanced settings ▼' : '⚙️ Advanced settings ▲';
+        }
+
         function clearResults() {
+            if (progressInterval) {
+                clearInterval(progressInterval);
+                progressInterval = null;
+            }
+            optimizationReached100 = false;
+            lastRenderedSvgMode = null;
+
             // Clear previous SVG display
             const svgDisplay = document.getElementById('svgDisplay');
             svgDisplay.innerHTML = '';
@@ -1240,7 +1622,20 @@
             
             // Hide download button
             const downloadBtn = document.getElementById('downloadBtn');
+            setDownloadButtonAccent(false);
             downloadBtn.style.display = 'none';
+
+            // Hide stop optimization button from previous session
+            const stopOptBtn = document.getElementById('stopOptBtn');
+            if (stopOptBtn) {
+                stopOptBtn.style.display = 'none';
+            }
+
+            // Reset results grid content
+            const resultsGrid = document.getElementById('resultsGrid');
+            if (resultsGrid) {
+                resultsGrid.innerHTML = '';
+            }
             
             // Clear any lingering messages
             const messageArea = document.getElementById('messageArea');
@@ -1260,6 +1655,7 @@
                 loadingArea.classList.remove('show');
                 loadingText.textContent = 'Processing centerlines...';
                 loadingDetails.textContent = '';
+                setLoadingActionButton(false);
             }
         }
     </script>

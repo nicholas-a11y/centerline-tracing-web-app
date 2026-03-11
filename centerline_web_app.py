@@ -17,6 +17,8 @@ from io import BytesIO
 from PIL import Image
 import tempfile
 import uuid
+from pathlib import Path
+import importlib
 
 # Import our existing centerline extraction functions
 from worksok3_optimized import (
@@ -47,8 +49,15 @@ class CenterlineSession:
         self.lock = threading.Lock()  # Lock for thread-safe access to partial_optimized_paths
         self.parameters = {
             'dark_threshold': 0.20,
-            'rdp_tolerance': 2.0,      # Increase to 5.0-10.0 for fewer points
-            'smoothing_factor': 0.005,  # Increase to 0.02-0.05 for fewer points
+            'rdp_tolerance': 2.5,      # Balanced simplification for speed and smoothness
+            'smoothing_factor': 0.006,  # Balanced smoothing that keeps runtime responsive
+            'simplification_strength': 50.0,  # Moderate vertex reduction target
+            'arc_fit_strength': 72.0,  # Favor curves without over-smoothing
+            'line_fit_strength': 22.0,  # Moderate straight segment fitting
+            'short_path_protection': 65.0,  # Preserve detail on shorter paths
+            'mean_closeness_px': 1.8,  # Average allowed distance from blue path to magenta path
+            'peak_closeness_px': 4.5,  # 95th percentile allowed distance from blue path to magenta path
+            'score_preservation': 80.0,  # Minimum retained circle score percentage for accepted fits
             'min_path_length': 3,      # Increase to 8-15 for longer segments
             'enable_optimization': True,   # Enable path optimization and circle evaluation
             'show_pre_optimization': False,  # Show unoptimized paths in SVG
@@ -260,33 +269,262 @@ def auto_detect_dark_threshold(gray_image, sample_size=1000, threshold_range=(0.
         'recommendation': 'auto-detected' if best_score > 0 else 'manual adjustment needed'
     }
 
+def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num_thresholds=10,
+                                    base_min_lengths=None, preview_max_dim=900):
+    """Jointly tune threshold and min path length on a preview image for a strong first extraction."""
+    if base_min_lengths is None:
+        base_min_lengths = [1, 3, 5, 8, 12, 16, 20]
+
+    height, width = gray_image.shape
+    scale = 1.0
+    preview_image = gray_image
+
+    if max(height, width) > preview_max_dim:
+        scale = preview_max_dim / float(max(height, width))
+        preview_size = (
+            max(1, int(round(width * scale))),
+            max(1, int(round(height * scale)))
+        )
+        resample_filter = Image.Resampling.BILINEAR if hasattr(Image, 'Resampling') else Image.BILINEAR
+        preview_pil = Image.fromarray((gray_image * 255).astype(np.uint8)).resize(preview_size, resample_filter)
+        preview_image = np.asarray(preview_pil).astype(np.float32) / 255.0
+
+    # Heuristic: mostly-white technical scans with sparse ink should prefer higher thresholds.
+    mean_intensity = float(np.mean(preview_image))
+    dark_ratio_mid = float(np.mean(preview_image < 0.55))
+    dark_ratio_high = float(np.mean(preview_image < 0.80))
+    bright_score = float(np.clip((mean_intensity - 0.72) / 0.20, 0.0, 1.0))
+    sparse_mid_score = float(np.clip((0.45 - dark_ratio_high) / 0.45, 0.0, 1.0))
+    sparse_dark_score = float(np.clip((0.18 - dark_ratio_mid) / 0.18, 0.0, 1.0))
+    line_art_bias_strength = float(np.clip(
+        bright_score * 0.45 + sparse_mid_score * 0.35 + sparse_dark_score * 0.20,
+        0.0,
+        1.0
+    ))
+
+    candidate_lengths = []
+    seen_preview_lengths = set()
+    for full_length in base_min_lengths:
+        preview_length = max(1, int(round(full_length * scale)))
+        if preview_length in seen_preview_lengths:
+            continue
+        seen_preview_lengths.add(preview_length)
+        candidate_lengths.append((int(full_length), preview_length))
+
+    thresholds = np.linspace(threshold_range[0], threshold_range[1], num_thresholds)
+    merge_gap = max(6, int(round(25 * scale)))
+
+    best_result = None
+    second_best_score = 0.0
+    all_results = []
+
+    print(f"Auto-tuning extraction parameters on preview {preview_image.shape} (scale {scale:.3f})...")
+    print(
+        "  Line-art bias: "
+        f"strength={line_art_bias_strength:.2f}, "
+        f"mean={mean_intensity:.3f}, dark<0.80={dark_ratio_high:.3f}, dark<0.55={dark_ratio_mid:.3f}"
+    )
+
+    for threshold in thresholds:
+        try:
+            initial_paths = extract_skeleton_paths(preview_image, float(threshold), min_object_size=3)
+            if not initial_paths:
+                all_results.append({
+                    'threshold': float(threshold),
+                    'best_min_length': 3,
+                    'score': 0.0,
+                    'valid_paths': 0,
+                    'longest_path': 0
+                })
+                continue
+
+            merged_paths = merge_nearby_paths(initial_paths, max_gap=merge_gap)
+            threshold_best = None
+
+            for full_min_length, preview_min_length in candidate_lengths:
+                valid_paths = [path for path in merged_paths if len(path) >= preview_min_length]
+
+                if not valid_paths:
+                    candidate = {
+                        'threshold': float(threshold),
+                        'best_min_length': int(full_min_length),
+                        'preview_min_length': int(preview_min_length),
+                        'score': 0.0,
+                        'valid_paths': 0,
+                        'longest_path': 0,
+                        'top_total_length': 0.0,
+                        'median_top_length': 0.0
+                    }
+                else:
+                    lengths = sorted((len(path) for path in valid_paths), reverse=True)
+                    top_lengths = lengths[:min(6, len(lengths))]
+                    longest_path = float(top_lengths[0])
+                    top_total_length = float(sum(top_lengths))
+                    median_top_length = float(np.median(top_lengths))
+                    valid_count = len(valid_paths)
+
+                    fragment_penalty = 1.0 / (1.0 + max(valid_count - 60, 0) / 60.0)
+                    path_count_bonus = 1.0 + min(valid_count, 12) / 60.0
+                    high_threshold_bonus = 1.0 + line_art_bias_strength * max(0.0, (float(threshold) - 0.55) / 0.25) * 0.50
+                    low_threshold_penalty = 1.0 - line_art_bias_strength * max(0.0, (0.45 - float(threshold)) / 0.40) * 0.25
+                    threshold_bias = max(0.50, high_threshold_bonus * low_threshold_penalty)
+                    score = (
+                        longest_path * 0.55 +
+                        top_total_length * 0.30 +
+                        median_top_length * 0.15
+                    ) * fragment_penalty * path_count_bonus * threshold_bias
+
+                    candidate = {
+                        'threshold': float(threshold),
+                        'best_min_length': int(full_min_length),
+                        'preview_min_length': int(preview_min_length),
+                        'score': float(score),
+                        'threshold_bias': float(threshold_bias),
+                        'valid_paths': int(valid_count),
+                        'longest_path': int(round(longest_path / max(scale, 1e-6))),
+                        'top_total_length': float(top_total_length / max(scale, 1e-6)),
+                        'median_top_length': float(median_top_length / max(scale, 1e-6))
+                    }
+
+                if threshold_best is None or candidate['score'] > threshold_best['score']:
+                    threshold_best = candidate
+
+            if threshold_best is None:
+                threshold_best = {
+                    'threshold': float(threshold),
+                    'best_min_length': 3,
+                    'preview_min_length': 3,
+                    'score': 0.0,
+                    'valid_paths': 0,
+                    'longest_path': 0,
+                    'top_total_length': 0.0,
+                    'median_top_length': 0.0
+                }
+
+            all_results.append(threshold_best)
+
+            if best_result is None or threshold_best['score'] > best_result['score']:
+                if best_result is not None:
+                    second_best_score = best_result['score']
+                best_result = threshold_best
+            elif threshold_best['score'] > second_best_score:
+                second_best_score = threshold_best['score']
+
+            print(
+                f"  Threshold {threshold:.3f}: best min length {threshold_best['best_min_length']}, "
+                f"score {threshold_best['score']:.2f}, longest {threshold_best['longest_path']}"
+            )
+        except Exception as e:
+            print(f"  Threshold {threshold:.3f}: auto-tune failed - {e}")
+            all_results.append({
+                'threshold': float(threshold),
+                'best_min_length': 3,
+                'preview_min_length': 3,
+                'score': 0.0,
+                'valid_paths': 0,
+                'longest_path': 0,
+                'error': str(e)
+            })
+
+    if best_result is None or best_result['score'] <= 0:
+        return {
+            'best_threshold': 0.20,
+            'best_min_length': 3,
+            'quality_score': 0.0,
+            'confidence_score': 0.0,
+            'recommendation': 'manual adjustment recommended',
+            'preview_shape': preview_image.shape,
+            'preview_scale': scale,
+            'longest_path': 0,
+            'valid_paths': 0,
+            'all_results': all_results
+        }
+
+    confidence_score = max(0.0, min(1.0, (best_result['score'] - second_best_score) / max(best_result['score'], 1e-6)))
+    if confidence_score >= 0.18:
+        recommendation = 'high confidence'
+    elif confidence_score >= 0.08:
+        recommendation = 'moderate confidence'
+    else:
+        recommendation = 'low confidence - manual adjustment may still help'
+
+    return {
+        'best_threshold': float(best_result['threshold']),
+        'best_min_length': int(best_result['best_min_length']),
+        'quality_score': float(best_result['score']),
+        'confidence_score': float(confidence_score),
+        'recommendation': recommendation,
+        'preview_shape': preview_image.shape,
+        'preview_scale': float(scale),
+        'longest_path': int(best_result['longest_path']),
+        'valid_paths': int(best_result['valid_paths']),
+        'all_results': all_results
+    }
+
 def load_and_process_image(image_path):
-    """Load and convert image to grayscale."""
-    from skimage import io, color
-    
-    img = io.imread(image_path)
-    
-    # Handle different image formats
+    """Load an image or PDF page and convert it to grayscale in the 0-1 range.
+
+    - Transparent images are composited over white to avoid losing alpha semantics.
+    - PDF files are rendered from page 1 using pypdfium2.
+    """
+    from skimage import color, io
+
+    extension = Path(image_path).suffix.lower()
+
+    if extension == '.pdf':
+        try:
+            pdfium = importlib.import_module('pypdfium2')
+        except Exception as exc:
+            raise ValueError(
+                "PDF upload requires pypdfium2. Install dependencies and retry."
+            ) from exc
+
+        try:
+            pdf = pdfium.PdfDocument(image_path)
+            if len(pdf) == 0:
+                raise ValueError("PDF has no pages")
+
+            page = pdf[0]
+            # Render first page at a readable resolution for tracing.
+            bitmap = page.render(scale=2.0)
+            pil_page = bitmap.to_pil().convert('RGB')
+            img = np.asarray(pil_page).astype(np.float32) / 255.0
+            pdf.close()
+        except Exception as exc:
+            raise ValueError(f"Failed to render PDF: {exc}") from exc
+    else:
+        img = io.imread(image_path)
+
     if len(img.shape) == 3:
-        if img.shape[2] == 4:  # RGBA image
-            # Convert RGBA to RGB by removing alpha channel
-            img = img[:, :, :3]
-        elif img.shape[2] == 3:  # RGB image
-            pass  # Already in correct format
+        channels = img.shape[2]
+
+        if channels == 4:
+            rgb = img[:, :, :3].astype(np.float32)
+            alpha = img[:, :, 3].astype(np.float32)
+
+            if rgb.max() > 1.0:
+                rgb /= 255.0
+            if alpha.max() > 1.0:
+                alpha /= 255.0
+
+            # Composite transparent pixels over white background.
+            composited_rgb = rgb * alpha[:, :, None] + (1.0 - alpha[:, :, None])
+            gray = color.rgb2gray(composited_rgb)
+        elif channels == 3:
+            rgb = img.astype(np.float32)
+            if rgb.max() > 1.0:
+                rgb /= 255.0
+            gray = color.rgb2gray(rgb)
         else:
-            raise ValueError(f"Unsupported image format with {img.shape[2]} channels")
-        
-        # Convert RGB to grayscale
-        gray = color.rgb2gray(img)
-    elif len(img.shape) == 2:  # Already grayscale
-        gray = img.astype(float) / 255.0 if img.dtype != float else img
+            raise ValueError(f"Unsupported image format with {channels} channels")
+    elif len(img.shape) == 2:
+        gray = img.astype(np.float32)
+        if gray.max() > 1.0:
+            gray /= 255.0
     else:
         raise ValueError(f"Unsupported image shape: {img.shape}")
-    
-    # Ensure values are in 0-1 range
-    if gray.max() > 1.0:
-        gray = gray / 255.0
-    
+
+    gray = np.clip(gray.astype(np.float32), 0.0, 1.0)
     return gray
 
 def process_centerlines(session):
@@ -428,7 +666,7 @@ def optimize_path_with_custom_params(path, circle_system, params):
     Optimize path with a conservative RDP pre-simplification followed by a high-quality spline fit.
     This approach prioritizes smoothness and fidelity over aggressive point reduction.
     """
-    from worksok3_optimized import rdp_simplify, smooth_path_spline
+    from worksok3_optimized import rdp_simplify, smooth_path_spline, fit_curve_to_path
     
     current_path = path
     best_score = circle_system.evaluate_path(current_path)
@@ -475,6 +713,84 @@ def optimize_path_with_custom_params(path, circle_system, params):
         rounded = [(int(round(p[0])), int(round(p[1]))) for p in resampled]
         return _remove_duplicate_points(rounded)
 
+    def _reduce_vertices_evenly(points, target_count):
+        """Keep endpoints while reducing control vertices for display simplicity."""
+        if len(points) <= target_count:
+            return points
+        target_count = max(2, int(target_count))
+        if target_count == 2:
+            return [points[0], points[-1]]
+
+        interior = points[1:-1]
+        keep_interior = max(0, target_count - 2)
+        if len(interior) <= keep_interior:
+            return points
+
+        indices = np.linspace(0, len(interior) - 1, keep_interior).astype(int)
+        reduced = [points[0]] + [interior[i] for i in indices] + [points[-1]]
+        return _remove_duplicate_points(reduced)
+
+    def _point_to_segment_distance(point, start, end):
+        point = np.asarray(point, dtype=float)
+        start = np.asarray(start, dtype=float)
+        end = np.asarray(end, dtype=float)
+        segment = end - start
+        denom = float(np.dot(segment, segment))
+        if denom <= 1e-9:
+            return float(np.linalg.norm(point - start))
+        t = float(np.dot(point - start, segment) / denom)
+        t = max(0.0, min(1.0, t))
+        projection = start + t * segment
+        return float(np.linalg.norm(point - projection))
+
+    def _reference_to_candidate_metrics(reference, candidate, max_samples=120):
+        """Measure how closely the simplified blue path still follows the magenta source."""
+        if len(reference) < 2 or len(candidate) < 2:
+            return float('inf'), float('inf')
+
+        stride = max(1, len(reference) // max_samples)
+        sampled_reference = reference[::stride]
+        distances = []
+
+        for ref_point in sampled_reference:
+            best_dist = float('inf')
+            for idx in range(1, len(candidate)):
+                dist = _point_to_segment_distance(ref_point, candidate[idx - 1], candidate[idx])
+                if dist < best_dist:
+                    best_dist = dist
+            distances.append(best_dist)
+
+        if not distances:
+            return float('inf'), float('inf')
+
+        return float(np.mean(distances)), float(np.percentile(distances, 95))
+
+    requested_tolerance = float(params.get('rdp_tolerance', 2.5))
+    smoothing_factor = float(params.get('smoothing_factor', 0.006))
+    simplification_strength = max(0.0, min(100.0, float(params.get('simplification_strength', 50.0))))
+    simplification_ratio = simplification_strength / 100.0
+    arc_fit_strength = max(0.0, min(100.0, float(params.get('arc_fit_strength', 72.0))))
+    line_fit_strength = max(0.0, min(100.0, float(params.get('line_fit_strength', 22.0))))
+    short_path_protection = max(0.0, min(100.0, float(params.get('short_path_protection', 65.0))))
+    arc_fit_ratio = arc_fit_strength / 100.0
+    line_fit_ratio = line_fit_strength / 100.0
+    short_path_protection_ratio = short_path_protection / 100.0
+    mean_closeness_px = max(0.25, float(params.get('mean_closeness_px', 1.8)))
+    peak_closeness_px = max(mean_closeness_px, float(params.get('peak_closeness_px', 4.5)))
+    score_preservation_ratio = max(0.70, min(0.999, float(params.get('score_preservation', 80.0)) / 100.0))
+    min_path_length = int(params.get('min_path_length', 3))
+    reference_path = _remove_duplicate_points(path)
+    path_length = max(1.0, float(params.get('path_length', len(reference_path))))
+    max_path_length = max(path_length, float(params.get('max_path_length', path_length)))
+
+    # Shorter paths should keep proportionally more vertices than long paths.
+    relative_length = max(0.0, min(1.0, path_length / max_path_length))
+    short_weight = (1.0 - relative_length) ** (0.6 + 0.9 * short_path_protection_ratio)
+    min_short_factor = 0.85 - (0.65 * short_path_protection_ratio)
+    min_short_factor = max(0.20, min(0.95, min_short_factor))
+    length_protection = 1.0 - (1.0 - min_short_factor) * short_weight
+    effective_simplification_ratio = simplification_ratio * length_protection
+
     def _curvature_profile(points):
         """Return mean turning angle (deg) and sharp-turn ratio for adaptive tolerance."""
         if len(points) < 3:
@@ -507,51 +823,120 @@ def optimize_path_with_custom_params(path, circle_system, params):
     total_length = float(seg_lengths.sum())
     mean_angle, sharp_ratio = _curvature_profile(even_path)
 
-    base_tolerance = 1.2 + min(total_length / 150.0, 1.2)  # 1.2 -> 2.4 depending on length
+    base_tolerance = requested_tolerance * (0.7 + min(total_length / 220.0, 0.7) + 0.35 * line_fit_ratio)
     if sharp_ratio > 0.25 or mean_angle > 25.0:
         base_tolerance *= 0.65  # protect detailed curves
-    adaptive_tolerance = max(1.05, min(base_tolerance, 2.4))
+    adaptive_tolerance = max(0.85, min(base_tolerance, requested_tolerance + 2.5))
 
-    try:
-        simplified_path = rdp_simplify(even_path, adaptive_tolerance)
-        if len(simplified_path) >= params.get('min_path_length', 3):
-            rdp_score = circle_system.evaluate_path(simplified_path)
-            print(
-                f"      Adaptive RDP: {len(current_path)} -> {len(simplified_path)} points, "
-                f"score: {rdp_score:.2f}, tolerance: {adaptive_tolerance:.2f}, "
-                f"mean angle: {mean_angle:.1f}°, sharp ratio: {sharp_ratio:.2f}"
-            )
+    if line_fit_ratio > 0.05:
+        try:
+            simplified_path = rdp_simplify(even_path, adaptive_tolerance)
+            if len(simplified_path) >= min_path_length:
+                rdp_score = circle_system.evaluate_path(simplified_path)
+                print(
+                    f"      Adaptive RDP: {len(current_path)} -> {len(simplified_path)} points, "
+                    f"score: {rdp_score:.2f}, tolerance: {adaptive_tolerance:.2f}, "
+                    f"mean angle: {mean_angle:.1f}°, sharp ratio: {sharp_ratio:.2f}"
+                )
 
-            # Only accept if the structural quality is preserved.
-            if rdp_score >= best_score * 0.985:
-                current_path = simplified_path
-                best_score = rdp_score
-                print("      ✓ Accepted adaptive pre-simplification.")
-            else:
-                print("      ✗ Rejected RDP due to score drop.")
-    except Exception as e:
-        print(f"      RDP failed: {e}")
+                if rdp_score >= best_score * max(0.96, score_preservation_ratio + 0.02):
+                    current_path = simplified_path
+                    best_score = rdp_score
+                    print("      ✓ Accepted adaptive pre-simplification.")
+                else:
+                    print("      ✗ Rejected RDP due to score drop.")
+        except Exception as e:
+            print(f"      RDP failed: {e}")
     
-    # 2. Primary Optimization: High-Quality Spline Smoothing
-    # This is now the main step for creating a smooth, fitted curve.
-    smoothing_factor = params.get('smoothing_factor', 0.01)
-    
+    # 2. Primary Optimization: Arc-heavy spline smoothing
     try:
-        # Ensure there are enough points for spline fitting (k=3, so need at least 4 points)
         if len(current_path) >= 4:
-            smoothed_path = smooth_path_spline(current_path, smoothing_factor)
-            if len(smoothed_path) >= params.get('min_path_length', 3):
+            smoothed_path = smooth_path_spline(
+                current_path,
+                smoothing_factor * (1.0 + 3.0 * arc_fit_ratio),
+            )
+            if len(smoothed_path) >= min_path_length:
                 smooth_score = circle_system.evaluate_path(smoothed_path)
                 print(f"      Spline smooth: {len(current_path)} -> {len(smoothed_path)} points, score: {smooth_score:.2f}")
-                
-                # Accept the spline if its score is very high (at least 95% of the best score),
-                # ensuring the smooth curve still accurately follows the centerline.
-                if smooth_score > best_score * 0.95:
+
+                if smooth_score > best_score * max(0.92, score_preservation_ratio):
                     current_path = smoothed_path
                     best_score = smooth_score
-                    print(f"      ✓ Accepted high-quality spline fit.")
+                    print("      ✓ Accepted high-quality spline fit.")
     except Exception as e:
         print(f"      Spline smoothing failed: {e}")
+
+    def _consider_candidate(candidate, label):
+        nonlocal current_path, best_score
+
+        candidate = _remove_duplicate_points(candidate)
+        if len(candidate) < min_path_length or len(candidate) >= len(current_path):
+            return
+
+        candidate_score = circle_system.evaluate_path(candidate)
+        mean_dist, p95_dist = _reference_to_candidate_metrics(reference_path, candidate)
+        max_mean_dist = mean_closeness_px
+        max_p95_dist = peak_closeness_px
+        min_score_ratio = score_preservation_ratio
+
+        print(
+            f"      {label}: {len(current_path)} -> {len(candidate)} points, "
+            f"score: {candidate_score:.2f}, mean drift: {mean_dist:.2f}px, p95 drift: {p95_dist:.2f}px"
+        )
+
+        if candidate_score >= best_score * min_score_ratio and mean_dist <= max_mean_dist and p95_dist <= max_p95_dist:
+            current_path = candidate
+            best_score = candidate_score
+            print(f"      ✓ Accepted {label.lower()}.")
+        else:
+            print(f"      ✗ Rejected {label.lower()} (too much drift or score loss).")
+
+    if simplification_ratio > 0 and len(current_path) >= max(4, min_path_length + 1):
+        target_count = max(
+            min_path_length,
+            int(round(len(current_path) * (1.0 - 0.78 * effective_simplification_ratio))),
+        )
+
+        try:
+            curve_seed = smooth_path_spline(
+                current_path,
+                smoothing_factor * (1.0 + 4.2 * effective_simplification_ratio + 2.2 * arc_fit_ratio),
+            )
+            curve_fit_candidate = _reduce_vertices_evenly(curve_seed, target_count)
+            _consider_candidate(curve_fit_candidate, "Arc-fit simplification")
+        except Exception as e:
+            print(f"      Arc-fit simplification failed: {e}")
+
+        try:
+            spline_curve_candidate = fit_curve_to_path(current_path, 'spline')
+            spline_curve_candidate = _reduce_vertices_evenly(spline_curve_candidate, target_count)
+            _consider_candidate(spline_curve_candidate, "Spline arc fit")
+        except Exception as e:
+            print(f"      Spline arc fit failed: {e}")
+
+        try:
+            hybrid_seed = smooth_path_spline(
+                current_path,
+                smoothing_factor * (1.0 + 2.2 * effective_simplification_ratio + 1.3 * arc_fit_ratio),
+            )
+            hybrid_candidate = rdp_simplify(
+                hybrid_seed,
+                max(0.85, adaptive_tolerance * (0.6 + 0.6 * effective_simplification_ratio + 0.45 * line_fit_ratio)),
+            )
+            hybrid_candidate = _reduce_vertices_evenly(hybrid_candidate, target_count)
+            _consider_candidate(hybrid_candidate, "Arc-first hybrid fit")
+        except Exception as e:
+            print(f"      Arc-first hybrid fit failed: {e}")
+
+        if line_fit_ratio > 0.05:
+            try:
+                line_fit_candidate = rdp_simplify(
+                    current_path,
+                    adaptive_tolerance * (0.75 + 2.0 * effective_simplification_ratio * line_fit_ratio),
+                )
+                _consider_candidate(line_fit_candidate, "Line-fit simplification")
+            except Exception as e:
+                print(f"      Line-fit simplification failed: {e}")
     
     # 3. Polynomial fitting is removed for consistency and speed.
     
@@ -673,6 +1058,49 @@ def auto_detect_threshold():
             
     except Exception as e:
         return jsonify({'error': f'Auto-detection error: {str(e)}'})
+
+@app.route('/auto_tune_extraction', methods=['POST'])
+def auto_tune_extraction():
+    """Jointly auto-tune threshold and minimum path length for a better first extraction."""
+    data = request.json
+    session_id = data.get('session_id')
+
+    if session_id not in sessions:
+        return jsonify({'error': 'Invalid session'})
+
+    session = sessions[session_id]
+
+    if session.image is None:
+        return jsonify({'error': 'No image loaded'})
+
+    try:
+        tuning_result = auto_tune_extraction_parameters(session.image)
+
+        if tuning_result['quality_score'] <= 0:
+            return jsonify({
+                'success': False,
+                'error': 'Could not auto-tune extraction parameters. Current settings left unchanged.',
+                'recommendation': tuning_result['recommendation']
+            })
+
+        session.parameters['dark_threshold'] = tuning_result['best_threshold']
+        session.parameters['min_path_length'] = tuning_result['best_min_length']
+
+        return jsonify({
+            'success': True,
+            'detected_threshold': tuning_result['best_threshold'],
+            'detected_min_length': tuning_result['best_min_length'],
+            'confidence_score': tuning_result['confidence_score'],
+            'quality_score': tuning_result['quality_score'],
+            'recommendation': tuning_result['recommendation'],
+            'preview_shape': tuning_result['preview_shape'],
+            'preview_scale': tuning_result['preview_scale'],
+            'longest_path': tuning_result['longest_path'],
+            'valid_paths': tuning_result['valid_paths'],
+            'updated_parameters': session.parameters
+        })
+    except Exception as e:
+        return jsonify({'error': f'Auto-tune error: {str(e)}'})
 
 @app.route('/')
 def index():
@@ -814,8 +1242,11 @@ def process_immediate():
 def background_optimization(session):
     """Run optimization in background thread."""
     try:
+        start_time = time.perf_counter()
         params = session.parameters
         valid_paths = session.initial_paths
+        original_total_segments = sum(max(len(path) - 1, 0) for path in valid_paths)
+        optimized_total_segments = 0
         
         session.progress_queue.put("Starting optimization process...")
         
@@ -840,6 +1271,7 @@ def background_optimization(session):
         
         # Sort paths by score
         sorted_indices = np.argsort(path_scores)[::-1]
+        max_path_length = max((len(p) for p in valid_paths), default=1)
         
         session.progress_queue.put(f"Optimizing {len(valid_paths)} paths...")
         
@@ -854,11 +1286,20 @@ def background_optimization(session):
             
             session.progress_queue.put(f"Optimizing path {i+1}/{len(valid_paths)} ({len(path)} points, score: {original_score:.3f})")
             
-            # Apply optimization with balanced parameters for quality and visible effect
+            # Apply optimization using current UI parameters, including guarded simplification.
             balanced_params = {
-                'rdp_tolerance': 4.0,        # Balanced RDP simplification
-                'smoothing_factor': 0.01,    # Moderate smoothing
-                'min_path_length': 3         # Keep minimum path length
+                'rdp_tolerance': params.get('rdp_tolerance', 2.5),
+                'smoothing_factor': params.get('smoothing_factor', 0.006),
+                'simplification_strength': params.get('simplification_strength', 50.0),
+                'arc_fit_strength': params.get('arc_fit_strength', 72.0),
+                'line_fit_strength': params.get('line_fit_strength', 22.0),
+                'short_path_protection': params.get('short_path_protection', 65.0),
+                'mean_closeness_px': params.get('mean_closeness_px', 1.8),
+                'peak_closeness_px': params.get('peak_closeness_px', 4.5),
+                'score_preservation': params.get('score_preservation', 80.0),
+                'path_length': len(path),
+                'max_path_length': max_path_length,
+                'min_path_length': params.get('min_path_length', 3)
             }
             
             optimized_path, optimized_score = optimize_path_with_custom_params(
@@ -868,6 +1309,8 @@ def background_optimization(session):
             # Add to partial results - always add, even if not dramatically different
             with session.lock:
                 session.partial_optimized_paths.append(optimized_path)
+
+            optimized_total_segments += max(len(optimized_path) - 1, 0)
             
             # Show optimization results with dramatic reduction emphasis
             if len(optimized_path) != len(path):
@@ -881,11 +1324,24 @@ def background_optimization(session):
             session.progress_queue.put(f"Progress: {progress_percent:.1f}% - {i+1}/{len(valid_paths)} paths completed")
             
             # Add small delay to make progress visible (optional)
-            import time
             time.sleep(0.1)  # 100ms delay to see progress
         
         session.optimization_complete = True
         session.progress_queue.put("Optimization complete!")
+
+        elapsed_seconds = time.perf_counter() - start_time
+        if original_total_segments > 0:
+            segment_reduction = ((original_total_segments - optimized_total_segments) / original_total_segments) * 100.0
+        else:
+            segment_reduction = 0.0
+
+        session.progress_queue.put(
+            (
+                f"Summary: {elapsed_seconds:.2f}s total | "
+                f"Segments (magenta -> optimized): {original_total_segments} -> {optimized_total_segments} "
+                f"({segment_reduction:.1f}% reduction)"
+            )
+        )
         
     except Exception as e:
         session.progress_queue.put(f"Optimization error: {str(e)}")
@@ -1002,6 +1458,12 @@ def generate_svg():
 
     session = sessions[session_id]
     
+    # Update session parameters if provided (especially important for include_image setting)
+    if 'parameters' in data:
+        session.parameters.update(data['parameters'])
+
+    show_pre = session.parameters.get('show_pre_optimization', False)
+    
     # Check what data we have available
     if display_mode == 'immediate' and session.initial_paths:
         # Show only magenta paths immediately
@@ -1009,7 +1471,7 @@ def generate_svg():
         paths_to_show = session.initial_paths
         optimized_paths = []
         circle_system = None
-        pre_optimization_paths = paths_to_show
+        pre_optimization_paths = paths_to_show if show_pre else []
         
     elif display_mode == 'progressive':
         # Show magenta + current blue progress
@@ -1020,7 +1482,7 @@ def generate_svg():
         print(f"Generating progressive SVG with {len(optimized_paths)} optimized paths")
         paths_to_show = session.initial_paths
         circle_system = None  # Could add this later
-        pre_optimization_paths = paths_to_show
+        pre_optimization_paths = paths_to_show if show_pre else []
         
     elif session.results:
         # Show final results
@@ -1029,7 +1491,7 @@ def generate_svg():
         paths_to_show = results.get('pre_optimization_paths', [])
         optimized_paths = results.get('optimized_paths', [])
         circle_system = results.get('circle_system')
-        pre_optimization_paths = paths_to_show
+        pre_optimization_paths = paths_to_show if show_pre else []
         
     else:
         return jsonify({'error': 'No results available yet'})
@@ -1046,16 +1508,13 @@ def generate_svg():
         wo.OUTPUT_PATH = temp_svg
         wo.SHOW_BITMAP = session.parameters.get('include_image', False)
         
-        # Always show pre-optimization paths for immediate/progressive modes
-        if display_mode in ['immediate', 'progressive']:
-            wo.SHOW_PRE_OPTIMIZATION_PATHS = True
-        else:
-            wo.SHOW_PRE_OPTIMIZATION_PATHS = session.parameters.get('show_pre_optimization', False)
+        # Respect user toggle for showing magenta pre-optimization paths in all modes.
+        wo.SHOW_PRE_OPTIMIZATION_PATHS = show_pre
         
         # Generate SVG based on mode
         if display_mode == 'immediate':
             # Only magenta paths, no blue
-            print("Creating immediate SVG with magenta paths only")
+            print("Creating immediate SVG")
             create_svg_output(
                 session.image,
                 None,  # No circle system
@@ -1128,22 +1587,22 @@ def download_svg(session_id):
         wo.SHOW_BITMAP = session.parameters.get('include_image', False)  # User-controlled
         
         # Determine what to show based on available data
+        show_pre = session.parameters.get('show_pre_optimization', False)
         if has_progressive_data:
             # Use progressive data
             print(f"Generating download SVG with progressive data: {len(session.initial_paths)} initial paths, {len(session.partial_optimized_paths)} optimized paths")
-            wo.SHOW_PRE_OPTIMIZATION_PATHS = True  # Always show magenta paths
+            wo.SHOW_PRE_OPTIMIZATION_PATHS = show_pre
             
             create_svg_output(
                 session.image,
                 None,  # No circle system in progressive mode
                 session.partial_optimized_paths,  # Blue optimized paths (may be empty if just started)
                 [1.0] * len(session.partial_optimized_paths),  # Dummy scores
-                session.initial_paths  # Magenta initial paths
+                session.initial_paths if show_pre else []  # Magenta initial paths
             )
         else:
             # Use traditional results
             results = session.results
-            show_pre = session.parameters.get('show_pre_optimization', False)
             optimization_enabled = session.parameters.get('enable_optimization', True)
             if not optimization_enabled:
                 show_pre = True

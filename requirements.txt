@@ -4,5 +4,6 @@ scikit-image>=0.22.0
 scipy>=1.11.0
 svgwrite==1.4.3
 Pillow>=10.0.0
+pypdfium2>=4.30.0
 setuptools>=68.0.0
 wheel>=0.41.0
