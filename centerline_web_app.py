@@ -37,8 +37,10 @@ class CenterlineSession:
     def __init__(self, session_id):
         self.session_id = session_id
         self.image = None
+        self.display_image = None
         self.image_path = None
         self.original_filename = None
+        self.preprocessing_info = {}
         self.results = None
         self.initial_paths = None  # Store raw magenta paths
         self.progress_queue = Queue()  # For progress updates
@@ -386,8 +388,21 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
                         'median_top_length': float(median_top_length / max(scale, 1e-6))
                     }
 
-                if threshold_best is None or candidate['score'] > threshold_best['score']:
+                if threshold_best is None:
                     threshold_best = candidate
+                else:
+                    candidate_score = float(candidate.get('score', 0.0))
+                    current_best_score = float(threshold_best.get('score', 0.0))
+                    score_delta = candidate_score - current_best_score
+
+                    # If scores are effectively tied, prefer the stricter minimum path length.
+                    # This avoids defaulting to length 1 when several thresholds keep the same
+                    # long paths and only differ in how aggressively they suppress short fragments.
+                    if score_delta > 1e-6 or (
+                        abs(score_delta) <= 1e-6 and
+                        int(candidate.get('best_min_length', 0)) > int(threshold_best.get('best_min_length', 0))
+                    ):
+                        threshold_best = candidate
 
             if threshold_best is None:
                 threshold_best = {
@@ -461,11 +476,89 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
         'all_results': all_results
     }
 
+def _normalize_background_if_needed(gray_image):
+    """Conditionally flatten uneven backgrounds while preserving dark strokes.
+
+    Returns:
+        (processed_image, metadata)
+    """
+    from skimage import exposure, filters
+
+    gray = np.clip(gray_image.astype(np.float32), 0.0, 1.0)
+
+    # Estimate slow background shading using a large blur.
+    background = filters.gaussian(gray, sigma=24.0, preserve_range=True)
+
+    bg_p05, bg_p95 = np.percentile(background, [5, 95])
+    bg_range = float(bg_p95 - bg_p05)
+    bg_std = float(np.std(background))
+    illumination_gradient = float(np.mean(np.abs(filters.sobel(background))))
+    dark_ratio = float(np.mean(gray < 0.65))
+
+    # Weighted trigger to reduce false positives on already-uniform images.
+    # Tuned for scanned drawings with mostly bright paper and sparse dark ink.
+    range_score = float(np.clip((bg_range - 0.035) / 0.040, 0.0, 1.0))
+    std_score = float(np.clip((bg_std - 0.008) / 0.020, 0.0, 1.0))
+    gradient_score = float(np.clip((illumination_gradient - 0.004) / 0.015, 0.0, 1.0))
+    normalization_score = 0.55 * range_score + 0.25 * std_score + 0.20 * gradient_score
+
+    # Dense dark images are less likely to be paper-background sketches.
+    if dark_ratio > 0.62:
+        normalization_score *= 0.70
+
+    # Use the same precision for decision + UI display to avoid confusing edge cases
+    # where an internal value like 0.3496 is shown as 0.350 but does not trigger.
+    decision_score = float(np.round(normalization_score, 3))
+
+    should_normalize = bool(decision_score >= 0.35 or bg_range > 0.075)
+
+    if should_normalize and bg_range > 0.075:
+        reason = 'strong background shading range'
+    elif should_normalize:
+        reason = 'combined background variance score'
+    else:
+        reason = 'background uniform enough'
+
+    metadata = {
+        'applied': should_normalize,
+        'background_range': round(bg_range, 4),
+        'background_std': round(bg_std, 4),
+        'illumination_gradient': round(illumination_gradient, 4),
+        'normalization_score': decision_score,
+        'dark_ratio': round(dark_ratio, 4),
+        'reason': reason,
+        'mode': 'none'
+    }
+
+    if not should_normalize:
+        return gray, metadata
+
+    safe_background = np.clip(background, 1e-3, 1.0)
+    normalized = (gray / safe_background) * float(np.mean(safe_background))
+    normalized = np.clip(normalized, 0.0, 1.0)
+
+    # Stretch contrast after flattening so a global threshold behaves more predictably.
+    low, high = np.percentile(normalized, [2, 98])
+    if high - low > 1e-6:
+        normalized = exposure.rescale_intensity(normalized, in_range=(low, high), out_range=(0.0, 1.0))
+
+    metadata['mode'] = 'divide_and_rescale'
+    metadata['post_low'] = round(float(low), 4)
+    metadata['post_high'] = round(float(high), 4)
+
+    return np.clip(normalized.astype(np.float32), 0.0, 1.0), metadata
+
+
 def load_and_process_image(image_path):
-    """Load an image or PDF page and convert it to grayscale in the 0-1 range.
+    """Load an image/PDF and return raw+extraction grayscale images in 0-1 range.
 
     - Transparent images are composited over white to avoid losing alpha semantics.
     - PDF files are rendered from page 1 using pypdfium2.
+
+    Returns:
+        raw_gray: Original grayscale image in 0-1 range.
+        extraction_gray: Grayscale image used for path extraction.
+        preprocessing_info: Metadata about normalization decisions.
     """
     from skimage import color, io
 
@@ -524,8 +617,9 @@ def load_and_process_image(image_path):
     else:
         raise ValueError(f"Unsupported image shape: {img.shape}")
 
-    gray = np.clip(gray.astype(np.float32), 0.0, 1.0)
-    return gray
+    raw_gray = np.clip(gray.astype(np.float32), 0.0, 1.0)
+    extraction_gray, preprocessing_info = _normalize_background_if_needed(raw_gray)
+    return raw_gray, extraction_gray, preprocessing_info
 
 def process_centerlines(session):
     """Process centerlines with current parameters."""
@@ -1130,16 +1224,18 @@ def upload_file():
     file.save(temp_path)
     
     try:
-        # Load and process image
-        gray = load_and_process_image(temp_path)
-        session.image = gray
+        # Load and preprocess image for extraction, while keeping original for display.
+        raw_gray, extraction_gray, preprocessing_info = load_and_process_image(temp_path)
+        session.image = extraction_gray
+        session.display_image = raw_gray
+        session.preprocessing_info = preprocessing_info
         session.image_path = temp_path
         
         # Store session
         sessions[session_id] = session
         
         # Convert image to base64 for display
-        pil_img = Image.fromarray((gray * 255).astype(np.uint8))
+        pil_img = Image.fromarray((raw_gray * 255).astype(np.uint8))
         buf = BytesIO()
         pil_img.save(buf, format='PNG')
         buf.seek(0)
@@ -1149,8 +1245,9 @@ def upload_file():
             'success': True,
             'session_id': session_id,
             'image_data': img_data,
-            'image_shape': gray.shape,
-            'parameters': session.parameters
+            'image_shape': raw_gray.shape,
+            'parameters': session.parameters,
+            'preprocessing': preprocessing_info
         })
         
     except Exception as e:
@@ -1511,12 +1608,14 @@ def generate_svg():
         # Respect user toggle for showing magenta pre-optimization paths in all modes.
         wo.SHOW_PRE_OPTIMIZATION_PATHS = show_pre
         
+        background_image = session.display_image if session.display_image is not None else session.image
+
         # Generate SVG based on mode
         if display_mode == 'immediate':
             # Only magenta paths, no blue
             print("Creating immediate SVG")
             create_svg_output(
-                session.image,
+                background_image,
                 None,  # No circle system
                 [],    # No optimized paths (no blue lines)
                 [],    # No scores
@@ -1526,7 +1625,7 @@ def generate_svg():
             # Progressive or final - show both magenta and blue
             print(f"Creating {display_mode} SVG with {len(optimized_paths)} blue paths and {len(pre_optimization_paths)} magenta paths")
             create_svg_output(
-                session.image,
+                background_image,
                 circle_system,
                 optimized_paths,  # Blue paths
                 [1.0] * len(optimized_paths),  # Dummy scores
@@ -1585,6 +1684,7 @@ def download_svg(session_id):
         
         wo.OUTPUT_PATH = temp_svg
         wo.SHOW_BITMAP = session.parameters.get('include_image', False)  # User-controlled
+        background_image = session.display_image if session.display_image is not None else session.image
         
         # Determine what to show based on available data
         show_pre = session.parameters.get('show_pre_optimization', False)
@@ -1594,7 +1694,7 @@ def download_svg(session_id):
             wo.SHOW_PRE_OPTIMIZATION_PATHS = show_pre
             
             create_svg_output(
-                session.image,
+                background_image,
                 None,  # No circle system in progressive mode
                 session.partial_optimized_paths,  # Blue optimized paths (may be empty if just started)
                 [1.0] * len(session.partial_optimized_paths),  # Dummy scores
@@ -1610,7 +1710,7 @@ def download_svg(session_id):
             
             if results['circle_system'] is not None:
                 create_svg_output(
-                    session.image,
+                    background_image,
                     results['circle_system'],
                     results['optimized_paths'],
                     results['optimized_scores'],
@@ -1618,7 +1718,7 @@ def download_svg(session_id):
                 )
             else:
                 create_svg_output(
-                    session.image,
+                    background_image,
                     None,
                     results['optimized_paths'],
                     results['optimized_scores'],

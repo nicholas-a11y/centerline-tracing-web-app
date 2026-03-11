@@ -412,6 +412,34 @@
             margin-top: 20px;
         }
 
+        .preprocess-status {
+            margin-top: 12px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            font-size: 0.85em;
+            line-height: 1.35;
+            border: 1px solid #dbe7ff;
+            background: #f4f8ff;
+            color: #2d4a7a;
+        }
+
+        .preprocess-status.applied {
+            border-color: #b9e7cb;
+            background: #edf9f1;
+            color: #245738;
+        }
+
+        .preprocess-status.skipped {
+            border-color: #dfe4ea;
+            background: #f7f8fa;
+            color: #4e5968;
+        }
+
+        .metric-help {
+            border-bottom: 1px dotted currentColor;
+            cursor: help;
+        }
+
         @media (max-width: 768px) {
             .main-content {
                 grid-template-columns: 1fr;
@@ -494,6 +522,7 @@
                         <input type="file" id="fileInput" class="file-input" accept="image/*,.pdf,application/pdf">
                         <label for="fileInput" class="btn" id="chooseFileBtn">Choose File</label>
                     </div>
+                    <div id="preprocessStatus" class="preprocess-status" style="display: none;"></div>
                 </div>
 
                 <div class="parameter-group">
@@ -651,6 +680,7 @@
         let autoProcessTimeout = null;
         let optimizationReached100 = false;
         let lastRenderedSvgMode = null;
+        let currentPreprocessingInfo = null;
         let autoTuneState = {
             active: false,
             token: 0,
@@ -811,7 +841,9 @@
                     autoTuneState.token += 1;
                     autoTuneState.active = false;
                     currentSessionId = data.session_id;
+                    currentPreprocessingInfo = data.preprocessing || null;
                     displayImage(data.image_data, data.image_shape);
+                    renderPreprocessingStatus(currentPreprocessingInfo);
                     updateParameters(data.parameters);
                     document.getElementById('processBtn').disabled = false;
                     document.getElementById('autoDetectBtn').disabled = false;
@@ -931,6 +963,56 @@
             const imgElement = `<img src="data:image/png;base64,${imageData}" alt="Uploaded Image" onclick="openImageModal(this.src)" id="mainImage">`;
             const infoElement = imageShape ? `<div class="image-info">📐 Dimensions: ${imageShape[1]} × ${imageShape[0]} pixels</div>` : '';
             imageDisplay.innerHTML = imgElement + infoElement;
+        }
+
+        function renderPreprocessingStatus(preprocessing) {
+            const statusEl = document.getElementById('preprocessStatus');
+            if (!statusEl) return;
+
+            if (!preprocessing) {
+                statusEl.style.display = 'none';
+                statusEl.textContent = '';
+                statusEl.classList.remove('applied', 'skipped');
+                return;
+            }
+
+            const bgRange = typeof preprocessing.background_range === 'number'
+                ? preprocessing.background_range.toFixed(4)
+                : 'n/a';
+            const bgStd = typeof preprocessing.background_std === 'number'
+                ? preprocessing.background_std.toFixed(4)
+                : 'n/a';
+            const illumGrad = typeof preprocessing.illumination_gradient === 'number'
+                ? preprocessing.illumination_gradient.toFixed(4)
+                : 'n/a';
+            const score = typeof preprocessing.normalization_score === 'number'
+                ? preprocessing.normalization_score.toFixed(3)
+                : 'n/a';
+            const darkRatio = typeof preprocessing.dark_ratio === 'number'
+                ? preprocessing.dark_ratio.toFixed(3)
+                : 'n/a';
+
+            const metricLine = `
+                <small>
+                    <span class="metric-help" title="Spread of slow background brightness across the page. Higher usually means stronger shading gradients.">range</span>: ${bgRange},
+                    <span class="metric-help" title="Standard deviation of estimated background brightness. Higher means less uniform paper tone.">std</span>: ${bgStd},
+                    <span class="metric-help" title="Average edge strength in background illumination only (not stroke edges). Higher means uneven lighting.">illumination</span>: ${illumGrad},
+                    <span class="metric-help" title="Estimated proportion of darker-than-paper pixels. Helps avoid over-normalizing dense/dark images.">dark ratio</span>: ${darkRatio},
+                    <span class="metric-help" title="Combined trigger score for normalization decision.">score</span>: ${score}
+                </small>
+            `;
+
+            if (preprocessing.applied) {
+                statusEl.classList.remove('skipped');
+                statusEl.classList.add('applied');
+                statusEl.innerHTML = `Normalization applied<br><small>${preprocessing.reason || 'Uneven background detected'}</small>${metricLine}`;
+            } else {
+                statusEl.classList.remove('applied');
+                statusEl.classList.add('skipped');
+                statusEl.innerHTML = `Normalization skipped<br><small>${preprocessing.reason || 'Background already uniform enough'}</small>${metricLine}`;
+            }
+
+            statusEl.style.display = 'block';
         }
 
         function openImageModal(imageSrc) {
@@ -1610,6 +1692,8 @@
             }
             optimizationReached100 = false;
             lastRenderedSvgMode = null;
+            currentPreprocessingInfo = null;
+            renderPreprocessingStatus(null);
 
             // Clear previous SVG display
             const svgDisplay = document.getElementById('svgDisplay');
