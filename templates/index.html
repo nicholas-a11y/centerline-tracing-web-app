@@ -865,7 +865,7 @@
                         <label>Dark Threshold <span class="range-value" id="darkThresholdValue">0.20</span></label>
                         <input type="range" id="darkThreshold" min="0.05" max="0.8" step="0.05" value="0.20">
                         <button class="btn btn-secondary" id="autoDetectBtn" onclick="autoDetectThreshold()" style="margin-top: 8px; padding: 6px 12px; font-size: 14px; display: none;" disabled>🎯 Auto-Detect</button>
-                        <small style="color: #666; font-size: 0.8em;">Automatically find the best threshold value</small>
+                        <small style="color: #666; font-size: 0.8em;">Sensitivity to dark areas in the image</small>
                     </div>
                     <div style="margin-top: 10px;">
                         <button type="button" id="detectionAdvancedToggleBtn" onclick="toggleDetectionAdvancedSettings()" style="background: none; border: none; color: #4facfe; cursor: pointer; font-size: 0.85em; padding: 0;">⚙️ Advanced settings ▼</button>
@@ -901,10 +901,10 @@
                         </div>
                     </div>
                     <div class="parameter" style="margin-top: 10px;">
-                        <label>Min Path Length <span class="range-value" id="minPathLengthValue">3</span></label>
+                        <label>Min Path Length (px) <span class="range-value" id="minPathLengthValue">3</span></label>
                         <input type="range" id="minPathLength" min="1" max="20" step="1" value="3">
                         <button class="btn btn-secondary" id="autoDetectMinLengthBtn" onclick="autoDetectMinPathLength()" style="margin-top: 8px; padding: 6px 12px; font-size: 14px; display: none;" disabled>🎯 Auto-Detect</button>
-                        <small style="color: #666; font-size: 0.8em;">Filter out short path segments (noise)</small>
+                        <small style="color: #666; font-size: 0.8em;">Discards short path segments (noise)</small>
                     </div>
                 </div>
 
