@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "image_size": {
+    "width": 2200,
+    "height": 1700
+  },
+  "files": {
+    "clean_png": "centerline_gap_bridge_test.png",
+    "clean_bmp": "centerline_gap_bridge_test.bmp",
+    "varwidth_png": "centerline_gap_bridge_test_varwidth.png",
+    "varwidth_bmp": "centerline_gap_bridge_test_varwidth.bmp",
+    "noisy_png": "centerline_gap_bridge_test_varwidth_noisy.png",
+    "noisy_bmp": "centerline_gap_bridge_test_varwidth_noisy.bmp"
+  },
+  "gap_test": {
+    "horizontal_block": {
+      "start_xy": [
+        80,
+        120
+      ],
+      "row_spacing_px": 55,
+      "line_length_px": 900,
+      "gaps_px": [
+        2,
+        4,
+        6,
+        8,
+        10,
+        14,
+        18,
+        24,
+        32,
+        44
+      ]
+    },
+    "diagonal_block": {
+      "start_xy": [
+        1150,
+        140
+      ],
+      "row_spacing_px": 55,
+      "approx_line_length_px": 900,
+      "gaps_px": [
+        2,
+        4,
+        6,
+        8,
+        10,
+        14,
+        18,
+        24,
+        32,
+        44
+      ]
+    },
+    "interpretation": {
+      "merge_gap_6": "typically bridges rows with gaps up to about 6 px",
+      "merge_gap_10": "typically bridges rows with gaps up to about 10 px",
+      "merge_gap_18": "typically bridges rows with gaps up to about 18 px",
+      "merge_gap_24": "typically bridges rows with gaps up to about 24 px",
+      "merge_gap_32": "typically bridges rows with gaps up to about 32 px",
+      "merge_gap_44": "aggressive; may bridge nearly all designed gap rows"
+    },
+    "note": "Exact behavior can vary with thresholding, skeletonization, and path filtering settings."
+  },
+  "topology_coverage": [
+    "cross intersection (+)",
+    "x intersection",
+    "skewed intersection",
+    "t junction",
+    "inverted t junction",
+    "y junction (vertical stem)",
+    "y junction (angled stem)",
+    "open polyline",
+    "open c shape",
+    "open u shape",
+    "closed rectangle",
+    "closed ellipse",
+    "short disconnected stubs"
+  ]
+}

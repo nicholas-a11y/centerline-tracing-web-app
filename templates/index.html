@@ -237,6 +237,7 @@
             border-radius: 10px;
             background: #f8f9fa;
             min-height: 300px;
+            max-height: 400px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -245,7 +246,7 @@
 
         .image-display img {
             max-width: 100%;
-            max-height: 80vh;
+            max-height: 400px;
             border-radius: 8px;
             cursor: pointer;
             transition: transform 0.3s ease;
@@ -533,7 +534,40 @@
                         <button class="btn btn-secondary" id="autoDetectBtn" onclick="autoDetectThreshold()" style="margin-top: 8px; padding: 6px 12px; font-size: 14px; display: none;" disabled>🎯 Auto-Detect</button>
                         <small style="color: #666; font-size: 0.8em;">Automatically find the best threshold value</small>
                     </div>
-                    <div class="parameter">
+                    <div style="margin-top: 10px;">
+                        <button type="button" id="detectionAdvancedToggleBtn" onclick="toggleDetectionAdvancedSettings()" style="background: none; border: none; color: #4facfe; cursor: pointer; font-size: 0.85em; padding: 0;">⚙️ Advanced settings ▼</button>
+                    </div>
+                    <div id="detectionAdvancedSettings" style="display: none; margin-top: 8px;">
+                        <div class="parameter">
+                            <label for="normalizationMode">Normalization Mode</label>
+                            <select id="normalizationMode" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; margin-top: 4px;">
+                                <option value="auto" selected>Auto</option>
+                                <option value="on">Force On</option>
+                                <option value="off">Force Off</option>
+                            </select>
+                            <small style="color: #666; font-size: 0.8em;">Applies during upload preprocessing.</small>
+                        </div>
+                        <div class="parameter">
+                            <label for="normalizationSensitivity">Normalization Sensitivity</label>
+                            <select id="normalizationSensitivity" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; margin-top: 4px;">
+                                <option value="low">Low</option>
+                                <option value="medium" selected>Medium</option>
+                                <option value="high">High</option>
+                            </select>
+                            <small style="color: #666; font-size: 0.8em;">Higher sensitivity normalizes more images in auto mode.</small>
+                        </div>
+                        <div class="parameter">
+                            <label>Merge Gap (px) <span class="range-value" id="mergeGapValue">25</span></label>
+                            <input type="range" id="mergeGap" min="1" max="80" step="1" value="25">
+                            <small style="color: #666; font-size: 0.8em;">How far line endpoints can reach to connect with nearby lines.</small>
+                        </div>
+                        <div class="parameter">
+                            <label>Angle Priority (%) <span class="range-value" id="mergeAnglePriorityValue">30</span></label>
+                            <input type="range" id="mergeAnglePriority" min="0" max="100" step="1" value="30">
+                            <small style="color: #666; font-size: 0.8em;">Higher values prefer bridging endpoints that continue in the same direction.</small>
+                        </div>
+                    </div>
+                    <div class="parameter" style="margin-top: 10px;">
                         <label>Min Path Length <span class="range-value" id="minPathLengthValue">3</span></label>
                         <input type="range" id="minPathLength" min="1" max="20" step="1" value="3">
                         <button class="btn btn-secondary" id="autoDetectMinLengthBtn" onclick="autoDetectMinPathLength()" style="margin-top: 8px; padding: 6px 12px; font-size: 14px; display: none;" disabled>🎯 Auto-Detect</button>
@@ -541,7 +575,7 @@
                     </div>
                 </div>
 
-                <div class="parameter-group">
+                <div class="parameter-group" id="optimizationParametersGroup">
                     <h3>🎨 Optimization</h3>
                     <div class="parameter">
                         <label>Tolerance <span class="range-value" id="rdpToleranceValue">2.5</span></label>
@@ -625,6 +659,7 @@
                 <div class="action-buttons">
                     <button class="btn" id="processBtn" onclick="processImage()" disabled>🚀 Process</button>
                     <button class="btn btn-secondary" id="autoProcessBtn" onclick="toggleAutoProcess()">🔄 Auto</button>
+                    <button class="btn btn-secondary" id="resetBtn" onclick="resetApplicationState()">↺ Reset</button>
                     <button class="btn btn-warning" id="stopOptBtn" onclick="stopOptimization()" style="display: none;">⏹️ Stop Optimization</button>
                 </div>
             </div>
@@ -686,6 +721,138 @@
             token: 0,
             shouldProcessAfter: false
         };
+        const parameterControlIds = new Set([
+            'darkThreshold',
+            'mergeGap',
+            'mergeAnglePriority',
+            'rdpTolerance',
+            'smoothingFactor',
+            'simplificationStrength',
+            'arcFitStrength',
+            'lineFitStrength',
+            'shortPathProtection',
+            'meanClosenessPx',
+            'peakClosenessPx',
+            'scorePreservation',
+            'minPathLength',
+            'enableOptimization',
+            'showPreOptimization',
+            'includeImage',
+            'normalizationMode',
+            'normalizationSensitivity'
+        ]);
+        const defaultParameterState = getParameters();
+        const initialImageDisplayMarkup = document.getElementById('imageDisplay').innerHTML;
+        let touchedParameterIds = new Set();
+        let activeRequestControllers = new Set();
+        let requestEpoch = 0;
+
+        function invalidateRequestEpoch() {
+            requestEpoch += 1;
+            return requestEpoch;
+        }
+
+        function isRequestStale(epoch) {
+            return epoch !== requestEpoch;
+        }
+
+        function trackedFetch(url, options = {}) {
+            const controller = new AbortController();
+            activeRequestControllers.add(controller);
+
+            return fetch(url, {
+                ...options,
+                signal: controller.signal
+            }).finally(() => {
+                activeRequestControllers.delete(controller);
+            });
+        }
+
+        function abortAllActiveRequests() {
+            activeRequestControllers.forEach(controller => controller.abort());
+            activeRequestControllers.clear();
+        }
+
+        function isAbortError(error) {
+            return error && error.name === 'AbortError';
+        }
+
+        function markParameterTouched(controlId) {
+            if (!parameterControlIds.has(controlId)) return;
+            touchedParameterIds.add(controlId);
+        }
+
+        function resetAdvancedPanels() {
+            const detectionPanel = document.getElementById('detectionAdvancedSettings');
+            const detectionBtn = document.getElementById('detectionAdvancedToggleBtn');
+            const optimizationPanel = document.getElementById('advancedSettings');
+            const optimizationBtn = document.getElementById('advancedToggleBtn');
+
+            if (detectionPanel) detectionPanel.style.display = 'none';
+            if (detectionBtn) detectionBtn.textContent = '⚙️ Advanced settings ▼';
+            if (optimizationPanel) optimizationPanel.style.display = 'none';
+            if (optimizationBtn) optimizationBtn.textContent = '⚙️ Advanced settings ▼';
+        }
+
+        function cancelActiveUiWork() {
+            if (autoProcessTimeout) {
+                clearTimeout(autoProcessTimeout);
+                autoProcessTimeout = null;
+            }
+
+            if (progressInterval) {
+                clearInterval(progressInterval);
+                progressInterval = null;
+            }
+
+            autoTuneState.token += 1;
+            autoTuneState.active = false;
+            autoTuneState.shouldProcessAfter = false;
+            setLoadingActionButton(false);
+            showLoading(false);
+        }
+
+        function signalOptimizationStop(sessionId) {
+            if (!sessionId) return;
+
+            fetch('/stop_optimization', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: sessionId
+                }),
+                keepalive: true
+            }).catch(() => {});
+        }
+
+        function resetApplicationState() {
+            const sessionIdToStop = currentSessionId;
+
+            invalidateRequestEpoch();
+            abortAllActiveRequests();
+            cancelActiveUiWork();
+            signalOptimizationStop(sessionIdToStop);
+
+            touchedParameterIds = new Set();
+            updateParameters(defaultParameterState);
+            resetAdvancedPanels();
+
+            currentSessionId = null;
+            currentPreprocessingInfo = null;
+            fileInput.value = '';
+            autoProcessEnabled = true;
+            setAutoProcessButtonState();
+
+            clearResults();
+            document.getElementById('imageDisplay').innerHTML = initialImageDisplayMarkup;
+            document.getElementById('processBtn').disabled = true;
+            document.getElementById('autoDetectBtn').disabled = true;
+            document.getElementById('autoDetectMinLengthBtn').disabled = true;
+
+            showMessage('Reset complete. Settings returned to defaults and active browser requests were cancelled.', 'success');
+        }
 
         // File upload handling
         const fileInput = document.getElementById('fileInput');
@@ -819,6 +986,12 @@
             const file = fileInput.files[0];
             if (!file) return;
 
+            const previousSessionId = currentSessionId;
+            const uploadEpoch = invalidateRequestEpoch();
+            abortAllActiveRequests();
+            cancelActiveUiWork();
+            signalOptimizationStop(previousSessionId);
+
             // New upload should always start from a clean UI state.
             clearResults();
             autoTuneState.token += 1;
@@ -827,16 +1000,22 @@
 
             const formData = new FormData();
             formData.append('file', file);
+            formData.append('normalization_mode', document.getElementById('normalizationMode').value);
+            formData.append('normalization_sensitivity', document.getElementById('normalizationSensitivity').value);
 
             showMessage('Uploading file...', 'info');
             showLoading(true);
 
-            fetch('/upload', {
+            trackedFetch('/upload', {
                 method: 'POST',
                 body: formData
             })
             .then(response => response.json())
             .then(data => {
+                if (isRequestStale(uploadEpoch)) {
+                    return;
+                }
+
                 if (data.success) {
                     autoTuneState.token += 1;
                     autoTuneState.active = false;
@@ -844,7 +1023,7 @@
                     currentPreprocessingInfo = data.preprocessing || null;
                     displayImage(data.image_data, data.image_shape);
                     renderPreprocessingStatus(currentPreprocessingInfo);
-                    updateParameters(data.parameters);
+                    updateParameters(data.parameters, { preserveTouched: true });
                     document.getElementById('processBtn').disabled = false;
                     document.getElementById('autoDetectBtn').disabled = false;
                     document.getElementById('autoDetectMinLengthBtn').disabled = false;
@@ -856,6 +1035,10 @@
                 }
             })
             .catch(error => {
+                if (isAbortError(error) || isRequestStale(uploadEpoch)) {
+                    return;
+                }
+
                 showLoading(false);
                 showMessage(`Upload error: ${error.message}`, 'error');
             });
@@ -877,6 +1060,7 @@
             }
 
             const requestToken = autoTuneState.token + 1;
+            const autoTuneEpoch = requestEpoch;
             autoTuneState.token = requestToken;
             autoTuneState.active = true;
             autoTuneState.shouldProcessAfter = shouldProcessAfter;
@@ -885,7 +1069,7 @@
             setLoadingActionButton(true, 'Skip');
             showProgressMessage('Auto tuning upload parameters...', 'info');
 
-            fetch('/auto_tune_extraction', {
+            trackedFetch('/auto_tune_extraction', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -896,7 +1080,7 @@
             })
             .then(response => response.json())
             .then(data => {
-                if (requestToken !== autoTuneState.token) {
+                if (requestToken !== autoTuneState.token || isRequestStale(autoTuneEpoch)) {
                     return;
                 }
 
@@ -905,7 +1089,7 @@
                 showLoading(false);
 
                 if (data.success) {
-                    updateParameters(data.updated_parameters);
+                    updateParameters(data.updated_parameters, { preserveTouched: true });
 
                     const confidenceText = data.confidence_score >= 0.18 ? 'high confidence' :
                         data.confidence_score >= 0.08 ? 'moderate confidence' : 'low confidence';
@@ -925,7 +1109,7 @@
                 }
             })
             .catch(error => {
-                if (requestToken !== autoTuneState.token) {
+                if (requestToken !== autoTuneState.token || isRequestStale(autoTuneEpoch) || isAbortError(error)) {
                     return;
                 }
 
@@ -1073,12 +1257,17 @@
             return str.replace(/_([a-z])/g, (match, letter) => letter.toUpperCase());
         }
 
-        function updateParameters(params) {
+        function updateParameters(params, options = {}) {
+            const preserveTouched = options.preserveTouched || false;
             Object.keys(params).forEach(key => {
                 // Convert snake_case parameter names to camelCase element IDs
                 const elementId = snakeToCamel(key);
                 const element = document.getElementById(elementId);
                 if (element) {
+                    if (preserveTouched && touchedParameterIds.has(elementId)) {
+                        return;
+                    }
+
                     if (element.type === 'checkbox') {
                         element.checked = params[key];
                     } else {
@@ -1098,7 +1287,18 @@
             const ranges = document.querySelectorAll('input[type="range"]');
             ranges.forEach(range => {
                 range.addEventListener('input', function() {
+                    markParameterTouched(this.id);
                     updateRangeValue(this.id);
+                    if (autoProcessEnabled) {
+                        scheduleAutoProcess();
+                    }
+                });
+            });
+
+            const selects = document.querySelectorAll('select');
+            selects.forEach(select => {
+                select.addEventListener('change', function() {
+                    markParameterTouched(this.id);
                     if (autoProcessEnabled) {
                         scheduleAutoProcess();
                     }
@@ -1109,6 +1309,8 @@
             const checkboxes = document.querySelectorAll('input[type="checkbox"]');
             checkboxes.forEach(checkbox => {
                 checkbox.addEventListener('change', function() {
+                    markParameterTouched(this.id);
+
                     // Handle optimization checkbox logic
                     if (this.id === 'enableOptimization') {
                         const optimizationWasRunning = isOptimizationRunning();
@@ -1146,8 +1348,27 @@
             const enableOptimization = document.getElementById('enableOptimization');
             const showPreOptimization = document.getElementById('showPreOptimization');
             const overlapSection = document.getElementById('overlapControlSection');
+            const optimizationParametersGroup = document.getElementById('optimizationParametersGroup');
+            const advancedSettings = document.getElementById('advancedSettings');
+            const advancedToggleBtn = document.getElementById('advancedToggleBtn');
+
+            if (optimizationParametersGroup) {
+                const controls = optimizationParametersGroup.querySelectorAll('input, select, button, textarea');
+                controls.forEach(control => {
+                    control.disabled = !enableOptimization.checked;
+                });
+
+                optimizationParametersGroup.style.display = enableOptimization.checked ? 'block' : 'none';
+            }
             
             if (!enableOptimization.checked) {
+                if (advancedSettings) {
+                    advancedSettings.style.display = 'none';
+                }
+                if (advancedToggleBtn) {
+                    advancedToggleBtn.textContent = '⚙️ Advanced settings ▼';
+                }
+
                 // When optimization is off, force show unoptimized paths to be checked and disabled
                 showPreOptimization.checked = true;
                 showPreOptimization.disabled = true;
@@ -1229,6 +1450,8 @@
                 return;
             }
 
+            const detectEpoch = requestEpoch;
+
             const autoDetectBtn = document.getElementById('autoDetectMinLengthBtn');
             autoDetectBtn.disabled = true;
             autoDetectBtn.textContent = '🔍 Detecting...';
@@ -1236,7 +1459,7 @@
             showLoading(true, 'Auto-detecting optimal min path length...', 'Analyzing path length distribution to filter noise');
             showProgressMessage('Testing different minimum path lengths...', 'info');
 
-            fetch('/auto_detect_min_path_length', {
+            trackedFetch('/auto_detect_min_path_length', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1247,18 +1470,22 @@
             })
             .then(response => response.json())
             .then(data => {
+                if (isRequestStale(detectEpoch)) {
+                    return;
+                }
+
                 showLoading(false);
                 autoDetectBtn.disabled = false;
                 autoDetectBtn.textContent = '🎯 Auto-Detect';
                 
                 if (data.success) {
-                    // Update the min path length slider
+                    // Update session parameters
+                    touchedParameterIds.add('minPathLength');
+                    updateParameters(data.updated_parameters, { preserveTouched: true });
+
                     const minLengthSlider = document.getElementById('minPathLength');
                     minLengthSlider.value = data.detected_min_length;
                     updateRangeValue('minPathLength');
-                    
-                    // Update session parameters
-                    updateParameters(data.updated_parameters);
                     
                     let statsText = '';
                     if (data.path_stats) {
@@ -1279,6 +1506,10 @@
                 }
             })
             .catch(error => {
+                if (isAbortError(error) || isRequestStale(detectEpoch)) {
+                    return;
+                }
+
                 showLoading(false);
                 autoDetectBtn.disabled = false;
                 autoDetectBtn.textContent = '🎯 Auto-Detect';
@@ -1292,11 +1523,12 @@
                 return;
             }
 
-            if (autoTuneState.active && !options.fromAutoTune) {
-                autoTuneState.token += 1;
-                autoTuneState.active = false;
-                autoTuneState.shouldProcessAfter = false;
-                setLoadingActionButton(false);
+            const autoTuneWasActive = autoTuneState.active;
+            const processEpoch = invalidateRequestEpoch();
+            abortAllActiveRequests();
+            cancelActiveUiWork();
+
+            if (autoTuneWasActive && !options.fromAutoTune) {
                 showProgressMessage('Auto tuning cancelled. Processing with current settings.', 'warning');
             }
 
@@ -1311,7 +1543,7 @@
             showLoading(true, 'Extracting initial paths...', 'Getting immediate skeleton paths');
             showProgressMessage('Starting progressive processing...', 'info');
             
-            fetch('/process_immediate', {
+            trackedFetch('/process_immediate', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1323,6 +1555,10 @@
             })
             .then(response => response.json())
             .then(data => {
+                if (isRequestStale(processEpoch)) {
+                    return;
+                }
+
                 console.log('Progressive processing response:', data);
                 if (data.success) {
                     showLoading(false);
@@ -1347,6 +1583,10 @@
                 }
             })
             .catch(error => {
+                if (isAbortError(error) || isRequestStale(processEpoch)) {
+                    return;
+                }
+
                 console.error('Progressive processing error:', error);
                 showLoading(false);
                 showMessage(`Processing error: ${error.message}`, 'error');
@@ -1362,6 +1602,11 @@
                 <div class="result-item">
                     <h3>Initial Paths Found</h3>
                     <p><strong>${data.valid_paths_count}</strong> centerline paths extracted</p>
+                </div>
+                <div class="result-item">
+                    <h3>Merged Paths</h3>
+                    <p><strong>${data.merged_paths_count ?? data.initial_paths_count}</strong> after endpoint merging</p>
+                    <p style="font-size:0.8em; color:#888; margin-top:4px;">gap=${document.getElementById('mergeGap').value}px &nbsp;|&nbsp; angle priority=${document.getElementById('mergeAnglePriority').value}%</p>
                 </div>
                 <div class="result-item">
                     <h3>Optimization Status</h3>
@@ -1381,6 +1626,7 @@
         function startProgressMonitoring() {
             console.log('Starting progress monitoring...');
             if (progressInterval) clearInterval(progressInterval);
+            const progressEpoch = requestEpoch;
             
             // Show stop button
             const stopBtn = document.getElementById('stopOptBtn');
@@ -1392,10 +1638,20 @@
             }
             
             progressInterval = setInterval(() => {
+                if (isRequestStale(progressEpoch)) {
+                    clearInterval(progressInterval);
+                    progressInterval = null;
+                    return;
+                }
+
                 console.log('Checking progress...');
-                fetch(`/progress/${currentSessionId}`)
+                trackedFetch(`/progress/${currentSessionId}`)
                 .then(response => response.json())
                 .then(data => {
+                    if (isRequestStale(progressEpoch)) {
+                        return;
+                    }
+
                     console.log('Progress data:', data);
                     if (data.messages && data.messages.length > 0) {
                         const messagesDiv = document.getElementById('progress-messages');
@@ -1430,6 +1686,10 @@
                     }
                 })
                 .catch(error => {
+                    if (isAbortError(error) || isRequestStale(progressEpoch)) {
+                        return;
+                    }
+
                     console.error('Progress monitoring error:', error);
                 });
             }, 1000); // Check every second
@@ -1493,6 +1753,8 @@
         function getParameters() {
             return {
                 dark_threshold: parseFloat(document.getElementById('darkThreshold').value),
+                merge_gap: parseInt(document.getElementById('mergeGap').value),
+                merge_angle_priority: parseFloat(document.getElementById('mergeAnglePriority').value),
                 rdp_tolerance: parseFloat(document.getElementById('rdpTolerance').value),
                 smoothing_factor: parseFloat(document.getElementById('smoothingFactor').value),
                 simplification_strength: parseFloat(document.getElementById('simplificationStrength').value),
@@ -1505,7 +1767,9 @@
                 min_path_length: parseInt(document.getElementById('minPathLength').value),
                 enable_optimization: document.getElementById('enableOptimization').checked,
                 show_pre_optimization: document.getElementById('showPreOptimization').checked,
-                include_image: document.getElementById('includeImage').checked
+                include_image: document.getElementById('includeImage').checked,
+                normalization_mode: document.getElementById('normalizationMode').value,
+                normalization_sensitivity: document.getElementById('normalizationSensitivity').value
             };
         }
 
@@ -1557,7 +1821,8 @@
 
             console.log(`Making SVG request for session: ${currentSessionId}`);
             const parameters = getParameters();
-            fetch('/generate_svg', {
+            const svgEpoch = requestEpoch;
+            trackedFetch('/generate_svg', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1569,10 +1834,18 @@
                 })
             })
             .then(response => {
+                if (isRequestStale(svgEpoch)) {
+                    throw new DOMException('Stale SVG response', 'AbortError');
+                }
+
                 console.log('SVG response received:', response.status);
                 return response.json();
             })
             .then(data => {
+                if (isRequestStale(svgEpoch)) {
+                    return;
+                }
+
                 console.log('SVG data:', data);
                 showLoading(false); // Hide loading indicator
                 if (data.svg) {
@@ -1596,6 +1869,10 @@
                 }
             })
             .catch(error => {
+                if (isAbortError(error) || isRequestStale(svgEpoch)) {
+                    return;
+                }
+
                 console.error('SVG generation error:', error);
                 showLoading(false); // Hide loading indicator
                 showMessage(`SVG generation error: ${error.message}`, 'error');
@@ -1687,6 +1964,14 @@
         function toggleAdvancedSettings() {
             const panel = document.getElementById('advancedSettings');
             const btn = document.getElementById('advancedToggleBtn');
+            const isOpen = panel.style.display !== 'none';
+            panel.style.display = isOpen ? 'none' : 'block';
+            btn.textContent = isOpen ? '⚙️ Advanced settings ▼' : '⚙️ Advanced settings ▲';
+        }
+
+        function toggleDetectionAdvancedSettings() {
+            const panel = document.getElementById('detectionAdvancedSettings');
+            const btn = document.getElementById('detectionAdvancedToggleBtn');
             const isOpen = panel.style.display !== 'none';
             panel.style.display = isOpen ? 'none' : 'block';
             btn.textContent = isOpen ? '⚙️ Advanced settings ▼' : '⚙️ Advanced settings ▲';

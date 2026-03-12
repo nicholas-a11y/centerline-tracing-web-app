@@ -660,15 +660,61 @@ def adaptive_resample_path(path, circle_system, target_reduction=0.7):  # More a
 
     return [tuple(p) for p in resampled]
 
-def merge_nearby_paths(paths, max_gap=30):
-    """Merge paths that have endpoints close to each other for maximum coverage."""
+def merge_nearby_paths(paths, max_gap=30, angle_priority=0.30):
+    """Merge nearby endpoints, prioritizing both distance and directional continuity."""
     if len(paths) <= 1:
         return paths
+
+    angle_priority = float(np.clip(angle_priority, 0.0, 1.0))
+    distance_priority = 1.0 - angle_priority
     
-    print(f"Merging nearby paths (max gap: {max_gap} pixels)...")
+    print(
+        f"Merging nearby paths (max gap: {max_gap} pixels, "
+        f"angle priority: {angle_priority:.2f})..."
+    )
     
     merged_paths = []
     used_indices = set()
+
+    def _normalize(vec):
+        norm = np.linalg.norm(vec)
+        if norm <= 1e-9:
+            return None
+        return vec / norm
+
+    def _endpoint_tangent(path, endpoint):
+        """Return a robust tangent direction near path start/end."""
+        if len(path) < 2:
+            return None
+
+        lookahead = min(4, len(path) - 1)
+        if endpoint == 'start':
+            a = np.array(path[0], dtype=float)
+            b = np.array(path[lookahead], dtype=float)
+        else:
+            a = np.array(path[-(lookahead + 1)], dtype=float)
+            b = np.array(path[-1], dtype=float)
+        return _normalize(b - a)
+
+    def _outward_direction(path, endpoint):
+        """Direction that points outward from the selected endpoint into a potential gap."""
+        tangent = _endpoint_tangent(path, endpoint)
+        if tangent is None:
+            return None
+        if endpoint == 'start':
+            return -tangent
+        return tangent
+
+    def _angle_match_score(path_a, endpoint_a, path_b, endpoint_b):
+        """Return [0..1] score, where 1 means highly compatible bridge directions."""
+        out_a = _outward_direction(path_a, endpoint_a)
+        out_b = _outward_direction(path_b, endpoint_b)
+        if out_a is None or out_b is None:
+            return 0.5  # Neutral when direction cannot be estimated.
+
+        dot = float(np.clip(np.dot(out_a, out_b), -1.0, 1.0))
+        # Best bridge is when outward directions oppose each other (dot ~ -1).
+        return (1.0 - dot) * 0.5
     
     for i, path1 in enumerate(paths):
         if i in used_indices or len(path1) < 2:
@@ -679,40 +725,75 @@ def merge_nearby_paths(paths, max_gap=30):
         # Try to extend this path by connecting to other paths (multiple iterations)
         for iteration in range(3):  # Allow multiple merging passes
             extended = False
-            
+            best_merge = None
+
             for j, path2 in enumerate(paths):
                 if j == i or j in used_indices or len(path2) < 2:
                     continue
-                
-                # Check all possible connections
-                connections = [
-                    ('end_to_start', np.linalg.norm(np.array(current_path[-1]) - np.array(path2[0]))),
-                    ('end_to_end', np.linalg.norm(np.array(current_path[-1]) - np.array(path2[-1]))),
-                    ('start_to_start', np.linalg.norm(np.array(current_path[0]) - np.array(path2[0]))),
-                    ('start_to_end', np.linalg.norm(np.array(current_path[0]) - np.array(path2[-1])))
+
+                # Check all possible endpoint combinations.
+                candidates = []
+                raw_connections = [
+                    ('end_to_start', current_path[-1], path2[0], 'end', 'start'),
+                    ('end_to_end', current_path[-1], path2[-1], 'end', 'end'),
+                    ('start_to_start', current_path[0], path2[0], 'start', 'start'),
+                    ('start_to_end', current_path[0], path2[-1], 'start', 'end'),
                 ]
-                
-                # Find the best connection within the gap threshold
-                best_connection = min(connections, key=lambda x: x[1])
-                
-                if best_connection[1] <= max_gap:
-                    connection_type, distance = best_connection
-                    
-                    # Merge the paths based on connection type
-                    if connection_type == 'end_to_start':
-                        current_path.extend(path2)
-                    elif connection_type == 'end_to_end':
-                        current_path.extend(reversed(path2))
-                    elif connection_type == 'start_to_start':
-                        current_path = list(reversed(path2)) + current_path
-                    elif connection_type == 'start_to_end':
-                        current_path = path2 + current_path
-                    
-                    used_indices.add(j)
-                    extended = True
-                    print(f"    Merged paths: {len(path1)} + {len(path2)} = {len(current_path)} points (gap: {distance:.1f})")
-                    break
-            
+
+                for connection_type, p_a, p_b, endpoint_a, endpoint_b in raw_connections:
+                    distance = np.linalg.norm(np.array(p_a) - np.array(p_b))
+                    if distance > max_gap:
+                        continue
+
+                    angle_score = _angle_match_score(
+                        current_path, endpoint_a, path2, endpoint_b
+                    )
+                    distance_score = 1.0 - (distance / max(max_gap, 1e-9))
+                    combined_score = (
+                        distance_priority * distance_score
+                        + angle_priority * angle_score
+                    )
+                    candidates.append(
+                        (connection_type, distance, angle_score, combined_score)
+                    )
+
+                if candidates:
+                    local_best = max(candidates, key=lambda x: x[3])
+                    connection_type, distance, angle_score, combined_score = local_best
+                    if best_merge is None or combined_score > best_merge['combined_score']:
+                        best_merge = {
+                            'j': j,
+                            'path2': path2,
+                            'connection_type': connection_type,
+                            'distance': distance,
+                            'angle_score': angle_score,
+                            'combined_score': combined_score,
+                        }
+
+            if best_merge is not None:
+                path2 = best_merge['path2']
+                connection_type = best_merge['connection_type']
+                distance = best_merge['distance']
+                angle_score = best_merge['angle_score']
+                j = best_merge['j']
+
+                # Merge the paths based on connection type
+                if connection_type == 'end_to_start':
+                    current_path.extend(path2)
+                elif connection_type == 'end_to_end':
+                    current_path.extend(reversed(path2))
+                elif connection_type == 'start_to_start':
+                    current_path = list(reversed(path2)) + current_path
+                elif connection_type == 'start_to_end':
+                    current_path = path2 + current_path
+
+                used_indices.add(j)
+                extended = True
+                print(
+                    f"    Merged paths: {len(path1)} + {len(path2)} = {len(current_path)} "
+                    f"points (gap: {distance:.1f}, angle_match: {angle_score:.2f})"
+                )
+
             if not extended:
                 break  # No more paths to merge
         
@@ -879,112 +960,115 @@ def create_svg_output(image, circle_system, optimized_paths, path_scores, pre_op
     print(f"SVG saved to: {OUTPUT_PATH}")
 
 def create_fast_paths(skeleton):
-    """Fast path extraction without aggressive overlap prevention."""
+    """Extract branch-aware paths from a skeleton while preserving open segments."""
     ys, xs = np.nonzero(skeleton)
     if len(ys) == 0:
         return []
-    
+
     print(f"  Starting fast path extraction on {len(ys)} skeleton pixels...")
-    
+
     skeleton_points = set(zip(ys, xs))
-    visited = set()
     paths = []
-    
-    # Pre-compute neighbors for all skeleton points
-    print(f"  Pre-computing neighbors for {len(skeleton_points)} points...")
+
+    # Pre-compute 8-connected neighbors.
+    offsets = [
+        (-1, -1), (-1, 0), (-1, 1),
+        (0, -1),           (0, 1),
+        (1, -1),  (1, 0),  (1, 1),
+    ]
     neighbors_dict = {}
-    offsets = np.array([[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]])
-    
     for y, x in skeleton_points:
-        neighbor_coords = np.array([y, x]) + offsets
         neighbors = []
-        for ny, nx in neighbor_coords:
-            if (ny, nx) in skeleton_points:
-                neighbors.append((ny, nx))
+        for dy, dx in offsets:
+            candidate = (y + dy, x + dx)
+            if candidate in skeleton_points:
+                neighbors.append(candidate)
         neighbors_dict[(y, x)] = neighbors
-    
-    print(f"  Neighbors computed. Starting path tracing...")
-    
-    def trace_simple_path(start_point):
-        """Trace path with simple visited checking only."""
-        if start_point in visited:
-            return []
-        
-        path = [start_point]
-        current = start_point
-        visited.add(start_point)
-        
+
+    # Junctions/endpoints (degree != 2) are graph nodes; chains between them are edges.
+    node_points = {p for p, n in neighbors_dict.items() if len(n) != 2}
+
+    def edge_key(a, b):
+        return tuple(sorted((a, b)))
+
+    visited_edges = set()
+
+    def trace_edge(start, neighbor):
+        """Trace one edge from a node to the next node (or dead-end)."""
+        path = [start, neighbor]
+        visited_edges.add(edge_key(start, neighbor))
+
+        prev = start
+        current = neighbor
+
         while True:
-            neighbors = neighbors_dict.get(current, [])
-            unvisited = [n for n in neighbors if n not in visited]
-            
-            if not unvisited:
-                break
-            
-            # Simple heuristic: continue in same direction if possible
-            if len(path) >= 2:
-                prev_dir = np.array(current) - np.array(path[-2])
-                best_neighbor = None
-                best_score = -2
-                
-                for neighbor in unvisited:
-                    new_dir = np.array(neighbor) - np.array(current)
-                    if np.linalg.norm(prev_dir) > 0 and np.linalg.norm(new_dir) > 0:
-                        score = np.dot(prev_dir, new_dir) / (np.linalg.norm(prev_dir) * np.linalg.norm(new_dir))
-                        if score > best_score:
-                            best_score = score
-                            best_neighbor = neighbor
-                
-                if best_neighbor:
-                    current = best_neighbor
-                else:
-                    current = unvisited[0]
-            else:
-                current = unvisited[0]
-            
-            path.append(current)
-            visited.add(current)
-        
-        return path
-    
-    # Find endpoints and branch points for good starting points
-    start_points = []
-    for point in skeleton_points:
-        neighbors = neighbors_dict.get(point, [])
-        degree = len(neighbors)
-        if degree == 1:  # Endpoint
-            start_points.append((point, 100))  # High priority
-        elif degree >= 3:  # Branch point
-            start_points.append((point, 50))   # Medium priority
-    
-    # Add remaining points with low priority
-    for point in skeleton_points:
-        if not any(p[0] == point for p in start_points):
-            start_points.append((point, 1))
-    
-    # Sort by priority
-    start_points.sort(key=lambda x: x[1], reverse=True)
-    
-    print(f"  Found {len(start_points)} starting points, tracing paths...")
-    
-    # Trace paths
-    paths_traced = 0
-    paths_kept = 0
-    for i, (start_point, priority) in enumerate(start_points):
-        if start_point not in visited:
-            path = trace_simple_path(start_point)
-            paths_traced += 1
+            if current in node_points and current != start:
+                return path
+
+            candidates = [n for n in neighbors_dict[current] if n != prev]
+            if not candidates:
+                return path
+
+            next_point = None
+            for cand in candidates:
+                if edge_key(current, cand) not in visited_edges:
+                    next_point = cand
+                    break
+
+            if next_point is None:
+                return path
+
+            visited_edges.add(edge_key(current, next_point))
+            path.append(next_point)
+            prev, current = current, next_point
+
+    # Trace all node-connected edges first so open branches are preserved.
+    for node in node_points:
+        for neighbor in neighbors_dict[node]:
+            key = edge_key(node, neighbor)
+            if key in visited_edges:
+                continue
+            path = trace_edge(node, neighbor)
             if len(path) >= MIN_PATH_LENGTH:
                 paths.append(path)
-                paths_kept += 1
-            elif len(path) > 0:
-                print(f"    Rejected path of length {len(path)} (min required: {MIN_PATH_LENGTH})")
-        
-        # Progress update for large images
-        if i % 1000 == 0 and i > 0:
-            print(f"    Processed {i}/{len(start_points)} starting points...")
-    
-    print(f"  Fast path extraction complete: {paths_traced} paths traced, {paths_kept} paths kept (min length: {MIN_PATH_LENGTH})")
+
+    # Handle pure loops (all points degree==2), which have no explicit nodes.
+    for point in skeleton_points:
+        for neighbor in neighbors_dict[point]:
+            key = edge_key(point, neighbor)
+            if key in visited_edges:
+                continue
+
+            loop_path = [point, neighbor]
+            visited_edges.add(key)
+            prev, current = point, neighbor
+
+            while True:
+                candidates = [n for n in neighbors_dict[current] if n != prev]
+                if not candidates:
+                    break
+
+                next_point = None
+                for cand in candidates:
+                    cand_key = edge_key(current, cand)
+                    if cand_key not in visited_edges:
+                        next_point = cand
+                        visited_edges.add(cand_key)
+                        break
+
+                if next_point is None:
+                    break
+
+                loop_path.append(next_point)
+                prev, current = current, next_point
+
+                if current == point:
+                    break
+
+            if len(loop_path) >= MIN_PATH_LENGTH:
+                paths.append(loop_path)
+
+    print(f"  Fast path extraction complete: {len(paths)} paths kept (min length: {MIN_PATH_LENGTH})")
     return paths
 
 def create_super_long_paths(skeleton):

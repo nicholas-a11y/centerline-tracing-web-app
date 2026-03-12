@@ -47,10 +47,13 @@ class CenterlineSession:
         self.optimization_thread = None
         self.optimization_complete = False
         self.optimization_stopped = False
+        self.optimization_generation = 0
         self.partial_optimized_paths = []  # Store partially optimized paths
         self.lock = threading.Lock()  # Lock for thread-safe access to partial_optimized_paths
         self.parameters = {
             'dark_threshold': 0.20,
+            'merge_gap': 25,  # Endpoint reach-out distance (pixels) for path merging
+            'merge_angle_priority': 30.0,  # % weight for angle continuity vs distance
             'rdp_tolerance': 2.5,      # Balanced simplification for speed and smoothness
             'smoothing_factor': 0.006,  # Balanced smoothing that keeps runtime responsive
             'simplification_strength': 50.0,  # Moderate vertex reduction target
@@ -64,6 +67,8 @@ class CenterlineSession:
             'enable_optimization': True,   # Enable path optimization and circle evaluation
             'show_pre_optimization': False,  # Show unoptimized paths in SVG
             'include_image': False,    # Include original image in SVG background
+            'normalization_mode': 'auto',  # auto|on|off preprocessing normalization
+            'normalization_sensitivity': 'medium',  # low|medium|high
         }
 
 def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None):
@@ -476,13 +481,27 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
         'all_results': all_results
     }
 
-def _normalize_background_if_needed(gray_image):
+def _normalize_background_if_needed(gray_image, normalization_mode='auto', normalization_sensitivity='medium'):
     """Conditionally flatten uneven backgrounds while preserving dark strokes.
 
     Returns:
         (processed_image, metadata)
     """
     from skimage import exposure, filters
+
+    requested_mode = str(normalization_mode or 'auto').strip().lower()
+    if requested_mode not in ('auto', 'on', 'off'):
+        requested_mode = 'auto'
+
+    requested_sensitivity = str(normalization_sensitivity or 'medium').strip().lower()
+    if requested_sensitivity not in ('low', 'medium', 'high'):
+        requested_sensitivity = 'medium'
+
+    sensitivity_scale = {
+        'low': 1.20,
+        'medium': 1.00,
+        'high': 0.82,
+    }[requested_sensitivity]
 
     gray = np.clip(gray_image.astype(np.float32), 0.0, 1.0)
 
@@ -546,7 +565,9 @@ def _normalize_background_if_needed(gray_image):
     # where an internal value like 0.3496 is shown as 0.350 but does not trigger.
     decision_score = float(np.round(normalization_score, 3))
 
-    should_normalize = bool(decision_score >= 0.35 or bg_range > 0.075)
+    decision_threshold = 0.35 * sensitivity_scale
+    bg_range_threshold = 0.075 * sensitivity_scale
+    should_normalize = bool(decision_score >= decision_threshold or bg_range > bg_range_threshold)
 
     # Low-contrast ink plus noticeable shading usually benefits from normalization,
     # even if the drawing is sparse.
@@ -611,12 +632,21 @@ def _normalize_background_if_needed(gray_image):
     if line_art_guard and not force_normalize:
         should_normalize = False
 
-    if force_normalize:
+    if requested_mode == 'off':
+        should_normalize = False
+    elif requested_mode == 'on':
+        should_normalize = True
+
+    if requested_mode == 'off':
+        reason = 'disabled by user'
+    elif requested_mode == 'on':
+        reason = 'forced by user'
+    elif force_normalize:
         if faint_sparse_ink:
             reason = 'faint sparse ink detail'
         else:
             reason = 'low-contrast ink with background shading'
-    elif should_normalize and bg_range > 0.075:
+    elif should_normalize and bg_range > bg_range_threshold:
         reason = 'strong background shading range'
     elif should_normalize:
         reason = 'combined background variance score'
@@ -641,6 +671,8 @@ def _normalize_background_if_needed(gray_image):
         'reason': reason,
         'mode': 'none'
     }
+    metadata['requested_mode'] = requested_mode
+    metadata['requested_sensitivity'] = requested_sensitivity
 
     if not should_normalize:
         return gray, metadata
@@ -661,7 +693,7 @@ def _normalize_background_if_needed(gray_image):
     return np.clip(normalized.astype(np.float32), 0.0, 1.0), metadata
 
 
-def load_and_process_image(image_path):
+def load_and_process_image(image_path, normalization_mode='auto', normalization_sensitivity='medium'):
     """Load an image/PDF and return raw+extraction grayscale images in 0-1 range.
 
     - Transparent images are composited over white to avoid losing alpha semantics.
@@ -730,7 +762,11 @@ def load_and_process_image(image_path):
         raise ValueError(f"Unsupported image shape: {img.shape}")
 
     raw_gray = np.clip(gray.astype(np.float32), 0.0, 1.0)
-    extraction_gray, preprocessing_info = _normalize_background_if_needed(raw_gray)
+    extraction_gray, preprocessing_info = _normalize_background_if_needed(
+        raw_gray,
+        normalization_mode=normalization_mode,
+        normalization_sensitivity=normalization_sensitivity,
+    )
     return raw_gray, extraction_gray, preprocessing_info
 
 def process_centerlines(session):
@@ -766,9 +802,15 @@ def process_centerlines(session):
     
     if optimization_enabled:
         # Full processing mode: merge paths and handle overlaps
-        
+        merge_gap = max(1, int(params.get('merge_gap', 25)))
+        merge_angle_priority = float(params.get('merge_angle_priority', 30.0)) / 100.0
+
         # Merge nearby paths
-        merged_paths = merge_nearby_paths(initial_paths, max_gap=25)
+        merged_paths = merge_nearby_paths(
+            initial_paths,
+            max_gap=merge_gap,
+            angle_priority=merge_angle_priority,
+        )
         
         # Filter paths by minimum length
         valid_paths = [path for path in merged_paths if len(path) >= params['min_path_length']]
@@ -1326,6 +1368,11 @@ def upload_file():
     # Create session
     session_id = str(uuid.uuid4())
     session = CenterlineSession(session_id)
+
+    requested_mode = request.form.get('normalization_mode', 'auto')
+    requested_sensitivity = request.form.get('normalization_sensitivity', 'medium')
+    session.parameters['normalization_mode'] = requested_mode
+    session.parameters['normalization_sensitivity'] = requested_sensitivity
     
     # Store original filename
     session.original_filename = file.filename
@@ -1337,7 +1384,11 @@ def upload_file():
     
     try:
         # Load and preprocess image for extraction, while keeping original for display.
-        raw_gray, extraction_gray, preprocessing_info = load_and_process_image(temp_path)
+        raw_gray, extraction_gray, preprocessing_info = load_and_process_image(
+            temp_path,
+            normalization_mode=requested_mode,
+            normalization_sensitivity=requested_sensitivity,
+        )
         session.image = extraction_gray
         session.display_image = raw_gray
         session.preprocessing_info = preprocessing_info
@@ -1400,8 +1451,24 @@ def process_immediate():
         if len(initial_paths) == 0:
             return jsonify({'error': 'No skeleton paths found. Try adjusting the dark threshold.'})
         
+        merge_gap = max(1, int(params.get('merge_gap', 25)))
+        merge_angle_priority = float(params.get('merge_angle_priority', 30.0)) / 100.0
+
+        # Preserve legacy default behavior in progressive mode: with the default
+        # gap (25), keep the original unmerged path flow. Only apply merging when
+        # users intentionally change merge_gap from its default.
+        merged_paths = initial_paths
+        merge_applied = False
+        if params.get('enable_optimization', True) and merge_gap != 25:
+            merged_paths = merge_nearby_paths(
+                initial_paths,
+                max_gap=merge_gap,
+                angle_priority=merge_angle_priority,
+            )
+            merge_applied = True
+
         # Filter by minimum length
-        valid_paths = [path for path in initial_paths if len(path) >= params['min_path_length']]
+        valid_paths = [path for path in merged_paths if len(path) >= params['min_path_length']]
         
         if len(valid_paths) == 0:
             return jsonify({'error': 'No valid paths after filtering. Try reducing minimum path length.'})
@@ -1417,6 +1484,8 @@ def process_immediate():
         session.partial_optimized_paths = []
         session.optimization_complete = False
         session.optimization_stopped = False
+        session.optimization_generation += 1
+        current_generation = session.optimization_generation
         
         # Clear progress queue
         while not session.progress_queue.empty():
@@ -1425,6 +1494,8 @@ def process_immediate():
         # Create immediate results for magenta display
         immediate_results = {
             'initial_paths_count': len(initial_paths),
+            'merged_paths_count': len(merged_paths),
+            'merge_applied': merge_applied,
             'valid_paths_count': len(valid_paths),
             'paths': json_serializable_paths,  # Use JSON-serializable version
             'optimization_started': False
@@ -1434,7 +1505,7 @@ def process_immediate():
         if params.get('enable_optimization', True):
             session.optimization_thread = threading.Thread(
                 target=background_optimization,
-                args=(session,)
+                args=(session, current_generation)
             )
             session.optimization_thread.start()
             immediate_results['optimization_started'] = True
@@ -1448,10 +1519,14 @@ def process_immediate():
     except Exception as e:
         return jsonify({'error': f'Processing error: {str(e)}'})
 
-def background_optimization(session):
+def background_optimization(session, generation):
     """Run optimization in background thread."""
     try:
         start_time = time.perf_counter()
+
+        if generation != session.optimization_generation:
+            return
+
         params = session.parameters
         valid_paths = session.initial_paths
         original_total_segments = sum(max(len(path) - 1, 0) for path in valid_paths)
@@ -1483,7 +1558,7 @@ def background_optimization(session):
         
         # Optimize paths one by one with progress updates
         for i, idx in enumerate(sorted_indices):
-            if session.optimization_stopped:
+            if session.optimization_stopped or generation != session.optimization_generation:
                 session.progress_queue.put("Optimization stopped by user")
                 break
                 
@@ -1511,9 +1586,15 @@ def background_optimization(session):
             optimized_path, optimized_score = optimize_path_with_custom_params(
                 path, circle_system, balanced_params, initial_score=original_score
             )
+
+            if session.optimization_stopped or generation != session.optimization_generation:
+                session.progress_queue.put("Optimization stopped by user")
+                break
             
             # Add to partial results - always add, even if not dramatically different
             with session.lock:
+                if generation != session.optimization_generation:
+                    break
                 session.partial_optimized_paths.append(optimized_path)
 
             optimized_total_segments += max(len(optimized_path) - 1, 0)
@@ -1532,6 +1613,9 @@ def background_optimization(session):
             # Add small delay to make progress visible (optional)
             # No artificial delay: keep optimization throughput high.
         
+        if generation != session.optimization_generation:
+            return
+
         session.optimization_complete = True
         session.progress_queue.put("Optimization complete!")
 
@@ -1583,6 +1667,7 @@ def stop_optimization():
     
     session = sessions[session_id]
     session.optimization_stopped = True
+    session.optimization_generation += 1
     
     return jsonify({'success': True, 'message': 'Optimization stopping...'})
 
