@@ -659,6 +659,35 @@
             display: block;
         }
 
+        .auto-tune-progress {
+            display: none;
+            margin: 10px auto 0;
+            max-width: 420px;
+            text-align: left;
+        }
+
+        .auto-tune-progress-track {
+            width: 100%;
+            height: 7px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .auto-tune-progress-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #4facfe, #00f2fe);
+            border-radius: 4px;
+            transition: width 0.35s ease;
+        }
+
+        .auto-tune-progress-label {
+            margin-top: 6px;
+            font-size: 0.82em;
+            color: #666;
+        }
+
         .loading-actions {
             display: flex;
             justify-content: center;
@@ -990,6 +1019,12 @@
                     <div class="spinner"></div>
                     <div id="loadingText">Processing centerlines...</div>
                     <div id="loadingDetails" style="font-size: 0.9em; color: #666; margin-top: 10px;"></div>
+                    <div class="auto-tune-progress" id="autoTuneProgressWrap">
+                        <div class="auto-tune-progress-track">
+                            <div class="auto-tune-progress-fill" id="autoTuneProgressFill"></div>
+                        </div>
+                        <div class="auto-tune-progress-label" id="autoTuneProgressLabel">0%</div>
+                    </div>
                     <div class="loading-actions" id="loadingActions" style="display: none;">
                         <button class="btn btn-secondary" id="skipAutoTuneBtn" onclick="skipAutoTune()">Skip</button>
                     </div>
@@ -2590,6 +2625,25 @@
             loadingActions.style.display = show ? 'flex' : 'none';
         }
 
+        function setAutoTuneLoadingProgress(show, percent = 0, labelText = '') {
+            const wrap = document.getElementById('autoTuneProgressWrap');
+            const fill = document.getElementById('autoTuneProgressFill');
+            const label = document.getElementById('autoTuneProgressLabel');
+            if (!wrap || !fill || !label) return;
+
+            if (!show) {
+                wrap.style.display = 'none';
+                fill.style.width = '0%';
+                label.textContent = '0%';
+                return;
+            }
+
+            const pct = Math.max(0, Math.min(100, Number(percent) || 0));
+            wrap.style.display = 'block';
+            fill.style.width = `${pct}%`;
+            label.textContent = labelText || `${Math.round(pct)}%`;
+        }
+
         function startUploadAutoTune(shouldProcessAfter = false) {
             if (!currentSessionId) {
                 return;
@@ -2602,9 +2656,9 @@
             autoTuneState.shouldProcessAfter = shouldProcessAfter;
             lastAutoTuneSampleMetadata = null;
 
-            showLoading(true, 'Sampling image and auto-setting detection parameters...', 'Auto-setting best threshold and minimum path length (max 60s).');
+            showLoading(true, 'Sampling image and auto-setting detection parameters...', 'Auto-setting best threshold and minimum path length (max 90s).');
             setLoadingActionButton(true, 'Skip');
-            showProgressMessage('Sampling image and auto-setting detection parameters...', 'info');
+            setAutoTuneLoadingProgress(true, 0, '0 / 90s');
 
             trackedFetch('/auto_tune_sample_region', {
                 method: 'POST',
@@ -2631,9 +2685,9 @@
                         const loadingDetails = document.getElementById('loadingDetails');
                         if (loadingDetails) {
                             if (samplingMode === 'random_tiles_mosaic' && tileCount > 0) {
-                                loadingDetails.textContent = `Orange boxes = ${tileCount} sampled tiles (evaluated together), tuning capped at 60s.`;
+                                loadingDetails.textContent = `Orange boxes = ${tileCount} sampled tiles (evaluated together), tuning capped at 90s.`;
                             } else {
-                                loadingDetails.textContent = `Orange dashed box = sampled busy area (${sampleShape[1]}x${sampleShape[0]}), tuning capped at 60s.`;
+                                loadingDetails.textContent = `Orange dashed box = sampled busy area (${sampleShape[1]}x${sampleShape[0]}), tuning capped at 90s.`;
                             }
                         }
                         setLoadingActionButton(true, 'Skip & Manual Tune');
@@ -2699,7 +2753,6 @@
                             renderLivePathsOverlay(progressData);
 
                             const confidencePct = Math.max(0, Math.min(100, Math.round((progressData.confidence_score || 0) * 100)));
-                            const elapsedSec = Number(progressData.elapsed_sec || 0).toFixed(1);
                             const iterDone = Number(progressData.iterations_done || 0);
                             const iterTotal = Number(progressData.iterations_total || 6);
                             const currentThresholdIndex = Number(progressData.current_threshold_index || (iterDone + 1));
@@ -2709,6 +2762,10 @@
                             const samplingMode = String(progressData.sampling_mode || 'full_image');
                             const tileIndex = Number(progressData.current_tile_index || 0);
                             const tileTotal = Number(progressData.current_tile_total || 1);
+                            const elapsedNumeric = Number(progressData.elapsed_sec || 0);
+                            const elapsedSec = elapsedNumeric.toFixed(1);
+                            const tunePct = Math.min(100, (elapsedNumeric / 90.0) * 100.0);
+                            setAutoTuneLoadingProgress(true, tunePct, `${elapsedSec} / 90.0s`);
                             const loadingDetails = document.getElementById('loadingDetails');
                             if (loadingDetails) {
                                 const checkingText = currentThreshold > 0
@@ -2724,7 +2781,7 @@
                                 loadingDetails.textContent = `Live tuning: best ${Number(progressData.best_threshold || 0.20).toFixed(3)} / min ${Math.round(progressData.best_min_length || 3)}, confidence ${confidencePct}% — ${iterDone}/${iterTotal} thresholds (working ${currentThresholdIndex}/${iterTotal}${checkingText}${tileText}, ${phaseLabel}, t=${elapsedSec}s)`;
                             }
 
-                            if (progressData.running && Number(progressData.elapsed_sec || 0) >= 60.0) {
+                            if (progressData.running && elapsedNumeric >= 90.0) {
                                 skipAutoTune();
                                 return;
                             }
@@ -2736,7 +2793,15 @@
                             autoTuneState.active = false;
                             stopAutoTuneProgressPolling();
                             setLoadingActionButton(false);
+                            setAutoTuneLoadingProgress(true, 100, '90.0 / 90.0s');
                             showLoading(false);
+
+                            const detectionOpacitySlider = document.getElementById('detectionImageOpacity');
+                            if (detectionOpacitySlider) {
+                                detectionOpacitySlider.value = '10';
+                                updateRangeValue('detectionImageOpacity');
+                                applyDetectionImageOpacity();
+                            }
 
                             if (progressData.updated_parameters) {
                                 updateParameters(progressData.updated_parameters, { preserveTouched: true });
@@ -2747,18 +2812,7 @@
                                 String(progressData.sample_metadata.sampling_mode || '') === 'random_tiles_mosaic'
                             );
 
-                            if (progressData.success) {
-                                const reasonText = progressData.high_confidence_reached
-                                    ? 'stopped at 95% confidence'
-                                    : (progressData.timed_out ? 'stopped at 60s' : 'completed');
-                                showProgressMessage(
-                                    `Auto-tuned threshold to ${Number(progressData.best_threshold).toFixed(3)} and min path length to ${Math.round(progressData.best_min_length)} (${confidencePct}% confidence, ${reasonText}).`,
-                                    'success'
-                                );
-                            } else {
-                                if (progressData.timed_out) {
-                                    showProgressMessage('Failed to detect best settings in under 60s. Using defaults with optimization turned off.', 'warning');
-                                }
+                            if (!progressData.success) {
                                 showMessage(progressData.message || 'Failed to detect best settings. Using defaults with optimization turned off.', 'error');
                             }
 
@@ -2794,8 +2848,6 @@
                             pollInFlight = false;
                         });
                 }, 700);
-
-                showProgressMessage('Auto tune running. Updating threshold/min length and confidence in real time...', 'info');
             })
             .catch(error => {
                 if (requestToken !== autoTuneState.token || isRequestStale(autoTuneEpoch) || isAbortError(error)) {
@@ -2830,7 +2882,12 @@
             setLoadingActionButton(false);
             showLoading(false);
             clearSampleBoundingBox();
-            showProgressMessage('Stopping auto tune and applying best-so-far settings...', 'info');
+            const _skipOpacitySlider = document.getElementById('detectionImageOpacity');
+            if (_skipOpacitySlider) {
+                _skipOpacitySlider.value = '10';
+                updateRangeValue('detectionImageOpacity');
+                applyDetectionImageOpacity();
+            }
 
             if (!currentSessionId) {
                 if (shouldProcessAfter) {
@@ -2860,14 +2917,7 @@
                     String(sampleMetadata.sampling_mode || '') === 'random_tiles_mosaic'
                 );
 
-                if (data.used_best_so_far) {
-                    showProgressMessage(
-                        `Auto tune stopped. Applied best-so-far threshold ${Number(data.detected_threshold).toFixed(3)} and min path length ${data.detected_min_length} with optimization off.`,
-                        'success'
-                    );
-                } else {
-                    showProgressMessage('Auto tune stopped early. Using safe defaults with optimization off.', 'warning');
-                }
+
 
                 if (hasTileSampling) {
                     enterTileTuneReview(sampleMetadata, shouldProcessAfter);
@@ -2879,7 +2929,6 @@
                 }
             })
             .catch(() => {
-                showProgressMessage('Auto tune stop requested. Continuing with current settings.', 'warning');
                 if (shouldProcessAfter) {
                     processImage({ fromAutoTune: true });
                 }
@@ -3330,9 +3379,7 @@
             abortAllActiveRequests();
             cancelActiveUiWork();
 
-            if (autoTuneWasActive && !options.fromAutoTune) {
-                showProgressMessage('Auto tuning cancelled. Processing with current settings.', 'warning');
-            }
+
 
             // Clear the previous result displays
             clearResults();
@@ -3873,6 +3920,7 @@
                 loadingText.textContent = 'Processing centerlines...';
                 loadingDetails.textContent = '';
                 setLoadingActionButton(false);
+                setAutoTuneLoadingProgress(false);
             }
         }
     </script>
