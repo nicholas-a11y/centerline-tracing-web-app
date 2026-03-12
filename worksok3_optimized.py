@@ -660,7 +660,7 @@ def adaptive_resample_path(path, circle_system, target_reduction=0.7):  # More a
 
     return [tuple(p) for p in resampled]
 
-def merge_nearby_paths(paths, max_gap=30, angle_priority=0.30):
+def merge_nearby_paths(paths, max_gap=30, angle_priority=0.30, verbose=True, should_continue=None):
     """Merge nearby endpoints, prioritizing both distance and directional continuity."""
     if len(paths) <= 1:
         return paths
@@ -668,10 +668,11 @@ def merge_nearby_paths(paths, max_gap=30, angle_priority=0.30):
     angle_priority = float(np.clip(angle_priority, 0.0, 1.0))
     distance_priority = 1.0 - angle_priority
     
-    print(
-        f"Merging nearby paths (max gap: {max_gap} pixels, "
-        f"angle priority: {angle_priority:.2f})..."
-    )
+    if verbose:
+        print(
+            f"Merging nearby paths (max gap: {max_gap} pixels, "
+            f"angle priority: {angle_priority:.2f})..."
+        )
     
     merged_paths = []
     used_indices = set()
@@ -719,6 +720,9 @@ def merge_nearby_paths(paths, max_gap=30, angle_priority=0.30):
     for i, path1 in enumerate(paths):
         if i in used_indices or len(path1) < 2:
             continue
+
+        if should_continue is not None and not should_continue():
+            break
         
         current_path = list(path1)
         
@@ -789,25 +793,29 @@ def merge_nearby_paths(paths, max_gap=30, angle_priority=0.30):
 
                 used_indices.add(j)
                 extended = True
-                print(
-                    f"    Merged paths: {len(path1)} + {len(path2)} = {len(current_path)} "
-                    f"points (gap: {distance:.1f}, angle_match: {angle_score:.2f})"
-                )
+
+                if verbose:
+                    print(
+                        f"    Merged paths: {len(path1)} + {len(path2)} = {len(current_path)} "
+                        f"points (gap: {distance:.1f}, angle_match: {angle_score:.2f})"
+                    )
 
             if not extended:
-                break  # No more paths to merge
+                break  # No more paths to merge in this pass
         
         merged_paths.append(current_path)
         used_indices.add(i)
     
-    print(f"  Before merging: {len(paths)} paths")
-    print(f"  After merging: {len(merged_paths)} paths")
+    if verbose:
+        print(f"  Before merging: {len(paths)} paths")
+        print(f"  After merging: {len(merged_paths)} paths")
     
     # Show the lengths of the longest merged paths
     if merged_paths:
         path_lengths = [len(path) for path in merged_paths]
         path_lengths.sort(reverse=True)
-        print(f"  Longest merged paths: {path_lengths[:5]}")
+        if verbose:
+            print(f"  Longest merged paths: {path_lengths[:5]}")
     
     return merged_paths
 

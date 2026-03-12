@@ -33,12 +33,18 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 # Global storage for session data
 sessions = {}
 
+AUTO_TUNE_TIME_BUDGET_SEC = 60.0
+AUTO_TUNE_CONFIDENCE_TARGET = 0.95
+AUTO_TUNE_RANDOM_TILE_DIM = 144
+AUTO_TUNE_RANDOM_TILE_COUNT = 12
+
 class CenterlineSession:
     def __init__(self, session_id):
         self.session_id = session_id
         self.image = None
         self.display_image = None
         self.image_path = None
+        self.image_file_size = 0
         self.original_filename = None
         self.preprocessing_info = {}
         self.results = None
@@ -48,6 +54,27 @@ class CenterlineSession:
         self.optimization_complete = False
         self.optimization_stopped = False
         self.optimization_generation = 0
+        self.auto_tune_generation = 0
+        self.auto_tune_active = False
+        self.auto_tune_best = None
+        self.auto_tune_crop_region = None
+        self.auto_tune_thread = None
+        self.auto_tune_progress = {
+            'running': False,
+            'started_at': 0.0,
+            'elapsed_sec': 0.0,
+            'confidence_score': 0.0,
+            'quality_score': 0.0,
+            'best_threshold': 0.20,
+            'best_min_length': 3,
+            'timed_out': False,
+            'cancelled': False,
+            'high_confidence_reached': False,
+            'finished': False,
+            'success': False,
+            'message': 'idle',
+            'sample_metadata': {'sampled': False},
+        }
         self.partial_optimized_paths = []  # Store partially optimized paths
         self.lock = threading.Lock()  # Lock for thread-safe access to partial_optimized_paths
         self.parameters = {
@@ -70,6 +97,195 @@ class CenterlineSession:
             'normalization_mode': 'auto',  # auto|on|off preprocessing normalization
             'normalization_sensitivity': 'medium',  # low|medium|high
         }
+
+
+def _build_random_tile_mosaic(gray_image, tile_dim=AUTO_TUNE_RANDOM_TILE_DIM, tile_count=AUTO_TUNE_RANDOM_TILE_COUNT):
+    """Create a multi-tile random mosaic for auto-tune scoring on large images."""
+    height, width = gray_image.shape
+    tile_h = min(int(tile_dim), int(height))
+    tile_w = min(int(tile_dim), int(width))
+
+    if tile_h >= height and tile_w >= width:
+        return gray_image, {
+            'sampled': False,
+            'sample_shape': gray_image.shape,
+            'sample_origin': [0, 0],
+            'source_shape': gray_image.shape,
+            'sampling_mode': 'full_image',
+            'overlay_supported': True,
+        }
+
+    max_y = max(0, height - tile_h)
+    max_x = max(0, width - tile_w)
+    requested_count = max(2, int(tile_count))
+
+    rng_seed = int((time.perf_counter_ns() ^ (height << 11) ^ (width << 3)) & 0xFFFFFFFF)
+    rng = np.random.default_rng(rng_seed)
+
+    tiles = []
+    tile_origins = []
+    used_origins = set()
+
+    def _overlaps_existing(x, y):
+        # Strict no-overlap policy for sampled tiles.
+        for ox, oy in used_origins:
+            separated = (
+                (x + tile_w) <= ox or
+                (ox + tile_w) <= x or
+                (y + tile_h) <= oy or
+                (oy + tile_h) <= y
+            )
+            if not separated:
+                return True
+        return False
+
+    attempts = max(24, requested_count * 10)
+    for _ in range(attempts):
+        if len(tiles) >= requested_count:
+            break
+        y = int(rng.integers(0, max_y + 1)) if max_y > 0 else 0
+        x = int(rng.integers(0, max_x + 1)) if max_x > 0 else 0
+        key = (x, y)
+        if key in used_origins:
+            continue
+        if _overlaps_existing(x, y):
+            continue
+        tile = gray_image[y:y + tile_h, x:x + tile_w]
+        if tile.shape[0] != tile_h or tile.shape[1] != tile_w:
+            continue
+        used_origins.add(key)
+        tiles.append(tile)
+        tile_origins.append([int(x), int(y)])
+
+    # Ensure deterministic coverage of corners/center if random picks were sparse.
+    fallback_origins = [
+        (0, 0),
+        (max_x, 0),
+        (0, max_y),
+        (max_x, max_y),
+        (max_x // 2, max_y // 2),
+    ]
+    for x, y in fallback_origins:
+        if len(tiles) >= requested_count:
+            break
+        key = (int(x), int(y))
+        if key in used_origins:
+            continue
+        if _overlaps_existing(int(x), int(y)):
+            continue
+        tile = gray_image[int(y):int(y) + tile_h, int(x):int(x) + tile_w]
+        if tile.shape[0] != tile_h or tile.shape[1] != tile_w:
+            continue
+        used_origins.add(key)
+        tiles.append(tile)
+        tile_origins.append([int(x), int(y)])
+
+    if not tiles:
+        return gray_image, {
+            'sampled': False,
+            'sample_shape': gray_image.shape,
+            'sample_origin': [0, 0],
+            'source_shape': gray_image.shape,
+            'sampling_mode': 'full_image_fallback',
+            'overlay_supported': True,
+        }
+
+    # Arrange tiles in a near-square mosaic for joint threshold scoring.
+    count = len(tiles)
+    cols = int(np.ceil(np.sqrt(count)))
+    rows = int(np.ceil(count / float(cols)))
+    mosaic = np.ones((rows * tile_h, cols * tile_w), dtype=np.float32)
+
+    for idx, tile in enumerate(tiles):
+        r = idx // cols
+        c = idx % cols
+        y0 = r * tile_h
+        x0 = c * tile_w
+        mosaic[y0:y0 + tile_h, x0:x0 + tile_w] = tile
+
+    return mosaic, {
+        'sampled': True,
+        'sample_shape': mosaic.shape,
+        'sample_origin': [0, 0],
+        'source_shape': gray_image.shape,
+        'sampling_mode': 'random_tiles_mosaic',
+        'tile_count': int(count),
+        'tile_shape': [int(tile_h), int(tile_w)],
+        'tile_origins': tile_origins,
+        # Paths extracted from a mosaic do not map 1:1 to source coordinates.
+        'overlay_supported': False,
+    }
+
+
+def _resolve_crop_bounds(image_shape, crop_region):
+    """Convert normalized crop values to pixel bounds within image limits."""
+    if crop_region is None or not isinstance(crop_region, dict):
+        return None
+    try:
+        h, w = int(image_shape[0]), int(image_shape[1])
+        left = float(crop_region.get('left', 0.0))
+        top = float(crop_region.get('top', 0.0))
+        right = float(crop_region.get('right', 1.0))
+        bottom = float(crop_region.get('bottom', 1.0))
+    except Exception:
+        return None
+
+    left = max(0.0, min(1.0, left))
+    top = max(0.0, min(1.0, top))
+    right = max(0.0, min(1.0, right))
+    bottom = max(0.0, min(1.0, bottom))
+
+    x1 = max(0, min(w, int(round(left * w))))
+    y1 = max(0, min(h, int(round(top * h))))
+    x2 = max(0, min(w, int(round(right * w))))
+    y2 = max(0, min(h, int(round(bottom * h))))
+
+    # Avoid tiny/invalid crops that would destabilize sampling.
+    if x2 <= x1 + 10 or y2 <= y1 + 10:
+        return None
+
+    if x1 == 0 and y1 == 0 and x2 == w and y2 == h:
+        return None
+
+    return {
+        'x1': int(x1),
+        'y1': int(y1),
+        'x2': int(x2),
+        'y2': int(y2),
+        'width': int(x2 - x1),
+        'height': int(y2 - y1),
+    }
+
+
+def _offset_sample_metadata_to_source(sample_metadata, offset_x, offset_y, source_shape):
+    """Shift sample metadata from crop-local coordinates back into full image space."""
+    if sample_metadata is None:
+        return {
+            'sampled': False,
+            'sample_shape': list(source_shape),
+            'sample_origin': [0, 0],
+            'source_shape': list(source_shape),
+            'sampling_mode': 'full_image',
+            'overlay_supported': True,
+        }
+
+    meta = dict(sample_metadata)
+    sample_origin = meta.get('sample_origin', [0, 0])
+    if isinstance(sample_origin, (list, tuple)) and len(sample_origin) >= 2:
+        meta['sample_origin'] = [int(sample_origin[0]) + int(offset_x), int(sample_origin[1]) + int(offset_y)]
+
+    tile_origins = meta.get('tile_origins', [])
+    if isinstance(tile_origins, list):
+        shifted = []
+        for origin in tile_origins:
+            if not isinstance(origin, (list, tuple)) or len(origin) < 2:
+                continue
+            shifted.append([int(origin[0]) + int(offset_x), int(origin[1]) + int(offset_y)])
+        meta['tile_origins'] = shifted
+
+    meta['source_shape'] = [int(source_shape[0]), int(source_shape[1])]
+    return meta
+
 
 def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None):
     """
@@ -277,10 +493,25 @@ def auto_detect_dark_threshold(gray_image, sample_size=1000, threshold_range=(0.
     }
 
 def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num_thresholds=10,
-                                    base_min_lengths=None, preview_max_dim=900):
+                                    base_min_lengths=None, preview_max_dim=900,
+                                    time_budget_sec=AUTO_TUNE_TIME_BUDGET_SEC,
+                                    sample_metadata=None,
+                                    should_continue=None,
+                                    on_best_result=None,
+                                    on_progress=None,
+                                    confidence_target=0.95):
     """Jointly tune threshold and min path length on a preview image for a strong first extraction."""
     if base_min_lengths is None:
         base_min_lengths = [1, 3, 5, 8, 12, 16, 20]
+
+    started_at = time.perf_counter()
+    timed_out = False
+    cancelled = False
+    high_confidence_reached = False
+
+    if should_continue is None:
+        def should_continue():
+            return True
 
     height, width = gray_image.shape
     scale = 1.0
@@ -318,37 +549,198 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
         seen_preview_lengths.add(preview_length)
         candidate_lengths.append((int(full_length), preview_length))
 
-    thresholds = np.linspace(threshold_range[0], threshold_range[1], num_thresholds)
+    threshold_min = float(min(threshold_range[0], threshold_range[1]))
+    threshold_max = float(max(threshold_range[0], threshold_range[1]))
+    max_threshold_evals = max(2, int(num_thresholds))
     merge_gap = max(6, int(round(25 * scale)))
 
     best_result = None
     second_best_score = 0.0
     all_results = []
 
-    print(f"Auto-tuning extraction parameters on preview {preview_image.shape} (scale {scale:.3f})...")
-    print(
-        "  Line-art bias: "
-        f"strength={line_art_bias_strength:.2f}, "
-        f"mean={mean_intensity:.3f}, dark<0.80={dark_ratio_high:.3f}, dark<0.55={dark_ratio_mid:.3f}"
-    )
+    best_paths_for_progress = []
+    tested_thresholds = []
+    tested_threshold_keys = set()
+    overlay_supported = True
+    if sample_metadata is not None:
+        overlay_supported = bool(sample_metadata.get('overlay_supported', True))
 
-    for threshold in thresholds:
+    sampling_mode = 'full_image'
+    tile_count = 1
+    if sample_metadata is not None:
+        sampling_mode = str(sample_metadata.get('sampling_mode', sampling_mode))
+        tile_count = max(1, int(sample_metadata.get('tile_count', 1)))
+
+    def _sampling_progress_fields():
+        if sampling_mode == 'random_tiles_mosaic':
+            return {
+                'sampling_mode': sampling_mode,
+                # 0 means "all sampled tiles are evaluated together".
+                'current_tile_index': 0,
+                'current_tile_total': int(tile_count),
+            }
+        return {
+            'sampling_mode': sampling_mode,
+            'current_tile_index': 1,
+            'current_tile_total': 1,
+        }
+
+    def _emit_progress(phase='evaluating', threshold=None, threshold_index=None,
+                       current_min_length=0, threshold_best=None,
+                       current_paths_for_progress=None):
+        if on_progress is None:
+            return
+
+        current_confidence = 0.0
+        if best_result is not None:
+            current_confidence = max(
+                0.0,
+                min(1.0, (best_result['score'] - second_best_score) / max(best_result['score'], 1e-6))
+            )
+
+        payload = {
+            'elapsed_sec': float(time.perf_counter() - started_at),
+            'timed_out': False,
+            'cancelled': False,
+            'high_confidence_reached': False,
+            'best_threshold': float(best_result['threshold']) if best_result is not None else 0.20,
+            'best_min_length': int(best_result['best_min_length']) if best_result is not None else 3,
+            'quality_score': float(best_result['score']) if best_result is not None else 0.0,
+            'confidence_score': float(current_confidence),
+            'sample_metadata': sample_metadata or {'sampled': False},
+            'live_paths': list(best_paths_for_progress),
+            'live_paths_current': list(current_paths_for_progress) if current_paths_for_progress is not None else [],
+            'live_paths_current_threshold': float(threshold) if threshold is not None else 0.0,
+            'live_paths_current_min_length': int(current_min_length if current_min_length else (best_result['best_min_length'] if best_result is not None else 3)),
+            'live_paths_current_score': float(threshold_best.get('score', 0.0)) if threshold_best is not None else 0.0,
+            'live_paths_frame_id': int(len(all_results)),
+            'live_paths_scale': float(scale),
+            'live_paths_sample_origin': list(sample_metadata.get('sample_origin', [0, 0])) if sample_metadata else [0, 0],
+            'live_paths_source_shape': list(sample_metadata.get('source_shape', list(preview_image.shape))) if sample_metadata else list(preview_image.shape),
+            'iterations_done': len(all_results),
+            'iterations_total': int(max_threshold_evals),
+            'current_phase': str(phase),
+            'current_threshold_index': int(threshold_index) if threshold_index is not None else int(len(all_results) + 1),
+        }
+        payload.update(_sampling_progress_fields())
+        on_progress(payload)
+
+    def _encode_overlay_paths(source_paths, preview_min_length, max_paths=16):
+        """Compact path payload for live overlay updates."""
+        filtered_paths = [p for p in source_paths if len(p) >= int(preview_min_length)]
+        ranked_paths = sorted(filtered_paths, key=len, reverse=True)[:max_paths]
+        return [
+            [[int(pt[0]), int(pt[1])] for pt in p[::max(1, len(p) // 25)]]
+            for p in ranked_paths if len(p) >= 2
+        ]
+
+    def _threshold_key(value):
+        return int(round(float(value) * 1_000_000))
+
+    def _pick_next_threshold():
+        """Pick the next threshold adaptively to reduce redundant evaluations."""
+        mid = (threshold_min + threshold_max) * 0.5
+        seed_thresholds = [
+            mid,
+            (threshold_min + mid) * 0.5,
+            (mid + threshold_max) * 0.5,
+        ]
+        for candidate in seed_thresholds:
+            if _threshold_key(candidate) not in tested_threshold_keys:
+                return float(candidate)
+
+        if best_result is not None and all_results:
+            best_t = float(best_result['threshold'])
+            sorted_results = sorted(all_results, key=lambda item: float(item.get('threshold', 0.0)))
+            left_neighbor = None
+            right_neighbor = None
+            for item in sorted_results:
+                t = float(item.get('threshold', 0.0))
+                if t < best_t:
+                    left_neighbor = t
+                elif t > best_t and right_neighbor is None:
+                    right_neighbor = t
+                    break
+
+            local_candidates = []
+            if left_neighbor is not None:
+                local_candidates.append((abs(best_t - left_neighbor), (best_t + left_neighbor) * 0.5))
+            else:
+                local_candidates.append((abs(best_t - threshold_min), (best_t + threshold_min) * 0.5))
+            if right_neighbor is not None:
+                local_candidates.append((abs(right_neighbor - best_t), (best_t + right_neighbor) * 0.5))
+            else:
+                local_candidates.append((abs(threshold_max - best_t), (best_t + threshold_max) * 0.5))
+
+            local_candidates.sort(key=lambda item: item[0], reverse=True)
+            for _, candidate in local_candidates:
+                if _threshold_key(candidate) not in tested_threshold_keys:
+                    return float(candidate)
+
+        anchors = [threshold_min] + sorted(tested_thresholds) + [threshold_max]
+        best_gap = 0.0
+        best_candidate = None
+        for idx in range(len(anchors) - 1):
+            gap_start = float(anchors[idx])
+            gap_end = float(anchors[idx + 1])
+            gap = gap_end - gap_start
+            if gap <= 1e-4:
+                continue
+            candidate = (gap_start + gap_end) * 0.5
+            if _threshold_key(candidate) in tested_threshold_keys:
+                continue
+            if gap > best_gap:
+                best_gap = gap
+                best_candidate = candidate
+
+        return float(best_candidate) if best_candidate is not None else None
+
+    def _evaluate_threshold(threshold):
+        nonlocal timed_out, cancelled
         try:
+            threshold_index = int(len(all_results) + 1)
+            _emit_progress(
+                phase='extracting_paths',
+                threshold=threshold,
+                threshold_index=threshold_index,
+                current_min_length=0,
+            )
             initial_paths = extract_skeleton_paths(preview_image, float(threshold), min_object_size=3)
             if not initial_paths:
-                all_results.append({
+                return ({
                     'threshold': float(threshold),
                     'best_min_length': 3,
                     'score': 0.0,
                     'valid_paths': 0,
                     'longest_path': 0
-                })
-                continue
+                }, [])
 
-            merged_paths = merge_nearby_paths(initial_paths, max_gap=merge_gap)
+            _emit_progress(
+                phase='merging_paths',
+                threshold=threshold,
+                threshold_index=threshold_index,
+                current_min_length=0,
+            )
+            merged_paths = merge_nearby_paths(initial_paths, max_gap=merge_gap, verbose=False, should_continue=should_continue)
             threshold_best = None
 
             for full_min_length, preview_min_length in candidate_lengths:
+                _emit_progress(
+                    phase='scoring_min_length',
+                    threshold=threshold,
+                    threshold_index=threshold_index,
+                    current_min_length=int(full_min_length),
+                    threshold_best=threshold_best,
+                )
+                if not should_continue():
+                    cancelled = True
+                    print("Auto-tune cancelled while evaluating candidates")
+                    break
+                if (time.perf_counter() - started_at) > time_budget_sec:
+                    timed_out = True
+                    print(f"Auto-tune timed out at {time_budget_sec:.1f}s while evaluating min lengths")
+                    break
+
                 valid_paths = [path for path in merged_paths if len(path) >= preview_min_length]
 
                 if not valid_paths:
@@ -410,7 +802,7 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
                         threshold_best = candidate
 
             if threshold_best is None:
-                threshold_best = {
+                return ({
                     'threshold': float(threshold),
                     'best_min_length': 3,
                     'preview_min_length': 3,
@@ -419,24 +811,12 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
                     'longest_path': 0,
                     'top_total_length': 0.0,
                     'median_top_length': 0.0
-                }
+                }, merged_paths)
 
-            all_results.append(threshold_best)
-
-            if best_result is None or threshold_best['score'] > best_result['score']:
-                if best_result is not None:
-                    second_best_score = best_result['score']
-                best_result = threshold_best
-            elif threshold_best['score'] > second_best_score:
-                second_best_score = threshold_best['score']
-
-            print(
-                f"  Threshold {threshold:.3f}: best min length {threshold_best['best_min_length']}, "
-                f"score {threshold_best['score']:.2f}, longest {threshold_best['longest_path']}"
-            )
+            return (threshold_best, merged_paths)
         except Exception as e:
             print(f"  Threshold {threshold:.3f}: auto-tune failed - {e}")
-            all_results.append({
+            return ({
                 'threshold': float(threshold),
                 'best_min_length': 3,
                 'preview_min_length': 3,
@@ -444,7 +824,109 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
                 'valid_paths': 0,
                 'longest_path': 0,
                 'error': str(e)
-            })
+            }, [])
+
+    print(f"Auto-tuning extraction parameters on preview {preview_image.shape} (scale {scale:.3f})...")
+    print(
+        "  Line-art bias: "
+        f"strength={line_art_bias_strength:.2f}, "
+        f"mean={mean_intensity:.3f}, dark<0.80={dark_ratio_high:.3f}, dark<0.55={dark_ratio_mid:.3f}"
+    )
+
+    while len(all_results) < max_threshold_evals:
+        threshold = _pick_next_threshold()
+        if threshold is None:
+            break
+
+        threshold_key = _threshold_key(threshold)
+        tested_threshold_keys.add(threshold_key)
+        tested_thresholds.append(float(threshold))
+
+        if not should_continue():
+            cancelled = True
+            print("Auto-tune cancelled by client request")
+            break
+        if (time.perf_counter() - started_at) > time_budget_sec:
+            timed_out = True
+            print(f"Auto-tune timed out at {time_budget_sec:.1f}s before threshold {threshold:.3f}")
+            break
+        threshold_best, merged_paths = _evaluate_threshold(threshold)
+        all_results.append(threshold_best)
+
+        current_paths_for_progress = []
+        if overlay_supported:
+            try:
+                _cpmin = int(threshold_best.get('preview_min_length', threshold_best['best_min_length']))
+                current_paths_for_progress = _encode_overlay_paths(merged_paths, _cpmin)
+            except Exception:
+                current_paths_for_progress = []
+
+        if best_result is None or threshold_best['score'] > best_result['score']:
+            if best_result is not None:
+                second_best_score = best_result['score']
+            best_result = threshold_best
+            if overlay_supported:
+                try:
+                    best_paths_for_progress = list(current_paths_for_progress)
+                except Exception:
+                    pass
+            else:
+                best_paths_for_progress = []
+            if on_best_result is not None:
+                on_best_result({
+                    'best_threshold': float(best_result['threshold']),
+                    'best_min_length': int(best_result['best_min_length']),
+                    'quality_score': float(best_result['score']),
+                    'confidence_score': float(max(0.0, min(1.0, (best_result['score'] - second_best_score) / max(best_result['score'], 1e-6)))),
+                    'recommendation': 'partial best-so-far',
+                    'preview_shape': preview_image.shape,
+                    'preview_scale': float(scale),
+                    'longest_path': int(best_result.get('longest_path', 0)),
+                    'valid_paths': int(best_result.get('valid_paths', 0)),
+                    'timed_out': False,
+                    'cancelled': False,
+                    'elapsed_sec': float(time.perf_counter() - started_at),
+                    'sample_metadata': sample_metadata or {'sampled': False}
+                })
+        elif threshold_best['score'] > second_best_score:
+            second_best_score = threshold_best['score']
+
+        print(
+            f"  Threshold {threshold:.3f}: best min length {threshold_best['best_min_length']}, "
+            f"score {threshold_best['score']:.2f}, longest {threshold_best['longest_path']}"
+        )
+
+        current_confidence = 0.0
+        if best_result is not None:
+            current_confidence = max(
+                0.0,
+                min(1.0, (best_result['score'] - second_best_score) / max(best_result['score'], 1e-6))
+            )
+
+        if on_progress is not None:
+            _emit_progress(
+                phase='threshold_complete',
+                threshold=threshold,
+                threshold_index=len(all_results),
+                current_min_length=int(threshold_best.get('best_min_length', 3)),
+                threshold_best=threshold_best,
+                current_paths_for_progress=current_paths_for_progress,
+            )
+
+        # Only test the confidence target once we have at least two thresholds
+        # evaluated — with only one result second_best_score is 0 and the
+        # formula always yields 1.0, which would stop the search after a
+        # single threshold and give meaningless "instant" results.
+        if len(all_results) >= 2 and current_confidence >= confidence_target:
+            high_confidence_reached = True
+            print(
+                f"Auto-tune reached confidence target {confidence_target:.2f} "
+                f"at {current_confidence:.3f}; stopping early"
+            )
+            break
+
+        if cancelled or timed_out:
+                break
 
     if best_result is None or best_result['score'] <= 0:
         return {
@@ -452,12 +934,17 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
             'best_min_length': 3,
             'quality_score': 0.0,
             'confidence_score': 0.0,
-            'recommendation': 'manual adjustment recommended',
+            'recommendation': 'failed to detect best settings',
             'preview_shape': preview_image.shape,
             'preview_scale': scale,
             'longest_path': 0,
             'valid_paths': 0,
-            'all_results': all_results
+            'all_results': all_results,
+            'timed_out': timed_out,
+            'cancelled': cancelled,
+            'high_confidence_reached': high_confidence_reached,
+            'elapsed_sec': float(time.perf_counter() - started_at),
+            'sample_metadata': sample_metadata or {'sampled': False}
         }
 
     confidence_score = max(0.0, min(1.0, (best_result['score'] - second_best_score) / max(best_result['score'], 1e-6)))
@@ -478,7 +965,12 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
         'preview_scale': float(scale),
         'longest_path': int(best_result['longest_path']),
         'valid_paths': int(best_result['valid_paths']),
-        'all_results': all_results
+        'all_results': all_results,
+        'timed_out': timed_out,
+        'cancelled': cancelled,
+        'high_confidence_reached': high_confidence_reached,
+        'elapsed_sec': float(time.perf_counter() - started_at),
+        'sample_metadata': sample_metadata or {'sampled': False}
     }
 
 def _normalize_background_if_needed(gray_image, normalization_mode='auto', normalization_sensitivity='medium'):
@@ -619,6 +1111,19 @@ def _normalize_background_if_needed(gray_image, normalization_mode='auto', norma
     if inflated_range_clean_art and not force_normalize:
         should_normalize = False
 
+    # Dense or bordered images (maps, technical drawings with thick frames) can produce
+    # very high bg_range/bg_std purely from dark content mass being smeared by the large
+    # Gaussian blur — not from actual background unevenness.  When ink contrast is very
+    # high (paper vs. ink is clean) AND there is no real illumination gradient, the
+    # inflated range/std values are artefacts of the content, not shading problems.
+    # Normalizing such images would degrade already-perfect contrast.
+    perfect_contrast_no_gradient = bool(
+        ink_contrast >= 0.80 and
+        illumination_gradient < 0.010
+    )
+    if perfect_contrast_no_gradient and not force_normalize:
+        should_normalize = False
+
     # Safety guard: sparse line art on a truly uniform page should not be normalized.
     # In those cases, normalization can increase fragmentation and make extraction slower.
     line_art_guard = bool(
@@ -696,78 +1201,116 @@ def _normalize_background_if_needed(gray_image, normalization_mode='auto', norma
 def load_and_process_image(image_path, normalization_mode='auto', normalization_sensitivity='medium'):
     """Load an image/PDF and return raw+extraction grayscale images in 0-1 range.
 
-    - Transparent images are composited over white to avoid losing alpha semantics.
     - PDF files are rendered from page 1 using pypdfium2.
+    - PNG files are loaded via Pillow, which correctly handles all transparency
+      types (RGBA, LA, palette+tRNS, grayscale+tRNS).  A white background is
+      always composited so transparent areas become white.  If the PNG gAMA chunk
+      reports a gamma < 0.5 the correction curve is applied manually.
+    - Other formats (jpg, tiff, bmp, …) use skimage with manual alpha handling.
 
     Returns:
-        raw_gray: Original grayscale image in 0-1 range.
-        extraction_gray: Grayscale image used for path extraction.
-        preprocessing_info: Metadata about normalization decisions.
+        raw_gray: Grayscale image in [0, 1].
+        extraction_gray: Normalised version used for path extraction.
+        preprocessing_info: Metadata about normalisation decisions.
     """
     from skimage import color, io
+    from PIL import Image as PILImage
 
     extension = Path(image_path).suffix.lower()
 
     if extension == '.pdf':
         try:
-            pdfium = importlib.import_module('pypdfium2')
+            import importlib as _il
+            pdfium = _il.import_module('pypdfium2')
         except Exception as exc:
             raise ValueError(
                 "PDF upload requires pypdfium2. Install dependencies and retry."
             ) from exc
-
         try:
             pdf = pdfium.PdfDocument(image_path)
             if len(pdf) == 0:
                 raise ValueError("PDF has no pages")
-
             page = pdf[0]
-            # Render first page at a readable resolution for tracing.
             bitmap = page.render(scale=2.0)
             pil_page = bitmap.to_pil().convert('RGB')
             img = np.asarray(pil_page).astype(np.float32) / 255.0
             pdf.close()
+            gray = color.rgb2gray(img)
         except Exception as exc:
             raise ValueError(f"Failed to render PDF: {exc}") from exc
+
+    elif extension == '.png':
+        with PILImage.open(image_path) as pil_src:
+            png_gamma_val = pil_src.info.get('gamma', None)
+            print(f"[load] PNG mode={pil_src.mode} size={pil_src.size} "
+                  f"gamma={png_gamma_val}")
+
+            # Composite over solid white so transparent/semi-transparent areas
+            # become white rather than mapping to black or undefined values.
+            pil_rgba = pil_src.convert('RGBA')
+            white_bg = PILImage.new('RGBA', pil_rgba.size, (255, 255, 255, 255))
+            white_bg.alpha_composite(pil_rgba)
+            rgb_arr = np.asarray(white_bg.convert('RGB')).astype(np.float32) / 255.0
+            print(f"[load] after composite: min={rgb_arr.min():.4f} "
+                  f"max={rgb_arr.max():.4f} mean={rgb_arr.mean():.4f}")
+
+        # Pillow stores gAMA info but does NOT apply the encode curve on load.
+        # Apply it manually for dark-encoded images (gamma < 0.5).
+        if png_gamma_val is not None and 0.0 < png_gamma_val < 0.5:
+            rgb_arr = np.clip(np.power(rgb_arr, png_gamma_val), 0.0, 1.0)
+            print(f"[load] gamma {png_gamma_val:.5f} applied -> "
+                  f"min={rgb_arr.min():.4f} max={rgb_arr.max():.4f}")
+
+        gray = color.rgb2gray(rgb_arr)
+
     else:
         img = io.imread(image_path)
+        print(f"[load] skimage dtype={img.dtype} shape={img.shape} "
+              f"min={int(np.min(img))} max={int(np.max(img))}")
 
-    if len(img.shape) == 3:
-        channels = img.shape[2]
-
-        if channels == 4:
-            rgb = img[:, :, :3].astype(np.float32)
-            alpha = img[:, :, 3].astype(np.float32)
-
-            if rgb.max() > 1.0:
-                rgb /= 255.0
-            if alpha.max() > 1.0:
-                alpha /= 255.0
-
-            # Composite transparent pixels over white background.
-            composited_rgb = rgb * alpha[:, :, None] + (1.0 - alpha[:, :, None])
-            gray = color.rgb2gray(composited_rgb)
-        elif channels == 3:
-            rgb = img.astype(np.float32)
-            if rgb.max() > 1.0:
-                rgb /= 255.0
-            gray = color.rgb2gray(rgb)
+        if len(img.shape) == 3:
+            channels = img.shape[2]
+            if channels == 4:
+                rgb   = img[:, :, :3].astype(np.float32)
+                alpha = img[:, :,  3].astype(np.float32)
+                if rgb.max()   > 1.0: rgb   /= 255.0
+                if alpha.max() > 1.0: alpha /= 255.0
+                composited_rgb = rgb * alpha[:, :, None] + (1.0 - alpha[:, :, None])
+                gray = color.rgb2gray(composited_rgb)
+            elif channels == 3:
+                rgb = img.astype(np.float32)
+                if rgb.max() > 1.0: rgb /= 255.0
+                gray = color.rgb2gray(rgb)
+            else:
+                raise ValueError(f"Unsupported image format with {channels} channels")
+        elif len(img.shape) == 2:
+            gray = img.astype(np.float32)
+            if gray.max() > 1.0: gray /= 255.0
         else:
-            raise ValueError(f"Unsupported image format with {channels} channels")
-    elif len(img.shape) == 2:
-        gray = img.astype(np.float32)
-        if gray.max() > 1.0:
-            gray /= 255.0
-    else:
-        raise ValueError(f"Unsupported image shape: {img.shape}")
+            raise ValueError(f"Unsupported image shape: {img.shape}")
 
     raw_gray = np.clip(gray.astype(np.float32), 0.0, 1.0)
+    print(f"[load] raw_gray  min={raw_gray.min():.4f} max={raw_gray.max():.4f} "
+          f"mean={raw_gray.mean():.4f} std={raw_gray.std():.4f}")
+
+    # Last-resort contrast stretch: if the image arrived near-black with no
+    # meaningful range, stretch whatever exists so structure becomes visible.
+    gray_range = float(raw_gray.max() - raw_gray.min())
+    if gray_range < 0.05 and raw_gray.mean() < 0.1:
+        p_lo = float(np.percentile(raw_gray, 1))
+        p_hi = float(np.percentile(raw_gray, 99))
+        if p_hi > p_lo:
+            raw_gray = np.clip((raw_gray - p_lo) / (p_hi - p_lo), 0.0, 1.0)
+            print(f"[load] near-black flat image (range={gray_range:.4f}); "
+                  f"contrast stretched -> min={raw_gray.min():.4f} max={raw_gray.max():.4f}")
+
     extraction_gray, preprocessing_info = _normalize_background_if_needed(
         raw_gray,
         normalization_mode=normalization_mode,
         normalization_sensitivity=normalization_sensitivity,
     )
     return raw_gray, extraction_gray, preprocessing_info
+
 
 def process_centerlines(session):
     """Process centerlines with current parameters."""
@@ -1322,13 +1865,73 @@ def auto_tune_extraction():
         return jsonify({'error': 'No image loaded'})
 
     try:
-        tuning_result = auto_tune_extraction_parameters(session.image)
+        with session.lock:
+            session.auto_tune_generation += 1
+            auto_tune_generation = session.auto_tune_generation
+            session.auto_tune_active = True
+            session.auto_tune_best = None
 
-        if tuning_result['quality_score'] <= 0:
+        def _should_continue_auto_tune():
+            with session.lock:
+                return session.auto_tune_generation == auto_tune_generation
+
+        def _record_best_so_far(best_payload):
+            with session.lock:
+                if session.auto_tune_generation != auto_tune_generation:
+                    return
+                session.auto_tune_best = dict(best_payload)
+
+        tuning_image = session.image
+        sample_metadata = {
+            'sampled': False,
+            'sample_shape': session.image.shape,
+            'sample_origin': [0, 0],
+            'source_shape': session.image.shape,
+            'sampling_mode': 'full_image',
+            'overlay_supported': True,
+        }
+        image_height, image_width = session.image.shape
+        if max(image_height, image_width) > AUTO_TUNE_RANDOM_TILE_DIM:
+            _tile_count = 6 if session.image_file_size > 300 * 1024 else AUTO_TUNE_RANDOM_TILE_COUNT
+            tuning_image, sample_metadata = _build_random_tile_mosaic(session.image, tile_count=_tile_count)
+
+        tuning_result = auto_tune_extraction_parameters(
+            tuning_image,
+            threshold_range=(0.05, 0.8),
+            num_thresholds=8,
+            base_min_lengths=[1, 3, 5, 8, 12, 16],
+            preview_max_dim=700,
+            time_budget_sec=AUTO_TUNE_TIME_BUDGET_SEC,
+            sample_metadata=sample_metadata,
+            should_continue=_should_continue_auto_tune,
+            on_best_result=_record_best_so_far,
+        )
+
+        with session.lock:
+            if session.auto_tune_generation == auto_tune_generation:
+                session.auto_tune_active = False
+                session.auto_tune_best = dict(tuning_result)
+
+        if tuning_result.get('timed_out'):
+            print(
+                f"Auto-tune timed out after {tuning_result.get('elapsed_sec', 0.0):.1f}s; "
+                "falling back to defaults with optimization disabled"
+            )
+
+        if tuning_result['quality_score'] <= 0 or tuning_result.get('timed_out'):
+            session.parameters['dark_threshold'] = 0.20
+            session.parameters['min_path_length'] = 3
+            session.parameters['enable_optimization'] = False
+            session.parameters['show_pre_optimization'] = True
+
             return jsonify({
                 'success': False,
-                'error': 'Could not auto-tune extraction parameters. Current settings left unchanged.',
-                'recommendation': tuning_result['recommendation']
+                'error': 'Failed to detect best settings. Using defaults with optimization turned off.',
+                'recommendation': tuning_result.get('recommendation', 'failed to detect best settings'),
+                'timed_out': bool(tuning_result.get('timed_out', False)),
+                'elapsed_sec': float(tuning_result.get('elapsed_sec', 0.0)),
+                'sample_metadata': tuning_result.get('sample_metadata', sample_metadata),
+                'updated_parameters': session.parameters,
             })
 
         session.parameters['dark_threshold'] = tuning_result['best_threshold']
@@ -1345,10 +1948,474 @@ def auto_tune_extraction():
             'preview_scale': tuning_result['preview_scale'],
             'longest_path': tuning_result['longest_path'],
             'valid_paths': tuning_result['valid_paths'],
+            'timed_out': bool(tuning_result.get('timed_out', False)),
+            'elapsed_sec': float(tuning_result.get('elapsed_sec', 0.0)),
+            'sample_metadata': tuning_result.get('sample_metadata', sample_metadata),
             'updated_parameters': session.parameters
         })
     except Exception as e:
-        return jsonify({'error': f'Auto-tune error: {str(e)}'})
+        with session.lock:
+            if session.auto_tune_generation == auto_tune_generation:
+                session.auto_tune_active = False
+        session.parameters['dark_threshold'] = 0.20
+        session.parameters['min_path_length'] = 3
+        session.parameters['enable_optimization'] = False
+        session.parameters['show_pre_optimization'] = True
+        return jsonify({
+            'success': False,
+            'error': f'Failed to detect best settings ({str(e)}). Using defaults with optimization turned off.',
+            'timed_out': False,
+            'updated_parameters': session.parameters,
+        })
+
+
+@app.route('/auto_tune_sample_region', methods=['POST'])
+def auto_tune_sample_region():
+    """Return auto-tune sampling metadata for UI preview."""
+    data = request.json or {}
+    session_id = data.get('session_id')
+
+    if session_id not in sessions:
+        return jsonify({'error': 'Invalid session'})
+
+    session = sessions[session_id]
+
+    if session.image is None:
+        return jsonify({'error': 'No image loaded'})
+
+    crop_bounds = _resolve_crop_bounds(session.image.shape, data.get('crop_region'))
+    sample_source = session.image
+    offset_x = 0
+    offset_y = 0
+    if crop_bounds is not None:
+        sample_source = session.image[crop_bounds['y1']:crop_bounds['y2'], crop_bounds['x1']:crop_bounds['x2']]
+        offset_x = int(crop_bounds['x1'])
+        offset_y = int(crop_bounds['y1'])
+
+    sample_metadata = {
+        'sampled': bool(crop_bounds is not None),
+        'sample_shape': list(sample_source.shape),
+        'sample_origin': [int(offset_x), int(offset_y)],
+        'source_shape': list(session.image.shape),
+        'sampling_mode': 'full_image',
+        'overlay_supported': True,
+    }
+
+    image_height, image_width = sample_source.shape
+    if max(image_height, image_width) > AUTO_TUNE_RANDOM_TILE_DIM:
+        _tile_count = 6 if session.image_file_size > 300 * 1024 else AUTO_TUNE_RANDOM_TILE_COUNT
+        _, sample_metadata = _build_random_tile_mosaic(sample_source, tile_count=_tile_count)
+        sample_metadata = _offset_sample_metadata_to_source(
+            sample_metadata,
+            offset_x=offset_x,
+            offset_y=offset_y,
+            source_shape=session.image.shape,
+        )
+
+    return jsonify({
+        'success': True,
+        'sample_metadata': sample_metadata,
+    })
+
+
+def _extract_tile_preview_paths(gray_image, sample_metadata, dark_threshold, min_path_length, per_tile_limit=3, full_resolution=False):
+    """Extract path overlays per sampled tile with quality stats (coverage and noise ratio)."""
+    if gray_image is None or sample_metadata is None:
+        return [], {}
+
+    image_h, image_w = gray_image.shape
+    sampling_mode = str(sample_metadata.get('sampling_mode', 'full_image'))
+    tile_shape = sample_metadata.get('tile_shape') or [0, 0]
+    tile_origins = sample_metadata.get('tile_origins') or []
+
+    if sampling_mode == 'random_tiles_mosaic' and tile_origins:
+        tile_h = int(tile_shape[0]) if len(tile_shape) >= 1 else 0
+        tile_w = int(tile_shape[1]) if len(tile_shape) >= 2 else 0
+        if tile_h <= 0 or tile_w <= 0:
+            return [], {}
+    else:
+        # Full-image preview mode: evaluate one region covering the complete source.
+        tile_h, tile_w = int(image_h), int(image_w)
+        tile_origins = [[0, 0]]
+
+    max_gap = max(4, int(round(min(tile_h, tile_w) * 0.17)))
+    out_tiles = []
+
+    for tile_index, origin in enumerate(tile_origins, start=1):
+        if not isinstance(origin, (list, tuple)) or len(origin) < 2:
+            continue
+        ox = int(origin[0])
+        oy = int(origin[1])
+        if ox < 0 or oy < 0:
+            continue
+        if ox + tile_w > image_w or oy + tile_h > image_h:
+            continue
+
+        tile = gray_image[oy:oy + tile_h, ox:ox + tile_w]
+        initial_paths = extract_skeleton_paths(tile, float(dark_threshold), min_object_size=3)
+        if not initial_paths:
+            continue
+
+        merged_paths = merge_nearby_paths(initial_paths, max_gap=max_gap, verbose=False)
+        valid_paths = [path for path in merged_paths if len(path) >= int(min_path_length)]
+        orphan_paths = [path for path in merged_paths if len(path) < int(min_path_length)]
+        tile_total_length = sum(len(p) for p in valid_paths)
+
+        tile_entry = {
+            'tile_index': int(tile_index),
+            'valid_count': len(valid_paths),
+            'orphan_count': len(orphan_paths),
+            'total_length': tile_total_length,
+            'paths': [],
+        }
+
+        for rank, path in enumerate(sorted(valid_paths, key=len, reverse=True)):
+            # Full-image review mode should match final magenta path fidelity.
+            stride = 1 if full_resolution else max(1, len(path) // 30)
+            encoded = []
+            for pt in path[::stride]:
+                py = int(pt[0]) + oy
+                px = int(pt[1]) + ox
+                encoded.append([py, px])
+            if len(encoded) >= 2:
+                tile_entry['paths'].append({
+                    'rank': rank,
+                    'length': int(len(path)),
+                    'points': encoded,
+                })
+
+        out_tiles.append(tile_entry)
+
+    total_valid = sum(t['valid_count'] for t in out_tiles)
+    total_orphan = sum(t['orphan_count'] for t in out_tiles)
+    total_length = sum(t['total_length'] for t in out_tiles)
+    agg_stats = {
+        'total_valid_paths': total_valid,
+        'total_orphan_paths': total_orphan,
+        'total_path_length': total_length,
+        'tile_count': len(out_tiles),
+        'noise_ratio': round(total_orphan / max(1, total_valid + total_orphan), 3),
+    }
+
+    return out_tiles, agg_stats
+
+
+@app.route('/auto_tune_tile_preview', methods=['POST'])
+def auto_tune_tile_preview():
+    """Return tile-only preview overlays for manual threshold/min-length tuning."""
+    data = request.json or {}
+    session_id = data.get('session_id')
+
+    if session_id not in sessions:
+        return jsonify({'error': 'Invalid session'})
+
+    session = sessions[session_id]
+    if session.image is None:
+        return jsonify({'error': 'No image loaded'})
+
+    try:
+        dark_threshold = float(data.get('dark_threshold', session.parameters.get('dark_threshold', 0.20)))
+        min_path_length = int(data.get('min_path_length', session.parameters.get('min_path_length', 3)))
+    except Exception:
+        return jsonify({'error': 'Invalid threshold or min path length'})
+
+    sample_metadata = data.get('sample_metadata')
+    if not isinstance(sample_metadata, dict):
+        with session.lock:
+            sample_metadata = dict(session.auto_tune_progress.get('sample_metadata', {'sampled': False}))
+
+    crop_bounds = _resolve_crop_bounds(session.image.shape, data.get('crop_region'))
+
+    if bool(data.get('full_image_preview', False)):
+        if crop_bounds is not None:
+            sample_metadata = {
+                'sampled': True,
+                'sample_shape': [int(crop_bounds['height']), int(crop_bounds['width'])],
+                'sample_origin': [int(crop_bounds['x1']), int(crop_bounds['y1'])],
+                'source_shape': list(session.image.shape),
+                # Use one explicit tile so extraction stays inside crop bounds.
+                'sampling_mode': 'random_tiles_mosaic',
+                'overlay_supported': True,
+                'tile_count': 1,
+                'tile_shape': [int(crop_bounds['height']), int(crop_bounds['width'])],
+                'tile_origins': [[int(crop_bounds['x1']), int(crop_bounds['y1'])]],
+            }
+        else:
+            sample_metadata = {
+                'sampled': False,
+                'sample_shape': list(session.image.shape),
+                'sample_origin': [0, 0],
+                'source_shape': list(session.image.shape),
+                'sampling_mode': 'full_image',
+                'overlay_supported': True,
+                'tile_count': 1,
+                'tile_shape': list(session.image.shape),
+                'tile_origins': [[0, 0]],
+            }
+
+    preview_started_at = time.perf_counter()
+    full_image_preview = bool(data.get('full_image_preview', False))
+    tile_data, stats = _extract_tile_preview_paths(
+        session.image,
+        sample_metadata,
+        dark_threshold=dark_threshold,
+        min_path_length=min_path_length,
+        full_resolution=full_image_preview,
+    )
+    preview_runtime_ms = int(round((time.perf_counter() - preview_started_at) * 1000.0))
+
+    return jsonify({
+        'success': True,
+        'sample_metadata': sample_metadata,
+        'tile_data': tile_data,
+        'tile_path_count': sum(len(t.get('paths', [])) for t in tile_data),
+        'stats': stats,
+        'preview_runtime_ms': preview_runtime_ms,
+        'source_shape': list(session.image.shape),
+        'dark_threshold': float(dark_threshold),
+        'min_path_length': int(min_path_length),
+    })
+
+
+def _run_auto_tune_job(session, auto_tune_generation):
+    """Background auto-tune job that continuously updates session.auto_tune_progress."""
+    try:
+        source_image = session.image
+        crop_bounds = _resolve_crop_bounds(source_image.shape, session.auto_tune_crop_region)
+        tuning_image = source_image
+        offset_x = 0
+        offset_y = 0
+        if crop_bounds is not None:
+            tuning_image = source_image[crop_bounds['y1']:crop_bounds['y2'], crop_bounds['x1']:crop_bounds['x2']]
+            offset_x = int(crop_bounds['x1'])
+            offset_y = int(crop_bounds['y1'])
+
+        sample_metadata = {
+            'sampled': bool(crop_bounds is not None),
+            'sample_shape': list(tuning_image.shape),
+            'sample_origin': [int(offset_x), int(offset_y)],
+            'source_shape': list(source_image.shape),
+            'sampling_mode': 'full_image',
+            'overlay_supported': True,
+        }
+        image_height, image_width = tuning_image.shape
+        if max(image_height, image_width) > AUTO_TUNE_RANDOM_TILE_DIM:
+            _tile_count = 6 if session.image_file_size > 300 * 1024 else AUTO_TUNE_RANDOM_TILE_COUNT
+            tuning_image, sample_metadata = _build_random_tile_mosaic(tuning_image, tile_count=_tile_count)
+            sample_metadata = _offset_sample_metadata_to_source(
+                sample_metadata,
+                offset_x=offset_x,
+                offset_y=offset_y,
+                source_shape=source_image.shape,
+            )
+
+        def _should_continue_auto_tune():
+            with session.lock:
+                return session.auto_tune_generation == auto_tune_generation
+
+        def _record_best_so_far(best_payload):
+            with session.lock:
+                if session.auto_tune_generation != auto_tune_generation:
+                    return
+                session.auto_tune_best = dict(best_payload)
+
+        def _record_progress(progress_payload):
+            with session.lock:
+                if session.auto_tune_generation != auto_tune_generation:
+                    return
+                session.auto_tune_progress.update({
+                    'running': True,
+                    'finished': False,
+                    'elapsed_sec': float(progress_payload.get('elapsed_sec', 0.0)),
+                    'confidence_score': float(progress_payload.get('confidence_score', 0.0)),
+                    'quality_score': float(progress_payload.get('quality_score', 0.0)),
+                    'best_threshold': float(progress_payload.get('best_threshold', 0.20)),
+                    'best_min_length': int(progress_payload.get('best_min_length', 3)),
+                    'timed_out': bool(progress_payload.get('timed_out', False)),
+                    'cancelled': bool(progress_payload.get('cancelled', False)),
+                    'high_confidence_reached': bool(progress_payload.get('high_confidence_reached', False)),
+                    'sample_metadata': progress_payload.get('sample_metadata', sample_metadata),
+                    'message': (
+                        f"Live best: threshold {float(progress_payload.get('best_threshold', 0.20)):.3f}, "
+                        f"min length {int(progress_payload.get('best_min_length', 3))}, "
+                        f"confidence {float(progress_payload.get('confidence_score', 0.0)) * 100.0:.1f}%"
+                    ),
+                    'live_paths': progress_payload.get('live_paths', []),
+                    'live_paths_current': progress_payload.get('live_paths_current', []),
+                    'live_paths_current_threshold': float(progress_payload.get('live_paths_current_threshold', 0.0)),
+                    'live_paths_current_min_length': int(progress_payload.get('live_paths_current_min_length', 3)),
+                    'live_paths_current_score': float(progress_payload.get('live_paths_current_score', 0.0)),
+                    'live_paths_frame_id': int(progress_payload.get('live_paths_frame_id', 0)),
+                    'live_paths_scale': float(progress_payload.get('live_paths_scale', 1.0)),
+                    'live_paths_sample_origin': progress_payload.get('live_paths_sample_origin', [0, 0]),
+                    'live_paths_source_shape': progress_payload.get('live_paths_source_shape', []),
+                    'iterations_done': int(progress_payload.get('iterations_done', 0)),
+                    'iterations_total': int(progress_payload.get('iterations_total', 6)),
+                    'current_phase': str(progress_payload.get('current_phase', 'evaluating')),
+                    'current_threshold_index': int(progress_payload.get('current_threshold_index', 1)),
+                    'sampling_mode': str(progress_payload.get('sampling_mode', 'full_image')),
+                    'current_tile_index': int(progress_payload.get('current_tile_index', 1)),
+                    'current_tile_total': int(progress_payload.get('current_tile_total', 1)),
+                })
+
+        tuning_result = auto_tune_extraction_parameters(
+            tuning_image,
+            threshold_range=(0.05, 0.8),
+            num_thresholds=6,
+            base_min_lengths=[1, 3, 5, 8, 12],
+            preview_max_dim=550,
+            time_budget_sec=AUTO_TUNE_TIME_BUDGET_SEC,
+            sample_metadata=sample_metadata,
+            should_continue=_should_continue_auto_tune,
+            on_best_result=_record_best_so_far,
+            on_progress=_record_progress,
+            confidence_target=AUTO_TUNE_CONFIDENCE_TARGET,
+        )
+
+        with session.lock:
+            if session.auto_tune_generation != auto_tune_generation:
+                return
+            session.auto_tune_active = False
+            session.auto_tune_best = dict(tuning_result)
+
+        if tuning_result['quality_score'] <= 0 or tuning_result.get('timed_out'):
+            session.parameters['dark_threshold'] = 0.20
+            session.parameters['min_path_length'] = 3
+            session.parameters['enable_optimization'] = False
+            session.parameters['show_pre_optimization'] = True
+            success = False
+            status_message = 'Failed to detect best settings. Using defaults with optimization turned off.'
+        else:
+            session.parameters['dark_threshold'] = tuning_result['best_threshold']
+            session.parameters['min_path_length'] = tuning_result['best_min_length']
+            success = True
+            if tuning_result.get('high_confidence_reached'):
+                status_message = 'Reached 95% confidence early.'
+            else:
+                status_message = 'Auto-tune completed within time budget.'
+
+        with session.lock:
+            if session.auto_tune_generation != auto_tune_generation:
+                return
+            session.auto_tune_progress.update({
+                'running': False,
+                'finished': True,
+                'success': bool(success),
+                'elapsed_sec': float(tuning_result.get('elapsed_sec', 0.0)),
+                'confidence_score': float(tuning_result.get('confidence_score', 0.0)),
+                'quality_score': float(tuning_result.get('quality_score', 0.0)),
+                'best_threshold': float(tuning_result.get('best_threshold', session.parameters['dark_threshold'])),
+                'best_min_length': int(tuning_result.get('best_min_length', session.parameters['min_path_length'])),
+                'timed_out': bool(tuning_result.get('timed_out', False)),
+                'cancelled': bool(tuning_result.get('cancelled', False)),
+                'high_confidence_reached': bool(tuning_result.get('high_confidence_reached', False)),
+                'sample_metadata': tuning_result.get('sample_metadata', sample_metadata),
+                'message': status_message,
+                'updated_parameters': dict(session.parameters),
+            })
+    except Exception as e:
+        with session.lock:
+            if session.auto_tune_generation != auto_tune_generation:
+                return
+            session.auto_tune_active = False
+            session.parameters['dark_threshold'] = 0.20
+            session.parameters['min_path_length'] = 3
+            session.parameters['enable_optimization'] = False
+            session.parameters['show_pre_optimization'] = True
+            session.auto_tune_progress.update({
+                'running': False,
+                'finished': True,
+                'success': False,
+                'timed_out': False,
+                'cancelled': False,
+                'high_confidence_reached': False,
+                'message': f'Auto-tune failed: {str(e)}. Using defaults with optimization turned off.',
+                'updated_parameters': dict(session.parameters),
+            })
+
+
+@app.route('/auto_tune_extraction_start', methods=['POST'])
+def auto_tune_extraction_start():
+    """Start background auto-tune and return immediately for realtime polling."""
+    data = request.json or {}
+    session_id = data.get('session_id')
+
+    if session_id not in sessions:
+        return jsonify({'error': 'Invalid session'})
+
+    session = sessions[session_id]
+
+    if session.image is None:
+        return jsonify({'error': 'No image loaded'})
+
+    with session.lock:
+        session.auto_tune_generation += 1
+        auto_tune_generation = session.auto_tune_generation
+        session.auto_tune_active = True
+        session.auto_tune_best = None
+        session.auto_tune_crop_region = data.get('crop_region') if isinstance(data.get('crop_region'), dict) else None
+        session.auto_tune_progress = {
+            'running': True,
+            'started_at': float(time.perf_counter()),
+            'finished': False,
+            'success': False,
+            'elapsed_sec': 0.0,
+            'confidence_score': 0.0,
+            'quality_score': 0.0,
+            'best_threshold': float(session.parameters.get('dark_threshold', 0.20)),
+            'best_min_length': int(session.parameters.get('min_path_length', 3)),
+            'timed_out': False,
+            'cancelled': False,
+            'high_confidence_reached': False,
+            'message': 'Auto-tune started. Gathering candidates...',
+            'sample_metadata': {'sampled': False},
+            'live_paths': [],
+            'live_paths_current': [],
+            'live_paths_current_threshold': 0.0,
+            'live_paths_current_min_length': int(session.parameters.get('min_path_length', 3)),
+            'live_paths_current_score': 0.0,
+            'live_paths_frame_id': 0,
+            'live_paths_scale': 1.0,
+            'live_paths_sample_origin': [0, 0],
+            'live_paths_source_shape': [],
+            'iterations_done': 0,
+            'iterations_total': 6,
+            'current_phase': 'starting',
+            'current_threshold_index': 1,
+            'sampling_mode': 'full_image',
+            'current_tile_index': 1,
+            'current_tile_total': 1,
+            'updated_parameters': dict(session.parameters),
+        }
+
+        worker = threading.Thread(
+            target=_run_auto_tune_job,
+            args=(session, auto_tune_generation),
+            daemon=True,
+        )
+        session.auto_tune_thread = worker
+        worker.start()
+
+    return jsonify({'success': True, 'started': True})
+
+
+@app.route('/auto_tune_progress/<session_id>', methods=['GET'])
+def auto_tune_progress(session_id):
+    """Return live auto-tune progress and best-so-far candidate."""
+    if session_id not in sessions:
+        return jsonify({'error': 'Invalid session'})
+
+    session = sessions[session_id]
+    with session.lock:
+        progress = dict(session.auto_tune_progress)
+        progress['active'] = bool(session.auto_tune_active)
+
+    if progress.get('running'):
+        started_at = float(progress.get('started_at', 0.0) or 0.0)
+        if started_at > 0.0:
+            progress['elapsed_sec'] = max(float(progress.get('elapsed_sec', 0.0)), float(time.perf_counter() - started_at))
+
+    return jsonify(progress)
 
 @app.route('/')
 def index():
@@ -1381,6 +2448,7 @@ def upload_file():
     temp_dir = tempfile.gettempdir()
     temp_path = os.path.join(temp_dir, f"centerline_{session_id}_{file.filename}")
     file.save(temp_path)
+    session.image_file_size = os.path.getsize(temp_path)
     
     try:
         # Load and preprocess image for extraction, while keeping original for display.
@@ -1397,17 +2465,29 @@ def upload_file():
         # Store session
         sessions[session_id] = session
         
-        # Convert image to base64 for display
-        pil_img = Image.fromarray((raw_gray * 255).astype(np.uint8))
-        buf = BytesIO()
-        pil_img.save(buf, format='PNG')
-        buf.seek(0)
-        img_data = base64.b64encode(buf.read()).decode('utf-8')
+        # Convert raw and normalized images to base64 for UI preview toggling.
+        raw_img = Image.fromarray((raw_gray * 255).astype(np.uint8))
+        raw_buf = BytesIO()
+        raw_img.save(raw_buf, format='PNG')
+        raw_buf.seek(0)
+        raw_img_data = base64.b64encode(raw_buf.read()).decode('utf-8')
+
+        normalized_img = Image.fromarray((extraction_gray * 255).astype(np.uint8))
+        normalized_buf = BytesIO()
+        normalized_img.save(normalized_buf, format='PNG')
+        normalized_buf.seek(0)
+        normalized_img_data = base64.b64encode(normalized_buf.read()).decode('utf-8')
+
+        normalization_applied = bool(preprocessing_info.get('applied', False))
+        default_img_data = normalized_img_data if normalization_applied else raw_img_data
         
         return jsonify({
             'success': True,
             'session_id': session_id,
-            'image_data': img_data,
+            'image_data': default_img_data,
+            'raw_image_data': raw_img_data,
+            'normalized_image_data': normalized_img_data,
+            'normalization_applied': normalization_applied,
             'image_shape': raw_gray.shape,
             'parameters': session.parameters,
             'preprocessing': preprocessing_info
@@ -1435,7 +2515,22 @@ def process_immediate():
         # Quick raw path extraction
         params = session.parameters
         gray = session.image
-        
+
+        # Apply optional crop region (fractions 0-1 of image dimensions)
+        crop_offset_row = 0
+        crop_offset_col = 0
+        crop = data.get('crop_region')
+        if crop and isinstance(crop, dict):
+            h, w = gray.shape[:2]
+            y1 = max(0, int(round(float(crop.get('top', 0)) * h)))
+            y2 = min(h, int(round(float(crop.get('bottom', 1)) * h)))
+            x1 = max(0, int(round(float(crop.get('left', 0)) * w)))
+            x2 = min(w, int(round(float(crop.get('right', 1)) * w)))
+            if y2 > y1 + 10 and x2 > x1 + 10:
+                gray = gray[y1:y2, x1:x2]
+                crop_offset_row = y1
+                crop_offset_col = x1
+
         # Always use fast extraction for immediate display
         print("Immediate extraction mode...")
         from worksok3_optimized import create_fast_paths
@@ -1454,12 +2549,14 @@ def process_immediate():
         merge_gap = max(1, int(params.get('merge_gap', 25)))
         merge_angle_priority = float(params.get('merge_angle_priority', 30.0)) / 100.0
 
-        # Preserve legacy default behavior in progressive mode: with the default
-        # gap (25), keep the original unmerged path flow. Only apply merging when
-        # users intentionally change merge_gap from its default.
+        # Preserve legacy default behavior in progressive mode unless users
+        # intentionally change merge controls from defaults.
+        # If either merge_gap or merge_angle_priority changes, apply merging.
         merged_paths = initial_paths
         merge_applied = False
-        if params.get('enable_optimization', True) and merge_gap != 25:
+        angle_priority_changed = abs(merge_angle_priority - 0.30) > 1e-9
+        merge_controls_changed = (merge_gap != 25) or angle_priority_changed
+        if params.get('enable_optimization', True) and merge_controls_changed:
             merged_paths = merge_nearby_paths(
                 initial_paths,
                 max_gap=merge_gap,
@@ -1473,14 +2570,25 @@ def process_immediate():
         if len(valid_paths) == 0:
             return jsonify({'error': 'No valid paths after filtering. Try reducing minimum path length.'})
         
-        # Convert numpy coordinates to regular Python lists for JSON serialization
+        # Convert numpy coordinates to regular Python lists for JSON serialization.
+        # If a crop was applied, offset coordinates back to full-image space so
+        # the frontend can render paths correctly over the original image.
         json_serializable_paths = []
         for path in valid_paths:
-            serializable_path = [[int(point[0]), int(point[1])] for point in path]
+            serializable_path = [
+                [int(point[0]) + crop_offset_row, int(point[1]) + crop_offset_col]
+                for point in path
+            ]
             json_serializable_paths.append(serializable_path)
-        
-        # Store raw paths for immediate display
-        session.initial_paths = valid_paths  # Keep original for processing
+
+        # Store paths in full-image coordinates for subsequent SVG generation and optimization.
+        if crop_offset_row != 0 or crop_offset_col != 0:
+            session.initial_paths = [
+                [[pt[0] + crop_offset_row, pt[1] + crop_offset_col] for pt in path]
+                for path in valid_paths
+            ]
+        else:
+            session.initial_paths = valid_paths  # Keep original for processing
         session.partial_optimized_paths = []
         session.optimization_complete = False
         session.optimization_stopped = False
@@ -1670,6 +2778,81 @@ def stop_optimization():
     session.optimization_generation += 1
     
     return jsonify({'success': True, 'message': 'Optimization stopping...'})
+
+
+@app.route('/stop_auto_tune', methods=['POST'])
+def stop_auto_tune():
+    """Cancel auto-tune and apply the best-so-far detection settings if available."""
+    data = request.json
+    session_id = data.get('session_id')
+
+    if session_id not in sessions:
+        return jsonify({'error': 'Invalid session'})
+
+    session = sessions[session_id]
+
+    with session.lock:
+        session.auto_tune_generation += 1
+        session.auto_tune_active = False
+        best_so_far = dict(session.auto_tune_best) if session.auto_tune_best else None
+
+    if best_so_far and float(best_so_far.get('quality_score', 0.0)) > 0.0:
+        session.parameters['dark_threshold'] = float(best_so_far.get('best_threshold', 0.20))
+        session.parameters['min_path_length'] = int(best_so_far.get('best_min_length', 3))
+        session.parameters['enable_optimization'] = False
+        session.parameters['show_pre_optimization'] = True
+
+        with session.lock:
+            session.auto_tune_progress.update({
+                'running': False,
+                'finished': True,
+                'success': True,
+                'timed_out': False,
+                'cancelled': True,
+                'high_confidence_reached': bool(best_so_far.get('confidence_score', 0.0) >= AUTO_TUNE_CONFIDENCE_TARGET),
+                'elapsed_sec': float(best_so_far.get('elapsed_sec', 0.0)),
+                'confidence_score': float(best_so_far.get('confidence_score', 0.0)),
+                'quality_score': float(best_so_far.get('quality_score', 0.0)),
+                'best_threshold': float(session.parameters['dark_threshold']),
+                'best_min_length': int(session.parameters['min_path_length']),
+                'message': 'Auto-tune cancelled by user. Applied best-so-far settings with optimization off.',
+                'updated_parameters': dict(session.parameters),
+            })
+
+        return jsonify({
+            'success': True,
+            'used_best_so_far': True,
+            'detected_threshold': session.parameters['dark_threshold'],
+            'detected_min_length': session.parameters['min_path_length'],
+            'confidence_score': float(best_so_far.get('confidence_score', 0.0)),
+            'quality_score': float(best_so_far.get('quality_score', 0.0)),
+            'recommendation': 'Auto-tune stopped. Applied best-so-far detection settings with optimization turned off.',
+            'updated_parameters': session.parameters,
+        })
+
+    session.parameters['dark_threshold'] = 0.20
+    session.parameters['min_path_length'] = 3
+    session.parameters['enable_optimization'] = False
+    session.parameters['show_pre_optimization'] = True
+
+    with session.lock:
+        session.auto_tune_progress.update({
+            'running': False,
+            'finished': True,
+            'success': False,
+            'timed_out': False,
+            'cancelled': True,
+            'high_confidence_reached': False,
+            'message': 'Auto-tune cancelled before a reliable candidate. Using safe defaults with optimization off.',
+            'updated_parameters': dict(session.parameters),
+        })
+
+    return jsonify({
+        'success': False,
+        'used_best_so_far': False,
+        'error': 'Auto-tune stopped before a reliable candidate was found. Using defaults with optimization turned off.',
+        'updated_parameters': session.parameters,
+    })
 
 @app.route('/process', methods=['POST'])
 def process():

@@ -238,10 +238,282 @@
             background: #f8f9fa;
             min-height: 300px;
             max-height: 400px;
+            position: relative;
             display: flex;
             align-items: center;
             justify-content: center;
             overflow: hidden;
+            user-select: none;
+        }
+
+        .image-display-meta {
+            display: none;
+            margin-bottom: 8px;
+            color: #51606f;
+            font-size: 0.88em;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .image-display-meta.visible {
+            display: flex;
+        }
+
+        .image-display-meta .meta-text {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .crop-toggle-btn {
+            flex-shrink: 0;
+            background: none;
+            border: 1px solid #b0bec5;
+            border-radius: 5px;
+            color: #51606f;
+            font-size: 0.82em;
+            padding: 3px 9px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+        }
+
+        .crop-toggle-btn:hover {
+            background: #e3f2fd;
+            border-color: #4facfe;
+            color: #2176ae;
+        }
+
+        .crop-toggle-btn.active {
+            background: #e8f5e9;
+            border-color: #66bb6a;
+            color: #2e7d32;
+            font-weight: 600;
+        }
+
+        .crop-reset-btn {
+            flex-shrink: 0;
+            background: none;
+            border: 1px solid #e0e0e0;
+            border-radius: 5px;
+            color: #888;
+            font-size: 0.82em;
+            padding: 3px 9px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .crop-reset-btn:hover {
+            background: #fce4ec;
+            border-color: #ef9a9a;
+            color: #c62828;
+        }
+
+        /* Crop overlay elements */
+        .crop-mask {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.52);
+            pointer-events: none;
+            z-index: 6;
+        }
+
+        #cropBorderBox {
+            position: absolute;
+            box-sizing: border-box;
+            border: 1.5px solid rgba(255, 255, 255, 0.92);
+            box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+            z-index: 7;
+            pointer-events: none;
+        }
+
+        .crop-edge-handle {
+            position: absolute;
+            pointer-events: all;
+            z-index: 8;
+        }
+
+        .crop-edge-handle.edge-left,
+        .crop-edge-handle.edge-right {
+            cursor: ew-resize;
+            width: 18px;
+            top: 0;
+            bottom: 0;
+        }
+
+        .crop-edge-handle.edge-top,
+        .crop-edge-handle.edge-bottom {
+            cursor: ns-resize;
+            height: 18px;
+            left: 0;
+            right: 0;
+        }
+
+        .crop-edge-handle.edge-left  { left:  -9px; }
+        .crop-edge-handle.edge-right { right: -9px; }
+        .crop-edge-handle.edge-top   { top:   -9px; }
+        .crop-edge-handle.edge-bottom { bottom: -9px; }
+
+        /* Visible grip bar inside each handle */
+        .crop-edge-handle::after {
+            content: '';
+            position: absolute;
+            background: rgba(255, 255, 255, 0.82);
+            border-radius: 2px;
+            box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        .crop-edge-handle.edge-left::after,
+        .crop-edge-handle.edge-right::after {
+            width: 3px;
+            height: 30px;
+        }
+
+        .crop-edge-handle.edge-top::after,
+        .crop-edge-handle.edge-bottom::after {
+            height: 3px;
+            width: 30px;
+        }
+
+        .crop-edge-handle:hover::after {
+            background: #4facfe;
+            box-shadow: 0 0 6px rgba(79, 172, 254, 0.75);
+        }
+
+        .crop-edge-handle.dragging::after {
+            background: #29b6f6;
+        }
+
+        .image-display.has-image {
+            background: #eef2f6;
+        }
+
+        .image-display.space-pan {
+            cursor: grab;
+        }
+
+        .image-display.is-dragging {
+            cursor: grabbing;
+        }
+
+        .sample-bbox {
+            position: absolute;
+            border: 2px dashed #ff6f00;
+            box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.75), 0 0 18px rgba(255, 111, 0, 0.35);
+            pointer-events: none;
+            z-index: 3;
+            animation: samplePulse 1.1s ease-in-out infinite;
+        }
+
+        .sample-bbox.sample-bbox-tile {
+            border-color: rgba(255, 111, 0, 0.55);
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.7), 0 0 10px rgba(255, 111, 0, 0.18);
+            animation: none;
+        }
+
+        .sample-bbox.sample-bbox-tile.active {
+            border-color: #ff6f00;
+            box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.75), 0 0 20px rgba(255, 111, 0, 0.4);
+            animation: samplePulse 1.0s ease-in-out infinite;
+            z-index: 4;
+        }
+
+        .sample-bbox-label {
+            position: absolute;
+            top: 4px;
+            left: 4px;
+            background: rgba(255, 111, 0, 0.95);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 8px;
+            border-radius: 12px;
+            white-space: nowrap;
+        }
+
+        .tile-tune-panel {
+            display: none;
+            margin-top: 12px;
+            padding: 12px 14px;
+            border-radius: 10px;
+            border: 1px solid #ffd6b0;
+            background: linear-gradient(180deg, #fffaf4 0%, #fff5e9 100%);
+        }
+
+        .tile-tune-title {
+            font-size: 0.95em;
+            font-weight: 700;
+            color: #a14d00;
+            margin-bottom: 6px;
+        }
+
+        .tile-tune-details {
+            font-size: 0.86em;
+            color: #6e3f11;
+            margin-bottom: 10px;
+        }
+
+        .tile-tune-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .tile-score-card {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px 14px;
+            margin-bottom: 5px;
+        }
+
+        .tile-score-stat {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            font-size: 0.84em;
+            color: #5a3000;
+        }
+
+        .tile-score-stat strong { color: #a14d00; }
+        .tile-score-stat.noise-good strong { color: #2e7d32; }
+        .tile-score-stat.noise-mid strong { color: #c75000; }
+        .tile-score-stat.noise-bad strong { color: #c62828; }
+
+        .tile-score-params {
+            font-size: 0.80em;
+            color: #9a5d1a;
+            margin-top: 1px;
+        }
+
+        @keyframes samplePulse {
+            0% { opacity: 0.70; }
+            50% { opacity: 1.0; }
+            100% { opacity: 0.70; }
+        }
+
+        @keyframes autoTunePathFlow {
+            0% { stroke-dashoffset: 18; }
+            100% { stroke-dashoffset: 0; }
+        }
+
+        @keyframes autoTunePathFlash {
+            0% { opacity: 0.30; stroke-width: 2.8px; }
+            100% { opacity: 0.95; stroke-width: 1.5px; }
+        }
+
+        .auto-tune-path-current {
+            stroke-dasharray: 7 5;
+            animation: autoTunePathFlow 0.9s linear infinite;
+        }
+
+        .auto-tune-path-best {
+            opacity: 0.88;
+        }
+
+        .auto-tune-path-burst {
+            animation: autoTunePathFlash 0.35s ease-out, autoTunePathFlow 0.9s linear infinite;
         }
 
         .image-display img {
@@ -249,12 +521,8 @@
             max-height: 400px;
             border-radius: 8px;
             cursor: pointer;
-            transition: transform 0.3s ease;
             object-fit: contain;
-        }
-
-        .image-display img:hover {
-            transform: scale(1.02);
+            will-change: transform;
         }
 
         /* Modal styles for full-size image viewing */
@@ -336,6 +604,29 @@
             grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
             gap: 15px;
             margin-bottom: 20px;
+        }
+
+        .opt-progress-wrap {
+            margin-top: 10px;
+        }
+        .opt-progress-bar-track {
+            width: 100%;
+            height: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .opt-progress-bar-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #4facfe, #00f2fe);
+            border-radius: 4px;
+            transition: width 0.6s ease;
+        }
+        .opt-progress-label {
+            font-size: 0.78em;
+            color: #888;
+            margin-top: 3px;
         }
 
         .stat-card {
@@ -482,6 +773,7 @@
             backdrop-filter: blur(2px);
             border: 3px dashed #4facfe;
             z-index: 9999;
+            pointer-events: none;
             align-items: center;
             justify-content: center;
             flex-direction: column;
@@ -510,7 +802,7 @@
     <div class="container">
         <div class="header">
             <h1>🎯 Centerline Extraction Tool</h1>
-            <p>Interactive centerline extraction v1.2 Nicholas Leqeta</p>
+            <p>Interactive centerline extraction v1.4 Nicholas Leqeta</p>
         </div>
         
         <div class="main-content">
@@ -524,6 +816,18 @@
                         <label for="fileInput" class="btn" id="chooseFileBtn">Choose File</label>
                     </div>
                     <div id="preprocessStatus" class="preprocess-status" style="display: none;"></div>
+                    <div class="parameter" id="rawPreviewToggleWrap" style="display: none; margin-top: 8px;">
+                        <label>
+                            <input type="checkbox" id="showRawPreview">
+                            Show Raw Image
+                        </label>
+                        <small style="color: #666; font-size: 0.8em;">When unchecked, the preview shows the normalized image used for detection.</small>
+                    </div>
+                    <div class="parameter" style="margin-top: 8px;">
+                        <label>Detection Image Opacity <span class="range-value" id="detectionImageOpacityValue">100</span>%</label>
+                        <input type="range" id="detectionImageOpacity" min="0" max="100" step="1" value="100">
+                        <small style="color: #666; font-size: 0.8em;">Set to 0% to hide the image while keeping path overlays visible.</small>
+                    </div>
                 </div>
 
                 <div class="parameter-group">
@@ -666,6 +970,7 @@
 
             <div class="content-area">
                 <div id="messageArea"></div>
+                <div class="image-display-meta" id="imageDisplayMeta"></div>
                 
                 <div class="image-display" id="imageDisplay">
                     <div style="text-align: center; color: #999;">
@@ -687,6 +992,17 @@
                     <div id="loadingDetails" style="font-size: 0.9em; color: #666; margin-top: 10px;"></div>
                     <div class="loading-actions" id="loadingActions" style="display: none;">
                         <button class="btn btn-secondary" id="skipAutoTuneBtn" onclick="skipAutoTune()">Skip</button>
+                    </div>
+                </div>
+
+                <div class="tile-tune-panel" id="tileTunePanel">
+                    <div class="tile-tune-title">Auto Detection Tuning Review</div>
+                    <div class="tile-tune-details" id="tileTuneDetails">
+                        Adjust threshold and min path length. Preview updates inside sampled tiles only.
+                    </div>
+                    <div class="tile-tune-actions">
+                        <button class="btn" id="acceptTileTuneBtn" onclick="acceptTileTuningAndContinue()">✅ Accept and Continue</button>
+                        <button class="btn btn-secondary" id="resampleTileTuneBtn" onclick="resampleTileTuning()">🔁 Shuffle Tiles</button>
                     </div>
                 </div>
 
@@ -746,10 +1062,1038 @@
         let touchedParameterIds = new Set();
         let activeRequestControllers = new Set();
         let requestEpoch = 0;
+        let autoTuneProgressInterval = null;
+        let autoTuneOverlayLastFrameId = 0;
+        let lastAutoTuneSampleMetadata = null;
+        let lastLiveOverlayProgressData = null;
+        let lastMagentaSkeletonPaths = null;
+        let currentUploadDisplayImages = {
+            raw: null,
+            normalized: null,
+            shape: null,
+            normalizationApplied: false,
+        };
+        let imageViewportState = {
+            scale: 1,
+            translateX: 0,
+            translateY: 0,
+            isDragging: false,
+            dragStartX: 0,
+            dragStartY: 0,
+            dragOriginX: 0,
+            dragOriginY: 0,
+            dragMoved: false,
+            suppressClick: false,
+            spacePressed: false,
+        };
+        let cropState = {
+            enabled: false,
+            left: 0,
+            top: 0,
+            right: 1,
+            bottom: 1,
+            draggingEdge: null,
+            dragStartSnapshot: null,
+        };
+        const TILE_REVIEW_SKIP_RUNTIME_MS = 180;
+        let tileTuneReviewState = {
+            active: false,
+            sampleMetadata: null,
+            shouldProcessAfter: false,
+            previewToken: 0,
+            previewInFlight: false,
+            debounceTimer: null,
+            lastTileData: null,
+            lastSourceShape: null,
+            lastPreviewRuntimeMs: null,
+            pendingAutoSkipDecision: false,
+            fullImagePreviewMode: false
+        };
+
+        function clearSampleBoundingBox() {
+            const existing = document.getElementById('sampleBoundingBox');
+            if (existing) {
+                existing.remove();
+            }
+        }
+
+        function clearLivePathsOverlay() {
+            const existing = document.getElementById('autoTunePathsOverlay');
+            if (existing) existing.remove();
+            autoTuneOverlayLastFrameId = 0;
+        }
+
+        function clearModalLivePathsOverlay() {
+            const existing = document.getElementById('autoTunePathsOverlayModal');
+            if (existing) existing.remove();
+        }
+
+        function clearMagentaSkeletonOverlay() {
+            const existing = document.getElementById('magentaSkeletonOverlay');
+            if (existing) existing.remove();
+        }
+
+        function renderMagentaSkeletonOverlay() {
+            const paths = lastMagentaSkeletonPaths;
+            const mainImage = document.getElementById('mainImage');
+            const imageDisplay = document.getElementById('imageDisplay');
+            const sourceShape = currentUploadDisplayImages.shape;
+            if (!paths || !paths.length || !mainImage || !imageDisplay ||
+                    !Array.isArray(sourceShape) || sourceShape.length < 2) {
+                clearMagentaSkeletonOverlay();
+                return;
+            }
+            const imgRect = mainImage.getBoundingClientRect();
+            const containerRect = imageDisplay.getBoundingClientRect();
+            const offsetLeft = imgRect.left - containerRect.left;
+            const offsetTop = imgRect.top - containerRect.top;
+            const srcRows = Number(sourceShape[0]);
+            const srcCols = Number(sourceShape[1]);
+            if (srcRows <= 0 || srcCols <= 0) return;
+            const scaleX = imgRect.width / srcCols;
+            const scaleY = imgRect.height / srcRows;
+            let svg = document.getElementById('magentaSkeletonOverlay');
+            if (!svg) {
+                svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                svg.id = 'magentaSkeletonOverlay';
+                svg.style.cssText = 'position:absolute;pointer-events:none;overflow:visible;z-index:3;';
+                imageDisplay.appendChild(svg);
+            }
+            svg.style.left = offsetLeft + 'px';
+            svg.style.top = offsetTop + 'px';
+            svg.style.width = imgRect.width + 'px';
+            svg.style.height = imgRect.height + 'px';
+            let html = '';
+            for (const path of paths) {
+                if (!path || path.length < 2) continue;
+                let d = '';
+                for (let i = 0; i < path.length; i++) {
+                    const r = path[i][0];
+                    const c = path[i][1];
+                    const x = (c * scaleX).toFixed(1);
+                    const y = (r * scaleY).toFixed(1);
+                    d += (i === 0 ? 'M' : 'L') + x + ' ' + y;
+                }
+                html += '<path d="' + d + '" fill="none" stroke="rgba(255,0,220,0.75)" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>';
+            }
+            svg.innerHTML = html;
+        }
+
+        function rerenderCurrentImageOverlays() {
+            if (tileTuneReviewState.active) {
+                renderSampleBoundingBox(tileTuneReviewState.sampleMetadata, 0);
+                renderTilePreviewOverlay(
+                    tileTuneReviewState.lastTileData || [],
+                    tileTuneReviewState.lastSourceShape || []
+                );
+                renderCropOverlay();
+                return;
+            }
+
+            if (lastLiveOverlayProgressData) {
+                renderLivePathsOverlay(lastLiveOverlayProgressData);
+            } else {
+                clearLivePathsOverlay();
+            }
+
+            if (lastAutoTuneSampleMetadata && lastAutoTuneSampleMetadata.sampled) {
+                renderSampleBoundingBox(lastAutoTuneSampleMetadata, 0);
+            } else {
+                clearSampleBoundingBox();
+            }
+
+            renderMagentaSkeletonOverlay();
+            renderCropOverlay();
+        }
+
+        function updateImageDisplayInteractionState() {
+            const imageDisplay = document.getElementById('imageDisplay');
+            if (!imageDisplay) return;
+
+            imageDisplay.classList.toggle('space-pan', Boolean(imageViewportState.spacePressed && document.getElementById('mainImage')));
+            imageDisplay.classList.toggle('is-dragging', Boolean(imageViewportState.isDragging));
+        }
+
+        function applyImageViewportTransform() {
+            const mainImage = document.getElementById('mainImage');
+            if (mainImage) {
+                mainImage.style.transformOrigin = 'center center';
+                mainImage.style.transform = `translate(${imageViewportState.translateX}px, ${imageViewportState.translateY}px) scale(${imageViewportState.scale})`;
+            }
+            applyDetectionImageOpacity();
+            rerenderCurrentImageOverlays();
+            updateImageDisplayInteractionState();
+        }
+
+        function resetImageViewport() {
+            imageViewportState.scale = 1;
+            imageViewportState.translateX = 0;
+            imageViewportState.translateY = 0;
+            imageViewportState.isDragging = false;
+            imageViewportState.dragStartX = 0;
+            imageViewportState.dragStartY = 0;
+            imageViewportState.dragOriginX = 0;
+            imageViewportState.dragOriginY = 0;
+            imageViewportState.dragMoved = false;
+            imageViewportState.suppressClick = false;
+            applyImageViewportTransform();
+        }
+
+        function handleMainImageClick(event, imageSrc) {
+            if (imageViewportState.suppressClick) {
+                event.preventDefault();
+                event.stopPropagation();
+                imageViewportState.suppressClick = false;
+                return;
+            }
+            openImageModal(imageSrc);
+        }
+
+        function applyDetectionImageOpacity() {
+            const slider = document.getElementById('detectionImageOpacity');
+            const opacity = slider ? Math.max(0, Math.min(100, Number(slider.value || 100))) / 100.0 : 1.0;
+
+            const mainImage = document.getElementById('mainImage');
+            if (mainImage) {
+                mainImage.style.opacity = String(opacity);
+            }
+
+            const modalImage = document.getElementById('modalImage');
+            if (modalImage) {
+                modalImage.style.opacity = String(opacity);
+            }
+        }
+
+        function updateImageDisplayMeta() {
+            const meta = document.getElementById('imageDisplayMeta');
+            const shape = currentUploadDisplayImages.shape;
+            if (!meta) return;
+
+            if (!Array.isArray(shape) || shape.length < 2) {
+                meta.innerHTML = '';
+                meta.classList.remove('visible');
+                return;
+            }
+
+            const cropActive = cropState.enabled;
+            const cropLabel = cropActive
+                ? ` &nbsp;|&nbsp; Crop: L${Math.round(cropState.left*100)}% T${Math.round(cropState.top*100)}% R${Math.round(cropState.right*100)}% B${Math.round(cropState.bottom*100)}%`
+                : '';
+            meta.innerHTML =
+                `<span class="meta-text">Detection image: ${shape[1]} \u00d7 ${shape[0]} px. Wheel to zoom. Middle-drag / Space-drag to pan.${cropLabel}</span>` +
+                `<button class="crop-toggle-btn${cropActive ? ' active' : ''}" onclick="toggleCropMode()" title="Toggle crop frame">` +
+                    (cropActive ? '✂ Crop On' : '✂ Crop') +
+                `</button>` +
+                (cropActive
+                    ? `<button class="crop-reset-btn" onclick="resetCrop()" title="Reset crop to full image">↩ Reset</button>`
+                    : '');
+            meta.classList.add('visible');
+        }
+
+        function toggleCropMode() {
+            const before = getEffectiveCropSnapshot();
+            cropState.enabled = !cropState.enabled;
+            if (!cropState.enabled) {
+                cropState.draggingEdge = null;
+                clearCropOverlay();
+            } else {
+                renderCropOverlay();
+            }
+            updateImageDisplayMeta();
+            restartDetectionIfCropChanged(before, getEffectiveCropSnapshot());
+        }
+
+        function resetCrop() {
+            const before = getEffectiveCropSnapshot();
+            cropState.left = 0;
+            cropState.top = 0;
+            cropState.right = 1;
+            cropState.bottom = 1;
+            cropState.draggingEdge = null;
+            renderCropOverlay();
+            updateImageDisplayMeta();
+            restartDetectionIfCropChanged(before, getEffectiveCropSnapshot());
+        }
+
+        function clearCropOverlay() {
+            const overlay = document.getElementById('cropOverlay');
+            if (overlay) overlay.remove();
+        }
+
+        function renderCropOverlay() {
+            const mainImage = document.getElementById('mainImage');
+            const imageDisplay = document.getElementById('imageDisplay');
+            if (!mainImage || !imageDisplay || !cropState.enabled) {
+                clearCropOverlay();
+                return;
+            }
+
+            const imgRect = mainImage.getBoundingClientRect();
+            const containerRect = imageDisplay.getBoundingClientRect();
+
+            // Image region in container-relative px
+            const imgL = imgRect.left - containerRect.left;
+            const imgT = imgRect.top - containerRect.top;
+            const imgW = imgRect.width;
+            const imgH = imgRect.height;
+
+            // Crop rectangle in container-relative px
+            const cx1 = imgL + cropState.left * imgW;
+            const cy1 = imgT + cropState.top * imgH;
+            const cx2 = imgL + cropState.right * imgW;
+            const cy2 = imgT + cropState.bottom * imgH;
+            const cw = Math.max(0, cx2 - cx1);
+            const ch = Math.max(0, cy2 - cy1);
+
+            let overlay = document.getElementById('cropOverlay');
+            let isNew = false;
+            if (!overlay) {
+                isNew = true;
+                overlay = document.createElement('div');
+                overlay.id = 'cropOverlay';
+                overlay.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:6;overflow:visible;';
+
+                ['top', 'bottom', 'left', 'right'].forEach(side => {
+                    const mask = document.createElement('div');
+                    mask.className = `crop-mask crop-mask-${side}`;
+                    overlay.appendChild(mask);
+                });
+
+                const border = document.createElement('div');
+                border.id = 'cropBorderBox';
+                border.className = 'crop-border-box';
+
+                ['left', 'top', 'right', 'bottom'].forEach(edge => {
+                    const handle = document.createElement('div');
+                    handle.className = `crop-edge-handle edge-${edge}`;
+                    handle.dataset.edge = edge;
+                    handle.addEventListener('mousedown', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        cropState.draggingEdge = edge;
+                        cropState.dragStartSnapshot = getEffectiveCropSnapshot();
+                        handle.classList.add('dragging');
+                        updateImageDisplayInteractionState();
+                    });
+                    border.appendChild(handle);
+                });
+
+                overlay.appendChild(border);
+                imageDisplay.appendChild(overlay);
+            }
+
+            // Update mask positions
+            const setStyle = (el, css) => { if (el) el.style.cssText = css; };
+            const pn = (v) => `${v.toFixed(1)}px`;
+
+            setStyle(overlay.querySelector('.crop-mask-top'),
+                `position:absolute;background:rgba(0,0,0,0.52);pointer-events:none;left:${pn(imgL)};top:${pn(imgT)};width:${pn(imgW)};height:${pn(Math.max(0,cy1-imgT))};`);
+            setStyle(overlay.querySelector('.crop-mask-bottom'),
+                `position:absolute;background:rgba(0,0,0,0.52);pointer-events:none;left:${pn(imgL)};top:${pn(cy2)};width:${pn(imgW)};height:${pn(Math.max(0,imgT+imgH-cy2))};`);
+            setStyle(overlay.querySelector('.crop-mask-left'),
+                `position:absolute;background:rgba(0,0,0,0.52);pointer-events:none;left:${pn(imgL)};top:${pn(cy1)};width:${pn(Math.max(0,cx1-imgL))};height:${pn(ch)};`);
+            setStyle(overlay.querySelector('.crop-mask-right'),
+                `position:absolute;background:rgba(0,0,0,0.52);pointer-events:none;left:${pn(cx2)};top:${pn(cy1)};width:${pn(Math.max(0,imgL+imgW-cx2))};height:${pn(ch)};`);
+
+            const border = document.getElementById('cropBorderBox');
+            if (border) {
+                border.style.cssText = `position:absolute;box-sizing:border-box;border:1.5px solid rgba(255,255,255,0.92);box-shadow:0 0 0 1px rgba(0,0,0,0.45);z-index:7;pointer-events:none;left:${pn(cx1)};top:${pn(cy1)};width:${pn(cw)};height:${pn(ch)};`;
+            }
+        }
+
+        function getCropParams() {
+            if (!cropState.enabled) return null;
+            const EPS = 0.002;
+            if (cropState.left < EPS && cropState.top < EPS &&
+                cropState.right > 1 - EPS && cropState.bottom > 1 - EPS) {
+                return null;
+            }
+            return { left: cropState.left, top: cropState.top, right: cropState.right, bottom: cropState.bottom };
+        }
+
+        function getEffectiveCropSnapshot() {
+            const crop = getCropParams();
+            if (!crop) {
+                return { left: 0, top: 0, right: 1, bottom: 1 };
+            }
+            return {
+                left: Number(crop.left),
+                top: Number(crop.top),
+                right: Number(crop.right),
+                bottom: Number(crop.bottom),
+            };
+        }
+
+        function cropSnapshotChanged(a, b) {
+            if (!a || !b) return true;
+            const EPS = 0.002;
+            return (
+                Math.abs(a.left - b.left) > EPS ||
+                Math.abs(a.top - b.top) > EPS ||
+                Math.abs(a.right - b.right) > EPS ||
+                Math.abs(a.bottom - b.bottom) > EPS
+            );
+        }
+
+        function restartDetectionIfCropChanged(beforeSnapshot, afterSnapshot) {
+            if (!cropSnapshotChanged(beforeSnapshot, afterSnapshot)) {
+                return;
+            }
+            if (!currentSessionId) {
+                return;
+            }
+
+            // Crop changes invalidate previous sampling and tuning overlays.
+            exitTileTuneReview({ clearOverlays: true });
+            abortAllActiveRequests();
+            cancelActiveUiWork();
+            signalOptimizationStop(currentSessionId);
+            stopAutoTuneProgressPolling();
+            showProgressMessage('Crop updated. Restarting detection phase inside the selected area...', 'info');
+            startUploadAutoTune(autoProcessEnabled);
+        }
+
+        function renderDisplayedUploadImage() {
+            const imageDisplay = document.getElementById('imageDisplay');
+            if (!imageDisplay) return;
+
+            const showRawCheckbox = document.getElementById('showRawPreview');
+            const showRaw = Boolean(showRawCheckbox && showRawCheckbox.checked);
+
+            const previewData = showRaw
+                ? (currentUploadDisplayImages.raw || currentUploadDisplayImages.normalized)
+                : (currentUploadDisplayImages.normalized || currentUploadDisplayImages.raw);
+            if (!previewData) {
+                return;
+            }
+
+            imageDisplay.classList.add('has-image');
+            const imgElement = `<img src="data:image/png;base64,${previewData}" alt="Uploaded Image" onclick="handleMainImageClick(event, this.src)" id="mainImage">`;
+            imageDisplay.innerHTML = imgElement;
+
+            // Recreate overlays after swapping raw/normalized preview image.
+            clearSampleBoundingBox();
+            clearLivePathsOverlay();
+            if (tileTuneReviewState.active) {
+                renderSampleBoundingBox(tileTuneReviewState.sampleMetadata, 0);
+                renderTilePreviewOverlay(
+                    tileTuneReviewState.lastTileData || [],
+                    tileTuneReviewState.lastSourceShape || []
+                );
+            } else if (lastAutoTuneSampleMetadata && lastAutoTuneSampleMetadata.sampled) {
+                renderSampleBoundingBox(lastAutoTuneSampleMetadata, 0);
+            }
+
+            renderMagentaSkeletonOverlay();
+            updateImageDisplayMeta();
+            applyDetectionImageOpacity();
+        }
+
+        function updateRawPreviewToggleVisibility() {
+            const wrap = document.getElementById('rawPreviewToggleWrap');
+            const checkbox = document.getElementById('showRawPreview');
+            if (!wrap || !checkbox) return;
+
+            const canToggleRaw = Boolean(currentUploadDisplayImages.normalizationApplied && currentUploadDisplayImages.raw && currentUploadDisplayImages.normalized);
+            wrap.style.display = canToggleRaw ? 'block' : 'none';
+            if (!canToggleRaw) {
+                checkbox.checked = false;
+            }
+        }
+
+        function buildTileOverlayPathsSvg(tileData, scaleX, scaleY) {
+            let html = '';
+            // rank 0 = longest path (brightest/thickest), higher ranks = dimmer/thinner
+            const rankStyles = [
+                { stroke: 'rgba(255,82,82,0.92)', width: '2.2' },
+                { stroke: 'rgba(255,130,50,0.70)', width: '1.5' },
+                { stroke: 'rgba(255,185,50,0.52)', width: '1.2' },
+            ];
+            const defaultStyle = { stroke: 'rgba(255,185,50,0.38)', width: '1.0' };
+
+            tileData.forEach(tile => {
+                const paths = Array.isArray(tile && tile.paths) ? tile.paths : [];
+                paths.forEach(pathItem => {
+                    const points = Array.isArray(pathItem && pathItem.points) ? pathItem.points : [];
+                    if (points.length < 2) return;
+                    const style = rankStyles[Number(pathItem.rank || 0)] || defaultStyle;
+                    let d = '';
+                    points.forEach((pt, idx) => {
+                        const y = Number(pt[0] || 0);
+                        const x = Number(pt[1] || 0);
+                        const sx = (x * scaleX).toFixed(1);
+                        const sy = (y * scaleY).toFixed(1);
+                        d += (idx === 0 ? 'M' : 'L') + sx + ' ' + sy;
+                    });
+                    html += `<path d="${d}" fill="none" stroke="${style.stroke}" stroke-width="${style.width}" stroke-linecap="round" stroke-linejoin="round"/>`;
+                });
+            });
+
+            return html;
+        }
+
+        function hideTileTunePanel() {
+            const panel = document.getElementById('tileTunePanel');
+            if (panel) panel.style.display = 'none';
+        }
+
+        function updateTileTuneActionButtons() {
+            const shuffleBtn = document.getElementById('resampleTileTuneBtn');
+            if (!shuffleBtn) return;
+
+            const samplingMode = String((tileTuneReviewState.sampleMetadata && tileTuneReviewState.sampleMetadata.sampling_mode) || 'full_image');
+            const showShuffle = !tileTuneReviewState.fullImagePreviewMode && samplingMode === 'random_tiles_mosaic';
+            shuffleBtn.style.display = showShuffle ? '' : 'none';
+        }
+
+        function setTileTuneDetails(html) {
+            const details = document.getElementById('tileTuneDetails');
+            if (details && html != null) {
+                details.innerHTML = html;
+            }
+        }
+
+        function renderTilePreviewOverlay(tileData, sourceShape) {
+            const hasAnyPaths = Array.isArray(tileData) && tileData.some(t => t.paths && t.paths.length > 0);
+            if (!Array.isArray(tileData) || !hasAnyPaths) {
+                clearLivePathsOverlay();
+                return;
+            }
+
+            const mainImage = document.getElementById('mainImage');
+            const imageDisplay = document.getElementById('imageDisplay');
+            if (!mainImage || !imageDisplay || !Array.isArray(sourceShape) || sourceShape.length < 2) {
+                return;
+            }
+
+            const imgRect = mainImage.getBoundingClientRect();
+            const containerRect = imageDisplay.getBoundingClientRect();
+            const offsetLeft = imgRect.left - containerRect.left;
+            const offsetTop = imgRect.top - containerRect.top;
+            const srcRows = Number(sourceShape[0]);
+            const srcCols = Number(sourceShape[1]);
+            if (srcRows <= 0 || srcCols <= 0) {
+                return;
+            }
+
+            const scaleX = imgRect.width / srcCols;
+            const scaleY = imgRect.height / srcRows;
+
+            let svg = document.getElementById('autoTunePathsOverlay');
+            if (!svg) {
+                svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                svg.setAttribute('id', 'autoTunePathsOverlay');
+                svg.style.position = 'absolute';
+                svg.style.left = `${offsetLeft}px`;
+                svg.style.top = `${offsetTop}px`;
+                svg.style.width = `${imgRect.width}px`;
+                svg.style.height = `${imgRect.height}px`;
+                svg.style.pointerEvents = 'none';
+                svg.style.zIndex = '4';
+                imageDisplay.appendChild(svg);
+            } else {
+                svg.style.left = `${offsetLeft}px`;
+                svg.style.top = `${offsetTop}px`;
+                svg.style.width = `${imgRect.width}px`;
+                svg.style.height = `${imgRect.height}px`;
+            }
+
+            svg.innerHTML = buildTileOverlayPathsSvg(tileData, scaleX, scaleY);
+        }
+
+        function renderTilePreviewOverlayModal(tileData, sourceShape) {
+            const hasAnyPaths = Array.isArray(tileData) && tileData.some(t => t.paths && t.paths.length > 0);
+            if (!Array.isArray(tileData) || !hasAnyPaths) {
+                clearModalLivePathsOverlay();
+                return;
+            }
+
+            const modal = document.getElementById('imageModal');
+            const modalImage = document.getElementById('modalImage');
+            if (!modal || !modalImage || modal.style.display !== 'block' || !Array.isArray(sourceShape) || sourceShape.length < 2) {
+                return;
+            }
+
+            const imgRect = modalImage.getBoundingClientRect();
+            const modalRect = modal.getBoundingClientRect();
+            const offsetLeft = imgRect.left - modalRect.left;
+            const offsetTop = imgRect.top - modalRect.top;
+            const srcRows = Number(sourceShape[0]);
+            const srcCols = Number(sourceShape[1]);
+            if (srcRows <= 0 || srcCols <= 0) {
+                return;
+            }
+
+            const scaleX = imgRect.width / srcCols;
+            const scaleY = imgRect.height / srcRows;
+
+            let svg = document.getElementById('autoTunePathsOverlayModal');
+            if (!svg) {
+                svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                svg.setAttribute('id', 'autoTunePathsOverlayModal');
+                svg.style.position = 'absolute';
+                svg.style.left = `${offsetLeft}px`;
+                svg.style.top = `${offsetTop}px`;
+                svg.style.width = `${imgRect.width}px`;
+                svg.style.height = `${imgRect.height}px`;
+                svg.style.pointerEvents = 'none';
+                svg.style.zIndex = '1001';
+                modal.appendChild(svg);
+            } else {
+                svg.style.left = `${offsetLeft}px`;
+                svg.style.top = `${offsetTop}px`;
+                svg.style.width = `${imgRect.width}px`;
+                svg.style.height = `${imgRect.height}px`;
+            }
+
+            svg.innerHTML = buildTileOverlayPathsSvg(tileData, scaleX, scaleY);
+        }
+
+        function exitTileTuneReview(options = {}) {
+            if (tileTuneReviewState.debounceTimer) {
+                clearTimeout(tileTuneReviewState.debounceTimer);
+                tileTuneReviewState.debounceTimer = null;
+            }
+            tileTuneReviewState.previewToken += 1;
+            tileTuneReviewState.previewInFlight = false;
+            tileTuneReviewState.active = false;
+            tileTuneReviewState.sampleMetadata = null;
+            tileTuneReviewState.shouldProcessAfter = false;
+            tileTuneReviewState.lastTileData = null;
+            tileTuneReviewState.lastSourceShape = null;
+            tileTuneReviewState.lastPreviewRuntimeMs = null;
+            tileTuneReviewState.pendingAutoSkipDecision = false;
+            tileTuneReviewState.fullImagePreviewMode = false;
+            hideTileTunePanel();
+            updateTileTuneActionButtons();
+            if (options.clearOverlays) {
+                clearSampleBoundingBox();
+                clearLivePathsOverlay();
+                clearModalLivePathsOverlay();
+            }
+        }
+
+        function enterTileTuneReview(sampleMetadata, shouldProcessAfter = false) {
+            tileTuneReviewState.active = true;
+            tileTuneReviewState.sampleMetadata = sampleMetadata || null;
+            tileTuneReviewState.shouldProcessAfter = Boolean(shouldProcessAfter);
+            tileTuneReviewState.previewToken += 1;
+            tileTuneReviewState.lastPreviewRuntimeMs = null;
+            tileTuneReviewState.fullImagePreviewMode = false;
+
+            const panel = document.getElementById('tileTunePanel');
+            if (panel) panel.style.display = 'block';
+
+            const samplingMode = String((sampleMetadata && sampleMetadata.sampling_mode) || 'full_image');
+            const tileCount = Number((sampleMetadata && sampleMetadata.tile_count) || 0);
+            tileTuneReviewState.pendingAutoSkipDecision = samplingMode === 'random_tiles_mosaic' && tileCount > 0;
+            if (samplingMode === 'random_tiles_mosaic' && tileCount > 0) {
+                setTileTuneDetails(`Adjust sliders to tune threshold/min length. Preview updates inside ${tileCount} sampled tiles only.`);
+            } else {
+                setTileTuneDetails('Adjust sliders to tune threshold/min length. Preview updates on sampled area only.');
+            }
+            updateTileTuneActionButtons();
+
+            renderSampleBoundingBox(sampleMetadata, 0);
+            requestTileOnlyPreview();
+        }
+
+        function requestTileOnlyPreview(options = {}) {
+            if (!tileTuneReviewState.active || !currentSessionId) {
+                return;
+            }
+
+            const runFetch = () => {
+                if (tileTuneReviewState.previewInFlight) {
+                    return;
+                }
+
+                const requestToken = tileTuneReviewState.previewToken + 1;
+                tileTuneReviewState.previewToken = requestToken;
+                tileTuneReviewState.previewInFlight = true;
+
+                const parameters = getParameters();
+                trackedFetch('/auto_tune_tile_preview', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        dark_threshold: Number(parameters.dark_threshold || 0.20),
+                        min_path_length: Number(parameters.min_path_length || 3),
+                        sample_metadata: tileTuneReviewState.sampleMetadata,
+                        full_image_preview: Boolean(options.fullImagePreview || tileTuneReviewState.fullImagePreviewMode),
+                        crop_region: getCropParams(),
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (!tileTuneReviewState.active || requestToken !== tileTuneReviewState.previewToken) {
+                        return;
+                    }
+                    if (!data.success) {
+                        throw new Error(data.error || 'Tile preview failed');
+                    }
+
+                    tileTuneReviewState.sampleMetadata = data.sample_metadata || tileTuneReviewState.sampleMetadata;
+                    tileTuneReviewState.lastTileData = data.tile_data || [];
+                    tileTuneReviewState.lastSourceShape = data.source_shape || [];
+                    tileTuneReviewState.lastPreviewRuntimeMs = Number(data.preview_runtime_ms || 0);
+
+                    const shouldSwitchToFullImagePreview = tileTuneReviewState.pendingAutoSkipDecision &&
+                        tileTuneReviewState.lastPreviewRuntimeMs > 0 &&
+                        tileTuneReviewState.lastPreviewRuntimeMs <= TILE_REVIEW_SKIP_RUNTIME_MS;
+                    tileTuneReviewState.pendingAutoSkipDecision = false;
+
+                    if (shouldSwitchToFullImagePreview) {
+                        const runtimeLabel = `${Math.round(tileTuneReviewState.lastPreviewRuntimeMs)}ms`;
+                        tileTuneReviewState.fullImagePreviewMode = true;
+                        tileTuneReviewState.previewInFlight = false;
+                        updateTileTuneActionButtons();
+                        showProgressMessage(
+                            `Preview is fast (${runtimeLabel}), switching review overlay to full-image mode at native resolution for final tuning.`,
+                            'info'
+                        );
+                        requestTileOnlyPreview({ fullImagePreview: true });
+                        return;
+                    }
+
+                    updateTileTuneActionButtons();
+                    renderSampleBoundingBox(tileTuneReviewState.sampleMetadata, 0);
+                    renderTilePreviewOverlay(tileTuneReviewState.lastTileData, tileTuneReviewState.lastSourceShape);
+                    renderTilePreviewOverlayModal(tileTuneReviewState.lastTileData, tileTuneReviewState.lastSourceShape);
+
+                    const stats = data.stats || {};
+                    const totalLen = Number(stats.total_path_length || 0);
+                    const validPaths = Number(stats.total_valid_paths || 0);
+                    const orphanPaths = Number(stats.total_orphan_paths || 0);
+                    const noiseRatio = Number(stats.noise_ratio || 0);
+                    const coverageFmt = totalLen >= 1000 ? `${(totalLen / 1000).toFixed(1)}k` : String(totalLen);
+                    const noisePct = Math.round(noiseRatio * 100);
+                    const noiseClass = noiseRatio < 0.15 ? 'noise-good' : (noiseRatio < 0.35 ? 'noise-mid' : 'noise-bad');
+                    const noiseIcon = noiseRatio < 0.15 ? '🟢' : (noiseRatio < 0.35 ? '🟡' : '🔴');
+                    const runtimeMs = Math.round(tileTuneReviewState.lastPreviewRuntimeMs || 0);
+                    const previewScopeLabel = tileTuneReviewState.fullImagePreviewMode
+                        ? 'full image'
+                        : `${Math.max(1, Number((tileTuneReviewState.sampleMetadata && tileTuneReviewState.sampleMetadata.tile_count) || 0))} tiles`;
+                    setTileTuneDetails(
+                        `<div class="tile-score-card">` +
+                        `<span class="tile-score-stat">🧭 <strong>${previewScopeLabel}</strong> scope</span>` +
+                        `<span class="tile-score-stat">📏 <strong>${coverageFmt} px</strong> coverage</span>` +
+                        `<span class="tile-score-stat">✅ <strong>${validPaths}</strong> paths</span>` +
+                        `<span class="tile-score-stat ${noiseClass}">${noiseIcon} <strong>${noisePct}%</strong> noise (${orphanPaths} orphans)</span>` +
+                        `</div>` +
+                        `<div class="tile-score-params">thresh ${Number(data.dark_threshold || 0).toFixed(3)} — min len ${Math.round(Number(data.min_path_length || 0))} — preview ${runtimeMs}ms</div>`
+                    );
+                })
+                .catch(error => {
+                    if (isAbortError(error) || !tileTuneReviewState.active || requestToken !== tileTuneReviewState.previewToken) {
+                        return;
+                    }
+                    showMessage(`Tile preview error: ${error.message}`, 'warning');
+                })
+                .finally(() => {
+                    if (requestToken === tileTuneReviewState.previewToken) {
+                        tileTuneReviewState.previewInFlight = false;
+                    }
+                });
+            };
+
+            if (options.debounce) {
+                if (tileTuneReviewState.debounceTimer) {
+                    clearTimeout(tileTuneReviewState.debounceTimer);
+                }
+                tileTuneReviewState.debounceTimer = setTimeout(() => {
+                    tileTuneReviewState.debounceTimer = null;
+                    runFetch();
+                }, 280);
+                return;
+            }
+
+            runFetch();
+        }
+
+        function acceptTileTuningAndContinue() {
+            if (!tileTuneReviewState.active) {
+                processImage();
+                return;
+            }
+
+            exitTileTuneReview({ clearOverlays: true });
+            showProgressMessage('Tile tuning accepted. Processing full image with selected settings...', 'success');
+            processImage({ fromAutoTune: true });
+        }
+
+        function resampleTileTuning() {
+            if (!tileTuneReviewState.active || !currentSessionId) {
+                return;
+            }
+
+            setTileTuneDetails('Resampling tiles...');
+            trackedFetch('/auto_tune_sample_region', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: currentSessionId,
+                    crop_region: getCropParams(),
+                })
+            })
+            .then(response => response.json())
+            .then(sampleData => {
+                if (!tileTuneReviewState.active) {
+                    return;
+                }
+                if (!sampleData.success) {
+                    throw new Error(sampleData.error || 'Failed to resample tiles');
+                }
+                tileTuneReviewState.sampleMetadata = sampleData.sample_metadata || null;
+                tileTuneReviewState.pendingAutoSkipDecision = true;
+                tileTuneReviewState.fullImagePreviewMode = false;
+                renderSampleBoundingBox(tileTuneReviewState.sampleMetadata, 0);
+                requestTileOnlyPreview();
+            })
+            .catch(error => {
+                if (isAbortError(error) || !tileTuneReviewState.active) {
+                    return;
+                }
+                showMessage(`Tile resample error: ${error.message}`, 'error');
+            });
+        }
+
+        function stopAutoTuneProgressPolling() {
+            if (autoTuneProgressInterval) {
+                clearInterval(autoTuneProgressInterval);
+                autoTuneProgressInterval = null;
+            }
+            lastLiveOverlayProgressData = null;
+            clearLivePathsOverlay();
+            clearModalLivePathsOverlay();
+        }
+        function applyLiveAutoTuneCandidate(bestThreshold, bestMinLength) {
+            const thresholdSlider = document.getElementById('darkThreshold');
+            const minLengthSlider = document.getElementById('minPathLength');
+
+            if (thresholdSlider && Number.isFinite(bestThreshold)) {
+                thresholdSlider.value = Number(bestThreshold).toFixed(3);
+                updateRangeValue('darkThreshold');
+            }
+            if (minLengthSlider && Number.isFinite(bestMinLength)) {
+                minLengthSlider.value = Math.max(1, Math.round(bestMinLength));
+                updateRangeValue('minPathLength');
+            }
+        }
+
+        function renderSampleBoundingBox(sampleMetadata, activeTileIndex = 0) {
+            clearSampleBoundingBox();
+
+            if (!sampleMetadata || !sampleMetadata.sampled) {
+                return;
+            }
+
+            const imageDisplay = document.getElementById('imageDisplay');
+            const mainImage = document.getElementById('mainImage');
+            if (!imageDisplay || !mainImage || !mainImage.complete) {
+                return;
+            }
+
+            const sourceShape = sampleMetadata.source_shape || sampleMetadata.sample_shape;
+            if (!Array.isArray(sourceShape) || sourceShape.length < 2) {
+                return;
+            }
+
+            const sourceHeight = Number(sourceShape[0]);
+            const sourceWidth = Number(sourceShape[1]);
+            const samplingMode = String(sampleMetadata.sampling_mode || 'full_image');
+            const tileShape = sampleMetadata.tile_shape || [0, 0];
+            const tileHeight = Number(tileShape[0] || 0);
+            const tileWidth = Number(tileShape[1] || 0);
+            const tileOrigins = Array.isArray(sampleMetadata.tile_origins) ? sampleMetadata.tile_origins : [];
+            const sampleShape = sampleMetadata.sample_shape || [0, 0];
+            const sampleHeight = Number(sampleShape[0] || 0);
+            const sampleWidth = Number(sampleShape[1] || 0);
+            const sampleOrigin = sampleMetadata.sample_origin || [0, 0];
+            const originX = Number(sampleOrigin[0] || 0);
+            const originY = Number(sampleOrigin[1] || 0);
+
+            const activeCrop = getCropParams();
+            const cropPx = activeCrop
+                ? {
+                    x1: activeCrop.left * sourceWidth,
+                    y1: activeCrop.top * sourceHeight,
+                    x2: activeCrop.right * sourceWidth,
+                    y2: activeCrop.bottom * sourceHeight,
+                }
+                : null;
+
+            const clampRectToCrop = (x, y, w, h) => {
+                let rx1 = Number(x);
+                let ry1 = Number(y);
+                let rx2 = Number(x) + Number(w);
+                let ry2 = Number(y) + Number(h);
+                if (cropPx) {
+                    rx1 = Math.max(rx1, cropPx.x1);
+                    ry1 = Math.max(ry1, cropPx.y1);
+                    rx2 = Math.min(rx2, cropPx.x2);
+                    ry2 = Math.min(ry2, cropPx.y2);
+                }
+                const rw = rx2 - rx1;
+                const rh = ry2 - ry1;
+                if (rw <= 1 || rh <= 1) {
+                    return null;
+                }
+                return { x: rx1, y: ry1, w: rw, h: rh };
+            };
+
+            if (sourceWidth <= 0 || sourceHeight <= 0) {
+                return;
+            }
+
+            const imgRect = mainImage.getBoundingClientRect();
+            const containerRect = imageDisplay.getBoundingClientRect();
+            const offsetLeft = imgRect.left - containerRect.left;
+            const offsetTop = imgRect.top - containerRect.top;
+            const scaleX = imgRect.width / sourceWidth;
+            const scaleY = imgRect.height / sourceHeight;
+
+            if (samplingMode === 'random_tiles_mosaic' && tileOrigins.length > 0 && tileWidth > 0 && tileHeight > 0) {
+                const group = document.createElement('div');
+                group.id = 'sampleBoundingBox';
+
+                tileOrigins.forEach((origin, index) => {
+                    const tileX = Number(origin[0] || 0);
+                    const tileY = Number(origin[1] || 0);
+                    const clipped = clampRectToCrop(tileX, tileY, tileWidth, tileHeight);
+                    if (!clipped) {
+                        return;
+                    }
+                    const tileBox = document.createElement('div');
+                    tileBox.className = 'sample-bbox sample-bbox-tile';
+                    if (activeTileIndex > 0 && (index + 1) === activeTileIndex) {
+                        tileBox.classList.add('active');
+                    }
+                    tileBox.style.left = `${offsetLeft + clipped.x * scaleX}px`;
+                    tileBox.style.top = `${offsetTop + clipped.y * scaleY}px`;
+                    tileBox.style.width = `${Math.max(6, clipped.w * scaleX)}px`;
+                    tileBox.style.height = `${Math.max(6, clipped.h * scaleY)}px`;
+
+                    if (index === 0) {
+                        if (activeTileIndex > 0) {
+                            const label = document.createElement('div');
+                            label.className = 'sample-bbox-label';
+                            label.textContent = `Active tile #${activeTileIndex}`;
+                            tileBox.appendChild(label);
+                        }
+                    }
+
+                    group.appendChild(tileBox);
+                });
+
+                imageDisplay.appendChild(group);
+                return;
+            }
+
+            if (sampleWidth <= 0 || sampleHeight <= 0) {
+                return;
+            }
+
+            const clippedSample = clampRectToCrop(originX, originY, sampleWidth, sampleHeight);
+            if (!clippedSample) {
+                return;
+            }
+
+            const bbox = document.createElement('div');
+            bbox.id = 'sampleBoundingBox';
+            bbox.className = 'sample-bbox';
+            bbox.style.left = `${offsetLeft + clippedSample.x * scaleX}px`;
+            bbox.style.top = `${offsetTop + clippedSample.y * scaleY}px`;
+            bbox.style.width = `${Math.max(6, clippedSample.w * scaleX)}px`;
+            bbox.style.height = `${Math.max(6, clippedSample.h * scaleY)}px`;
+
+            const label = document.createElement('div');
+            label.className = 'sample-bbox-label';
+            label.textContent = 'Auto-tune sample area';
+            bbox.appendChild(label);
+            imageDisplay.appendChild(bbox);
+        }
 
         function invalidateRequestEpoch() {
             requestEpoch += 1;
             return requestEpoch;
+        }
+
+        function renderLivePathsOverlay(progressData) {
+            lastLiveOverlayProgressData = progressData || null;
+            const mainImage = document.getElementById('mainImage');
+            const imageDisplay = document.getElementById('imageDisplay');
+            const currentPaths = (progressData && Array.isArray(progressData.live_paths_current))
+                ? progressData.live_paths_current
+                : [];
+            const bestPaths = (progressData && Array.isArray(progressData.live_paths))
+                ? progressData.live_paths
+                : [];
+            const useCurrentFrame = currentPaths.length > 0;
+            const paths = useCurrentFrame ? currentPaths : bestPaths;
+            if (!mainImage || !imageDisplay || !paths || paths.length === 0) {
+                clearLivePathsOverlay();
+                return;
+            }
+            const frameId = Number(progressData && progressData.live_paths_frame_id ? progressData.live_paths_frame_id : 0);
+            const frameChanged = useCurrentFrame && frameId > 0 && frameId !== autoTuneOverlayLastFrameId;
+            if (frameChanged) {
+                autoTuneOverlayLastFrameId = frameId;
+            }
+            const scale = Number(progressData.live_paths_scale) || 1.0;
+            const origin = progressData.live_paths_sample_origin || [0, 0];
+            const sourceShape = progressData.live_paths_source_shape;
+            if (!Array.isArray(sourceShape) || sourceShape.length < 2 || !sourceShape[0] || !sourceShape[1]) {
+                return;
+            }
+            const imgRect = mainImage.getBoundingClientRect();
+            const containerRect = imageDisplay.getBoundingClientRect();
+            const offsetLeft = imgRect.left - containerRect.left;
+            const offsetTop = imgRect.top - containerRect.top;
+            const dispW = imgRect.width;
+            const dispH = imgRect.height;
+            const srcRows = Number(sourceShape[0]);
+            const srcCols = Number(sourceShape[1]);
+            const originRow = Number(origin[0] || 0);
+            const originCol = Number(origin[1] || 0);
+            const scaleX = dispW / srcCols;
+            const scaleY = dispH / srcRows;
+            let svg = document.getElementById('autoTunePathsOverlay');
+            if (!svg) {
+                svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                svg.id = 'autoTunePathsOverlay';
+                svg.style.cssText = 'position:absolute;pointer-events:none;overflow:visible;';
+                imageDisplay.appendChild(svg);
+            }
+            svg.style.left = offsetLeft + 'px';
+            svg.style.top = offsetTop + 'px';
+            svg.style.width = dispW + 'px';
+            svg.style.height = dispH + 'px';
+            const strokeColor = useCurrentFrame ? 'rgba(255,178,32,0.86)' : 'rgba(0,255,140,0.65)';
+            const pathClass = useCurrentFrame
+                ? (frameChanged ? 'auto-tune-path-current auto-tune-path-burst' : 'auto-tune-path-current')
+                : 'auto-tune-path-best';
+            let html = '';
+            for (const path of paths) {
+                if (!path || path.length < 2) continue;
+                let d = '';
+                for (let i = 0; i < path.length; i++) {
+                    const r = path[i][0];
+                    const c = path[i][1];
+                    const srcR = originRow + r / scale;
+                    const srcC = originCol + c / scale;
+                    const x = (srcC * scaleX).toFixed(1);
+                    const y = (srcR * scaleY).toFixed(1);
+                    d += (i === 0 ? 'M' : 'L') + x + ' ' + y;
+                }
+                html += '<path class="' + pathClass + '" d="' + d + '" fill="none" stroke="' + strokeColor + '" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
+            }
+            svg.innerHTML = html;
         }
 
         function isRequestStale(epoch) {
@@ -795,6 +2139,8 @@
         }
 
         function cancelActiveUiWork() {
+            stopAutoTuneProgressPolling();
+
             if (autoProcessTimeout) {
                 clearTimeout(autoProcessTimeout);
                 autoProcessTimeout = null;
@@ -808,6 +2154,9 @@
             autoTuneState.token += 1;
             autoTuneState.active = false;
             autoTuneState.shouldProcessAfter = false;
+            lastAutoTuneSampleMetadata = null;
+            exitTileTuneReview({ clearOverlays: true });
+            clearSampleBoundingBox();
             setLoadingActionButton(false);
             showLoading(false);
         }
@@ -841,12 +2190,30 @@
 
             currentSessionId = null;
             currentPreprocessingInfo = null;
+            currentUploadDisplayImages = {
+                raw: null,
+                normalized: null,
+                shape: null,
+                normalizationApplied: false,
+            };
             fileInput.value = '';
             autoProcessEnabled = true;
             setAutoProcessButtonState();
+            updateRawPreviewToggleVisibility();
 
             clearResults();
             document.getElementById('imageDisplay').innerHTML = initialImageDisplayMarkup;
+            document.getElementById('imageDisplay').classList.remove('has-image', 'space-pan', 'is-dragging');
+            const imageDisplayMeta = document.getElementById('imageDisplayMeta');
+            if (imageDisplayMeta) {
+                imageDisplayMeta.innerHTML = '';
+                imageDisplayMeta.classList.remove('visible');
+            }
+            // Reset crop state
+            cropState.enabled = false;
+            cropState.left = 0; cropState.top = 0;
+            cropState.right = 1; cropState.bottom = 1;
+            cropState.draggingEdge = null;
             document.getElementById('processBtn').disabled = true;
             document.getElementById('autoDetectBtn').disabled = true;
             document.getElementById('autoDetectMinLengthBtn').disabled = true;
@@ -858,6 +2225,8 @@
         const fileInput = document.getElementById('fileInput');
         const chooseFileBtn = document.getElementById('chooseFileBtn');
         const uploadArea = document.getElementById('uploadArea');
+        const imageDisplay = document.getElementById('imageDisplay');
+        const showRawPreview = document.getElementById('showRawPreview');
         const dragOverlay = document.getElementById('dragOverlay');
         let dragCounter = 0;
 
@@ -872,6 +2241,144 @@
         uploadArea.addEventListener('drop', handleDrop);
         uploadArea.addEventListener('dragenter', e => e.preventDefault());
         uploadArea.addEventListener('dragleave', handleDragLeave);
+        if (showRawPreview) {
+            showRawPreview.addEventListener('change', () => {
+                renderDisplayedUploadImage();
+            });
+        }
+
+        if (imageDisplay) {
+            imageDisplay.addEventListener('wheel', function(event) {
+                const mainImage = document.getElementById('mainImage');
+                if (!mainImage) return;
+
+                event.preventDefault();
+                const previousScale = imageViewportState.scale;
+                const deltaScale = event.deltaY < 0 ? 1.12 : (1 / 1.12);
+                const nextScale = Math.max(1, Math.min(12, previousScale * deltaScale));
+                if (Math.abs(nextScale - previousScale) < 0.0001) {
+                    return;
+                }
+
+                const rect = mainImage.getBoundingClientRect();
+                const imageCenterX = rect.left + rect.width / 2;
+                const imageCenterY = rect.top + rect.height / 2;
+                const pointerOffsetX = event.clientX - imageCenterX;
+                const pointerOffsetY = event.clientY - imageCenterY;
+                const scaleRatio = nextScale / previousScale;
+
+                imageViewportState.scale = nextScale;
+                imageViewportState.translateX -= pointerOffsetX * (scaleRatio - 1);
+                imageViewportState.translateY -= pointerOffsetY * (scaleRatio - 1);
+                applyImageViewportTransform();
+            }, { passive: false });
+
+            imageDisplay.addEventListener('mousedown', function(event) {
+                const mainImage = document.getElementById('mainImage');
+                const wantsMiddleDrag = event.button === 1;
+                const wantsSpaceDrag = event.button === 0 && imageViewportState.spacePressed;
+                if (!mainImage || (!wantsMiddleDrag && !wantsSpaceDrag)) {
+                    return;
+                }
+
+                event.preventDefault();
+                imageViewportState.isDragging = true;
+                imageViewportState.dragMoved = false;
+                imageViewportState.dragStartX = event.clientX;
+                imageViewportState.dragStartY = event.clientY;
+                imageViewportState.dragOriginX = imageViewportState.translateX;
+                imageViewportState.dragOriginY = imageViewportState.translateY;
+                updateImageDisplayInteractionState();
+            });
+        }
+
+        window.addEventListener('mousemove', function(event) {
+            // Crop edge dragging takes priority over viewport panning
+            if (cropState.draggingEdge) {
+                const mainImage = document.getElementById('mainImage');
+                if (mainImage) {
+                    const imgRect = mainImage.getBoundingClientRect();
+                    const fracX = (event.clientX - imgRect.left) / imgRect.width;
+                    const fracY = (event.clientY - imgRect.top) / imgRect.height;
+                    const MIN_SIZE = 0.02;
+                    switch (cropState.draggingEdge) {
+                        case 'left':
+                            cropState.left = Math.max(0, Math.min(fracX, cropState.right - MIN_SIZE));
+                            break;
+                        case 'right':
+                            cropState.right = Math.min(1, Math.max(fracX, cropState.left + MIN_SIZE));
+                            break;
+                        case 'top':
+                            cropState.top = Math.max(0, Math.min(fracY, cropState.bottom - MIN_SIZE));
+                            break;
+                        case 'bottom':
+                            cropState.bottom = Math.min(1, Math.max(fracY, cropState.top + MIN_SIZE));
+                            break;
+                    }
+                    renderCropOverlay();
+                    updateImageDisplayMeta();
+                }
+                return;
+            }
+
+            if (!imageViewportState.isDragging) {
+                return;
+            }
+
+            const dx = event.clientX - imageViewportState.dragStartX;
+            const dy = event.clientY - imageViewportState.dragStartY;
+            if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+                imageViewportState.dragMoved = true;
+            }
+
+            imageViewportState.translateX = imageViewportState.dragOriginX + dx;
+            imageViewportState.translateY = imageViewportState.dragOriginY + dy;
+            applyImageViewportTransform();
+        });
+
+        window.addEventListener('mouseup', function() {
+            if (cropState.draggingEdge) {
+                const before = cropState.dragStartSnapshot || getEffectiveCropSnapshot();
+                const after = getEffectiveCropSnapshot();
+                // Clear dragging visual from any handle
+                document.querySelectorAll('.crop-edge-handle.dragging').forEach(el => el.classList.remove('dragging'));
+                cropState.draggingEdge = null;
+                cropState.dragStartSnapshot = null;
+                updateImageDisplayInteractionState();
+                restartDetectionIfCropChanged(before, after);
+                return;
+            }
+
+            if (!imageViewportState.isDragging) {
+                return;
+            }
+
+            imageViewportState.isDragging = false;
+            imageViewportState.suppressClick = imageViewportState.dragMoved;
+            updateImageDisplayInteractionState();
+        });
+
+        window.addEventListener('keydown', function(event) {
+            if (event.code !== 'Space') {
+                return;
+            }
+            const tagName = event.target && event.target.tagName ? event.target.tagName.toLowerCase() : '';
+            if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') {
+                return;
+            }
+
+            imageViewportState.spacePressed = true;
+            updateImageDisplayInteractionState();
+            event.preventDefault();
+        });
+
+        window.addEventListener('keyup', function(event) {
+            if (event.code !== 'Space') {
+                return;
+            }
+            imageViewportState.spacePressed = false;
+            updateImageDisplayInteractionState();
+        });
 
         // Clipboard paste support
         document.addEventListener('paste', handlePaste);
@@ -912,7 +2419,24 @@
         }
 
         function isFileDrag(e) {
-            return Boolean(e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('Files'));
+            if (!e || !e.dataTransfer || !e.dataTransfer.types) return false;
+            const types = e.dataTransfer.types;
+
+            if (typeof types.includes === 'function') {
+                return types.includes('Files');
+            }
+            if (typeof types.contains === 'function') {
+                return types.contains('Files');
+            }
+            if (typeof types.indexOf === 'function') {
+                return types.indexOf('Files') !== -1;
+            }
+
+            try {
+                return Array.from(types).includes('Files');
+            } catch (_) {
+                return false;
+            }
         }
 
         function handleDragOver(e) {
@@ -946,12 +2470,8 @@
                 const extension = fileType.split('/')[1] || 'png';
                 const file = new File([blob], `pasted-image-${timestamp}.${extension}`, { type: fileType });
 
-                const dataTransfer = new DataTransfer();
-                dataTransfer.items.add(file);
-                fileInput.files = dataTransfer.files;
-
                 showMessage('Image pasted! Uploading...', 'info');
-                handleFileSelect();
+                uploadSelectedFile(file);
                 e.preventDefault();
                 return;
             }
@@ -972,10 +2492,15 @@
             for (let i = 0; i < files.length; i++) {
                 if (!isSupportedUploadFile(files[i])) continue;
 
-                const dataTransfer = new DataTransfer();
-                dataTransfer.items.add(files[i]);
-                fileInput.files = dataTransfer.files;
-                handleFileSelect();
+                try {
+                    const dataTransfer = new DataTransfer();
+                    dataTransfer.items.add(files[i]);
+                    fileInput.files = dataTransfer.files;
+                } catch (_) {
+                    // Some browsers block programmatic file assignment; upload directly.
+                }
+
+                uploadSelectedFile(files[i]);
                 return;
             }
 
@@ -984,6 +2509,12 @@
 
         function handleFileSelect() {
             const file = fileInput.files[0];
+            if (!file) return;
+
+            uploadSelectedFile(file);
+        }
+
+        function uploadSelectedFile(file) {
             if (!file) return;
 
             const previousSessionId = currentSessionId;
@@ -1021,7 +2552,12 @@
                     autoTuneState.active = false;
                     currentSessionId = data.session_id;
                     currentPreprocessingInfo = data.preprocessing || null;
-                    displayImage(data.image_data, data.image_shape);
+                    displayImage(
+                        data.raw_image_data || data.image_data,
+                        data.normalized_image_data || data.image_data,
+                        data.image_shape,
+                        Boolean(data.normalization_applied)
+                    );
                     renderPreprocessingStatus(currentPreprocessingInfo);
                     updateParameters(data.parameters, { preserveTouched: true });
                     document.getElementById('processBtn').disabled = false;
@@ -1064,49 +2600,202 @@
             autoTuneState.token = requestToken;
             autoTuneState.active = true;
             autoTuneState.shouldProcessAfter = shouldProcessAfter;
+            lastAutoTuneSampleMetadata = null;
 
-            showLoading(true, 'Auto tuning...', 'Auto-setting best threshold and minimum path length');
+            showLoading(true, 'Sampling image and auto-setting detection parameters...', 'Auto-setting best threshold and minimum path length (max 60s).');
             setLoadingActionButton(true, 'Skip');
-            showProgressMessage('Auto tuning upload parameters...', 'info');
+            showProgressMessage('Sampling image and auto-setting detection parameters...', 'info');
 
-            trackedFetch('/auto_tune_extraction', {
+            trackedFetch('/auto_tune_sample_region', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    session_id: currentSessionId
+                    session_id: currentSessionId,
+                    crop_region: getCropParams(),
                 })
             })
             .then(response => response.json())
-            .then(data => {
+            .then(sampleData => {
                 if (requestToken !== autoTuneState.token || isRequestStale(autoTuneEpoch)) {
                     return;
                 }
 
-                autoTuneState.active = false;
-                setLoadingActionButton(false);
-                showLoading(false);
-
-                if (data.success) {
-                    updateParameters(data.updated_parameters, { preserveTouched: true });
-
-                    const confidenceText = data.confidence_score >= 0.18 ? 'high confidence' :
-                        data.confidence_score >= 0.08 ? 'moderate confidence' : 'low confidence';
-                    showProgressMessage(
-                        `Auto-tuned threshold to ${data.detected_threshold.toFixed(3)} and min path length to ${data.detected_min_length} (${confidenceText})`,
-                        'success'
-                    );
-
-                    if (autoTuneState.shouldProcessAfter) {
-                        processImage({ fromAutoTune: true });
+                if (sampleData && sampleData.success) {
+                    lastAutoTuneSampleMetadata = sampleData.sample_metadata || null;
+                    if (sampleData.sample_metadata && sampleData.sample_metadata.sampled) {
+                        const sampleShape = sampleData.sample_metadata.sample_shape || [0, 0];
+                        const samplingMode = String(sampleData.sample_metadata.sampling_mode || 'full_image');
+                        const tileCount = Number(sampleData.sample_metadata.tile_count || 0);
+                        const loadingDetails = document.getElementById('loadingDetails');
+                        if (loadingDetails) {
+                            if (samplingMode === 'random_tiles_mosaic' && tileCount > 0) {
+                                loadingDetails.textContent = `Orange boxes = ${tileCount} sampled tiles (evaluated together), tuning capped at 60s.`;
+                            } else {
+                                loadingDetails.textContent = `Orange dashed box = sampled busy area (${sampleShape[1]}x${sampleShape[0]}), tuning capped at 60s.`;
+                            }
+                        }
+                        setLoadingActionButton(true, 'Skip & Manual Tune');
                     }
-                } else {
-                    showMessage(data.error || 'Auto tuning failed', 'error');
-                    if (autoTuneState.shouldProcessAfter) {
-                        processImage({ fromAutoTune: true });
+
+                    const drawSampleOverlay = () => renderSampleBoundingBox(sampleData.sample_metadata);
+                    const mainImage = document.getElementById('mainImage');
+                    if (mainImage && mainImage.complete) {
+                        drawSampleOverlay();
+                    } else if (mainImage) {
+                        mainImage.addEventListener('load', drawSampleOverlay, { once: true });
                     }
                 }
+            })
+            .catch(() => {
+                // Sample preview should never block auto-tune.
+            })
+            .then(() => trackedFetch('/auto_tune_extraction_start', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: currentSessionId,
+                    crop_region: getCropParams(),
+                })
+            }))
+            .then(response => response.json())
+            .then(startData => {
+                if (requestToken !== autoTuneState.token || isRequestStale(autoTuneEpoch)) {
+                    return;
+                }
+                if (!startData.success) {
+                    throw new Error(startData.error || 'Failed to start auto-tune');
+                }
+
+                let pollInFlight = false;
+                stopAutoTuneProgressPolling();
+                autoTuneProgressInterval = setInterval(() => {
+                    if (!autoTuneState.active || pollInFlight) {
+                        return;
+                    }
+
+                    pollInFlight = true;
+                    trackedFetch(`/auto_tune_progress/${currentSessionId}`, { method: 'GET' })
+                        .then(progressResponse => progressResponse.json())
+                        .then(progressData => {
+                            if (requestToken !== autoTuneState.token || isRequestStale(autoTuneEpoch)) {
+                                return;
+                            }
+
+                            lastAutoTuneSampleMetadata = progressData.sample_metadata || lastAutoTuneSampleMetadata;
+
+                            renderSampleBoundingBox(
+                                progressData.sample_metadata,
+                                Number(progressData.current_tile_index || 0)
+                            );
+
+                            if (typeof progressData.best_threshold === 'number' && typeof progressData.best_min_length === 'number') {
+                                applyLiveAutoTuneCandidate(progressData.best_threshold, progressData.best_min_length);
+                            }
+
+                            renderLivePathsOverlay(progressData);
+
+                            const confidencePct = Math.max(0, Math.min(100, Math.round((progressData.confidence_score || 0) * 100)));
+                            const elapsedSec = Number(progressData.elapsed_sec || 0).toFixed(1);
+                            const iterDone = Number(progressData.iterations_done || 0);
+                            const iterTotal = Number(progressData.iterations_total || 6);
+                            const currentThresholdIndex = Number(progressData.current_threshold_index || (iterDone + 1));
+                            const currentThreshold = Number(progressData.live_paths_current_threshold || 0);
+                            const currentMinLength = Math.round(Number(progressData.live_paths_current_min_length || 0));
+                            const currentPhase = String(progressData.current_phase || 'evaluating');
+                            const samplingMode = String(progressData.sampling_mode || 'full_image');
+                            const tileIndex = Number(progressData.current_tile_index || 0);
+                            const tileTotal = Number(progressData.current_tile_total || 1);
+                            const loadingDetails = document.getElementById('loadingDetails');
+                            if (loadingDetails) {
+                                const checkingText = currentThreshold > 0
+                                    ? `, checking ${currentThreshold.toFixed(3)} / min ${currentMinLength}`
+                                    : '';
+                                let tileText = '';
+                                if (samplingMode === 'random_tiles_mosaic') {
+                                    tileText = tileIndex > 0
+                                        ? `, tile ${tileIndex}/${tileTotal}`
+                                        : `, all ${tileTotal} tiles`;
+                                }
+                                const phaseLabel = currentPhase.replace(/_/g, ' ');
+                                loadingDetails.textContent = `Live tuning: best ${Number(progressData.best_threshold || 0.20).toFixed(3)} / min ${Math.round(progressData.best_min_length || 3)}, confidence ${confidencePct}% — ${iterDone}/${iterTotal} thresholds (working ${currentThresholdIndex}/${iterTotal}${checkingText}${tileText}, ${phaseLabel}, t=${elapsedSec}s)`;
+                            }
+
+                            if (progressData.running && Number(progressData.elapsed_sec || 0) >= 60.0) {
+                                skipAutoTune();
+                                return;
+                            }
+
+                            if (!progressData.finished) {
+                                return;
+                            }
+
+                            autoTuneState.active = false;
+                            stopAutoTuneProgressPolling();
+                            setLoadingActionButton(false);
+                            showLoading(false);
+
+                            if (progressData.updated_parameters) {
+                                updateParameters(progressData.updated_parameters, { preserveTouched: true });
+                            }
+
+                            const hasTileSampling = Boolean(
+                                progressData.sample_metadata &&
+                                String(progressData.sample_metadata.sampling_mode || '') === 'random_tiles_mosaic'
+                            );
+
+                            if (progressData.success) {
+                                const reasonText = progressData.high_confidence_reached
+                                    ? 'stopped at 95% confidence'
+                                    : (progressData.timed_out ? 'stopped at 60s' : 'completed');
+                                showProgressMessage(
+                                    `Auto-tuned threshold to ${Number(progressData.best_threshold).toFixed(3)} and min path length to ${Math.round(progressData.best_min_length)} (${confidencePct}% confidence, ${reasonText}).`,
+                                    'success'
+                                );
+                            } else {
+                                if (progressData.timed_out) {
+                                    showProgressMessage('Failed to detect best settings in under 60s. Using defaults with optimization turned off.', 'warning');
+                                }
+                                showMessage(progressData.message || 'Failed to detect best settings. Using defaults with optimization turned off.', 'error');
+                            }
+
+                            if (hasTileSampling) {
+                                enterTileTuneReview(progressData.sample_metadata, autoTuneState.shouldProcessAfter);
+                                return;
+                            }
+
+                            clearSampleBoundingBox();
+
+                            if (autoTuneState.shouldProcessAfter) {
+                                processImage({ fromAutoTune: true });
+                            }
+                        })
+                        .catch(progressError => {
+                            if (isAbortError(progressError) || requestToken !== autoTuneState.token || isRequestStale(autoTuneEpoch)) {
+                                return;
+                            }
+
+                            autoTuneState.active = false;
+                            stopAutoTuneProgressPolling();
+                            setLoadingActionButton(false);
+                            showLoading(false);
+                            clearSampleBoundingBox();
+                            exitTileTuneReview({ clearOverlays: true });
+                            showMessage(`Auto-tuning progress error: ${progressError.message}`, 'error');
+
+                            if (autoTuneState.shouldProcessAfter) {
+                                processImage({ fromAutoTune: true });
+                            }
+                        })
+                        .finally(() => {
+                            pollInFlight = false;
+                        });
+                }, 700);
+
+                showProgressMessage('Auto tune running. Updating threshold/min length and confidence in real time...', 'info');
             })
             .catch(error => {
                 if (requestToken !== autoTuneState.token || isRequestStale(autoTuneEpoch) || isAbortError(error)) {
@@ -1114,8 +2803,11 @@
                 }
 
                 autoTuneState.active = false;
+                stopAutoTuneProgressPolling();
                 setLoadingActionButton(false);
                 showLoading(false);
+                clearSampleBoundingBox();
+                exitTileTuneReview({ clearOverlays: true });
                 showMessage(`Auto-tuning error: ${error.message}`, 'error');
 
                 if (autoTuneState.shouldProcessAfter) {
@@ -1133,20 +2825,87 @@
             autoTuneState.token += 1;
             autoTuneState.active = false;
             autoTuneState.shouldProcessAfter = false;
+            stopAutoTuneProgressPolling();
+            abortAllActiveRequests();
             setLoadingActionButton(false);
             showLoading(false);
-            showProgressMessage('Auto tuning skipped. Using current settings.', 'warning');
+            clearSampleBoundingBox();
+            showProgressMessage('Stopping auto tune and applying best-so-far settings...', 'info');
 
-            if (shouldProcessAfter) {
-                processImage({ fromAutoTune: true });
+            if (!currentSessionId) {
+                if (shouldProcessAfter) {
+                    processImage({ fromAutoTune: true });
+                }
+                return;
             }
+
+            trackedFetch('/stop_auto_tune', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: currentSessionId
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.updated_parameters) {
+                    updateParameters(data.updated_parameters);
+                }
+
+                const sampleMetadata = lastAutoTuneSampleMetadata;
+                const hasTileSampling = Boolean(
+                    sampleMetadata &&
+                    String(sampleMetadata.sampling_mode || '') === 'random_tiles_mosaic'
+                );
+
+                if (data.used_best_so_far) {
+                    showProgressMessage(
+                        `Auto tune stopped. Applied best-so-far threshold ${Number(data.detected_threshold).toFixed(3)} and min path length ${data.detected_min_length} with optimization off.`,
+                        'success'
+                    );
+                } else {
+                    showProgressMessage('Auto tune stopped early. Using safe defaults with optimization off.', 'warning');
+                }
+
+                if (hasTileSampling) {
+                    enterTileTuneReview(sampleMetadata, shouldProcessAfter);
+                    return;
+                }
+
+                if (shouldProcessAfter) {
+                    processImage({ fromAutoTune: true });
+                }
+            })
+            .catch(() => {
+                showProgressMessage('Auto tune stop requested. Continuing with current settings.', 'warning');
+                if (shouldProcessAfter) {
+                    processImage({ fromAutoTune: true });
+                }
+            });
         }
 
-        function displayImage(imageData, imageShape) {
-            const imageDisplay = document.getElementById('imageDisplay');
-            const imgElement = `<img src="data:image/png;base64,${imageData}" alt="Uploaded Image" onclick="openImageModal(this.src)" id="mainImage">`;
-            const infoElement = imageShape ? `<div class="image-info">📐 Dimensions: ${imageShape[1]} × ${imageShape[0]} pixels</div>` : '';
-            imageDisplay.innerHTML = imgElement + infoElement;
+        function displayImage(rawImageData, normalizedImageData, imageShape, normalizationApplied = false) {
+            exitTileTuneReview({ clearOverlays: true });
+            lastAutoTuneSampleMetadata = null;
+            stopAutoTuneProgressPolling();
+
+            currentUploadDisplayImages = {
+                raw: rawImageData || null,
+                normalized: normalizedImageData || rawImageData || null,
+                shape: imageShape || null,
+                normalizationApplied: Boolean(normalizationApplied),
+            };
+
+            updateRawPreviewToggleVisibility();
+            const showRawCheckbox = document.getElementById('showRawPreview');
+            if (showRawCheckbox) {
+                // Default to normalized preview when normalization was applied.
+                showRawCheckbox.checked = false;
+            }
+            resetImageViewport();
+            renderDisplayedUploadImage();
         }
 
         function renderPreprocessingStatus(preprocessing) {
@@ -1210,10 +2969,13 @@
         function openImageModal(imageSrc) {
             const modal = document.getElementById('imageModal');
             const modalImg = document.getElementById('modalImage');
-            const mainImg = document.getElementById('mainImage');
             
             modal.style.display = 'block';
             modalImg.src = imageSrc;
+            modalImg.onload = function() {
+                applyDetectionImageOpacity();
+                renderTilePreviewOverlayModal(tileTuneReviewState.lastTileData || [], tileTuneReviewState.lastSourceShape || []);
+            };
             
             // Get image dimensions from the main image
             const canvas = document.createElement('canvas');
@@ -1228,6 +2990,7 @@
 
         function closeImageModal() {
             document.getElementById('imageModal').style.display = 'none';
+            clearModalLivePathsOverlay();
         }
 
         // Modal event handlers
@@ -1249,6 +3012,15 @@
             document.addEventListener('keydown', function(event) {
                 if (event.key === 'Escape') {
                     closeImageModal();
+                }
+            });
+
+            // Keep modal overlay aligned when viewport changes while modal is open.
+            window.addEventListener('resize', function() {
+                rerenderCurrentImageOverlays();
+                const modal = document.getElementById('imageModal');
+                if (modal && modal.style.display === 'block') {
+                    renderTilePreviewOverlayModal(tileTuneReviewState.lastTileData || [], tileTuneReviewState.lastSourceShape || []);
                 }
             });
         });
@@ -1289,6 +3061,16 @@
                 range.addEventListener('input', function() {
                     markParameterTouched(this.id);
                     updateRangeValue(this.id);
+
+                    if (this.id === 'detectionImageOpacity') {
+                        applyDetectionImageOpacity();
+                        return;
+                    }
+
+                    if (tileTuneReviewState.active && (this.id === 'darkThreshold' || this.id === 'minPathLength')) {
+                        requestTileOnlyPreview({ debounce: true });
+                        return;
+                    }
                     if (autoProcessEnabled) {
                         scheduleAutoProcess();
                     }
@@ -1396,7 +3178,7 @@
         }
 
         function isDisplayOnlyToggle(toggleId) {
-            return toggleId === 'showPreOptimization' || toggleId === 'includeImage';
+            return toggleId === 'showPreOptimization' || toggleId === 'includeImage' || toggleId === 'showRawPreview';
         }
 
         function refreshSvgForDisplayToggles() {
@@ -1420,6 +3202,10 @@
         }
 
         function scheduleAutoProcess() {
+            if (tileTuneReviewState.active) {
+                requestTileOnlyPreview({ debounce: true });
+                return;
+            }
             if (autoProcessTimeout) {
                 clearTimeout(autoProcessTimeout);
             }
@@ -1441,6 +3227,20 @@
 
         function toggleAutoProcess() {
             autoProcessEnabled = !autoProcessEnabled;
+            if (!autoProcessEnabled) {
+                if (autoProcessTimeout) {
+                    clearTimeout(autoProcessTimeout);
+                    autoProcessTimeout = null;
+                }
+
+                // If a progressive optimization run is active, stop it immediately
+                // when Auto mode is paused.
+                if (progressInterval && currentSessionId) {
+                    stopOptimization('Auto paused. Optimization stopped.', 'Stopped (Auto paused)');
+                } else if (currentSessionId) {
+                    signalOptimizationStop(currentSessionId);
+                }
+            }
             setAutoProcessButtonState();
         }
 
@@ -1523,6 +3323,8 @@
                 return;
             }
 
+            exitTileTuneReview({ clearOverlays: true });
+
             const autoTuneWasActive = autoTuneState.active;
             const processEpoch = invalidateRequestEpoch();
             abortAllActiveRequests();
@@ -1537,6 +3339,7 @@
             optimizationReached100 = false;
 
             const parameters = getParameters();
+            const cropParams = getCropParams();
             
             // Always use progressive mode for better user experience
             console.log('Starting progressive processing mode...');
@@ -1550,7 +3353,8 @@
                 },
                 body: JSON.stringify({
                     session_id: currentSessionId,
-                    parameters: parameters
+                    parameters: parameters,
+                    ...(cropParams ? { crop_region: cropParams } : {})
                 })
             })
             .then(response => response.json())
@@ -1566,6 +3370,10 @@
                     // Display immediate magenta results
                     displayImmediateResults(data);
                     showProgressMessage(`Found ${data.valid_paths_count} initial paths. Displaying immediately...`, 'success');
+
+                    // Overlay magenta skeleton paths on the image preview
+                    lastMagentaSkeletonPaths = Array.isArray(data.paths) ? data.paths : null;
+                    renderMagentaSkeletonOverlay();
                     
                     // Generate immediate SVG (magenta only)
                     generateSVG('immediate');
@@ -1611,6 +3419,13 @@
                 <div class="result-item">
                     <h3>Optimization Status</h3>
                     <p id="optimization-status">${data.optimization_started ? 'Running in background...' : 'Disabled'}</p>
+                    ${data.optimization_started ? `
+                    <div class="opt-progress-wrap" id="opt-progress-wrap">
+                        <div class="opt-progress-bar-track">
+                            <div class="opt-progress-bar-fill" id="opt-progress-bar"></div>
+                        </div>
+                        <div class="opt-progress-label" id="opt-progress-label">0 / ${data.valid_paths_count} paths optimised</div>
+                    </div>` : ''}
                     <div id="progress-container" style="margin-top: 10px;">
                         <div id="progress-messages" style="max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.8em; background: #f5f5f5; padding: 8px; border-radius: 4px;"></div>
                     </div>
@@ -1672,6 +3487,17 @@
                         console.log(`Updating SVG with ${data.optimized_count} optimized paths`);
                         generateSVG('progressive');
                     }
+
+                    // Update progress bar
+                    const total = Number(data.total_paths || 0);
+                    const done = Number(data.optimized_count || 0);
+                    if (total > 0) {
+                        const pct = Math.min(100, Math.round(done / total * 100));
+                        const bar = document.getElementById('opt-progress-bar');
+                        const lbl = document.getElementById('opt-progress-label');
+                        if (bar) bar.style.width = pct + '%';
+                        if (lbl) lbl.textContent = `${done} / ${total} paths optimised (${pct}%)`;
+                    }
                     
                     if (data.optimization_complete) {
                         console.log('Optimization complete!');
@@ -1680,6 +3506,13 @@
                         optimizationReached100 = true;
                         const statusEl = document.getElementById('optimization-status');
                         if (statusEl) statusEl.textContent = 'Complete!';
+                        const bar = document.getElementById('opt-progress-bar');
+                        const lbl = document.getElementById('opt-progress-label');
+                        if (bar) bar.style.width = '100%';
+                        if (lbl) {
+                            const t = Number(data.total_paths || 0);
+                            lbl.textContent = t > 0 ? `${t} / ${t} paths optimised (100%)` : 'Complete';
+                        }
                         document.getElementById('stopOptBtn').style.display = 'none'; // Hide stop button
                         showProgressMessage('Optimization complete! Final results displayed.', 'success');
                         generateSVG('final');
@@ -1710,11 +3543,15 @@
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    clearInterval(progressInterval);
-                    progressInterval = null;
+                    if (progressInterval) {
+                        clearInterval(progressInterval);
+                        progressInterval = null;
+                    }
                     optimizationReached100 = false;
-                    document.getElementById('stopOptBtn').style.display = 'none';
-                    document.getElementById('optimization-status').textContent = statusText;
+                    const stopBtn = document.getElementById('stopOptBtn');
+                    if (stopBtn) stopBtn.style.display = 'none';
+                    const statusEl = document.getElementById('optimization-status');
+                    if (statusEl) statusEl.textContent = statusText;
                     showProgressMessage(message, 'warning');
                     generateSVG('progressive'); // Show current state
                 }
@@ -1982,6 +3819,10 @@
                 clearInterval(progressInterval);
                 progressInterval = null;
             }
+            exitTileTuneReview({ clearOverlays: true });
+            lastAutoTuneSampleMetadata = null;
+            lastMagentaSkeletonPaths = null;
+            clearMagentaSkeletonOverlay();
             optimizationReached100 = false;
             lastRenderedSvgMode = null;
             currentPreprocessingInfo = null;
