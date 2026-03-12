@@ -880,7 +880,7 @@
                 </div>
 
                 <div class="parameter-group" id="optimizationParametersGroup">
-                    <h3>🎨 Optimization</h3>
+                    <h3>🎨 Optimisation</h3>
                     <div class="parameter">
                         <label>Tolerance <span class="range-value" id="rdpToleranceValue">2.5</span></label>
                         <input type="range" id="rdpTolerance" min="0.5" max="10.0" step="0.5" value="2.5">
@@ -903,7 +903,7 @@
                         <div class="parameter">
                             <label>Arc Fit Strength <span class="range-value" id="arcFitStrengthValue">72</span></label>
                             <input type="range" id="arcFitStrength" min="0" max="100" step="1" value="72">
-                            <small style="color: #666; font-size: 0.8em;">Higher values favor arc-like spline fitting and smoother curved blue paths.</small>
+                            <small style="color: #666; font-size: 0.8em;">Higher values favor smoother curves.</small>
                         </div>
                         <div class="parameter">
                             <label>Line Fit Strength <span class="range-value" id="lineFitStrengthValue">22</span></label>
@@ -923,12 +923,12 @@
                         <div class="parameter">
                             <label>Peak Drift Guard (px) <span class="range-value" id="peakClosenessPxValue">4.5</span></label>
                             <input type="range" id="peakClosenessPx" min="1.0" max="12.0" step="0.1" value="4.5">
-                            <small style="color: #666; font-size: 0.8em;">95th-percentile allowed drift from magenta for accepted blue fits.</small>
+                            <small style="color: #666; font-size: 0.8em;">Generally allowed drift from magenta for accepted blue fits.</small>
                         </div>
                         <div class="parameter">
                             <label>Score Preservation (%) <span class="range-value" id="scorePreservationValue">80</span></label>
                             <input type="range" id="scorePreservation" min="70" max="99" step="1" value="80">
-                            <small style="color: #666; font-size: 0.8em;">Higher values keep the blue path more faithful to the original centerline score.</small>
+                            <small style="color: #666; font-size: 0.8em;">Higher values keep the blue path closer to the magenta path.</small>
                         </div>
                     </div>
                 </div>
@@ -940,23 +940,23 @@
                     <div class="parameter">
                         <label>
                             <input type="checkbox" id="enableOptimization" checked>
-                            Enable path refinement
+                            Enable path optimisation
                         </label>
-                        <small style="color: #666; font-size: 0.8em;">Iteratively fits and scores paths for better quality output</small>
+                        <small style="color: #666; font-size: 0.8em;">Fits a smooth path with options</small>
                     </div>
                     <div class="parameter">
                         <label>
                             <input type="checkbox" id="showPreOptimization">
-                            Show Unoptimized Paths
+                            Include unoptimised paths
                         </label>
-                        <small style="color: #666; font-size: 0.8em;">Display original magenta paths in SVG</small>
+                        <small style="color: #666; font-size: 0.8em;">Include the magenta paths in the SVG</small>
                     </div>
                     <div class="parameter">
                         <label>
                             <input type="checkbox" id="includeImage">
-                            Include Original Image
+                            Include original image
                         </label>
-                        <small style="color: #666; font-size: 0.8em;">Include the source image as background in SVG</small>
+                        <small style="color: #666; font-size: 0.8em;">Include the source image in the SVG</small>
                     </div>
                 </div>
 
