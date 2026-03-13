@@ -1077,7 +1077,6 @@
             </div>
 
             <div class="content-area">
-                <div id="messageArea"></div>
                 <div class="image-display-meta" id="imageDisplayMeta"></div>
                 <div class="image-view-actions">
                     <button class="image-view-reset-btn" id="resetImageViewBtn" onclick="resetImageViewport()">🔍 Reset View</button>
@@ -4008,7 +4007,7 @@
                     if (mode === 'immediate') {
                         showProgressMessage('Magenta skeleton paths displayed! Optimization running in background...', 'success');
                     } else if (mode === 'progressive') {
-                        showProgressMessage('SVG updated with optimization progress...', 'info');
+                        // Message area removed: no progressive status toast.
                     } else {
                         showProgressMessage('Final SVG visualization generated! Ready for download.', 'success');
                     }
@@ -4109,17 +4108,15 @@
         }
 
         function showMessage(message, type) {
-            const messageArea = document.getElementById('messageArea');
-            messageArea.innerHTML = `<div class="${type}">${message}</div>`;
-            setTimeout(() => {
-                messageArea.innerHTML = '';
-            }, 5000);
+            // Messaging UI intentionally removed.
+            void message;
+            void type;
         }
 
         function showProgressMessage(message, type) {
-            const messageArea = document.getElementById('messageArea');
-            messageArea.innerHTML = `<div class="${type}">${message}</div>`;
-            // Don't auto-clear progress messages
+            // Messaging UI intentionally removed.
+            void message;
+            void type;
         }
 
         function toggleAdvancedSettings() {
@@ -4189,9 +4186,7 @@
                 resultsGrid.innerHTML = '';
             }
             
-            // Clear any lingering messages
-            const messageArea = document.getElementById('messageArea');
-            messageArea.innerHTML = '';
+            // Messaging UI removed; nothing to clear.
         }
 
         function showLoading(show, message = null, details = null) {
