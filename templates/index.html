@@ -900,9 +900,9 @@
                         <small style="color: #666; font-size: 0.8em;">When unchecked, the preview shows the normalized image used for detection.</small>
                     </div>
                     <div class="parameter" style="margin-top: 8px;">
-                        <label>Detection Image Opacity <span class="range-value" id="detectionImageOpacityValue">100</span>%</label>
+                        <label>Image Opacity <span class="range-value" id="detectionImageOpacityValue">100</span>%</label>
                         <input type="range" id="detectionImageOpacity" min="0" max="100" step="1" value="100">
-                        <small style="color: #666; font-size: 0.8em;">Set to 0% to hide the image while keeping path overlays visible.</small>
+                        <small style="color: #666; font-size: 0.8em;">Set to 0% to hide the image while keeping path overlays visible.(Doesn't affect the job)</small>
                     </div>
                 </div>
 
@@ -3139,6 +3139,11 @@
             if (showRawCheckbox) {
                 // Default to normalized preview when normalization was applied.
                 showRawCheckbox.checked = false;
+            }
+            const detectionOpacitySlider = document.getElementById('detectionImageOpacity');
+            if (detectionOpacitySlider) {
+                detectionOpacitySlider.value = '100';
+                updateRangeValue('detectionImageOpacity');
             }
             resetImageViewport();
             renderDisplayedUploadImage();
