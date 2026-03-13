@@ -264,6 +264,30 @@
             min-width: 0;
         }
 
+        .image-view-actions {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: -12px;
+            margin-bottom: -10px;
+        }
+
+        .image-view-reset-btn {
+            display: none;
+            border: 1px solid #d6deeb;
+            background: #f7faff;
+            color: #305680;
+            border-radius: 999px;
+            padding: 5px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.2s ease, border-color 0.2s ease;
+        }
+
+        .image-view-reset-btn:hover {
+            background: #edf5ff;
+            border-color: #bad1ee;
+        }
+
         .crop-toggle-btn {
             flex-shrink: 0;
             background: none;
@@ -395,6 +419,14 @@
         }
 
         .image-display.is-dragging {
+            cursor: grabbing;
+        }
+
+        .svg-display.space-pan {
+            cursor: grab;
+        }
+
+        .svg-display.is-dragging {
             cursor: grabbing;
         }
 
@@ -733,6 +765,14 @@
             margin-top: 20px;
         }
 
+        #resetBtn {
+            position: fixed;
+            left: max(14px, env(safe-area-inset-left));
+            bottom: calc(14px + env(safe-area-inset-bottom));
+            z-index: 1200;
+            box-shadow: 0 8px 18px rgba(0, 0, 0, 0.2);
+        }
+
         .preprocess-status {
             margin-top: 12px;
             padding: 10px 12px;
@@ -788,6 +828,13 @@
                 max-width: 98%;
                 max-height: 98%;
             }
+
+            #resetBtn {
+                left: max(10px, env(safe-area-inset-left));
+                bottom: calc(10px + env(safe-area-inset-bottom));
+                padding: 10px 16px;
+                font-size: 14px;
+            }
         }
 
         /* Drag and drop overlay */
@@ -831,7 +878,7 @@
     <div class="container">
         <div class="header">
             <h1>🎯 Centerline Extraction Tool</h1>
-            <p>Interactive centerline extraction v1.4 Nicholas Leqeta</p>
+            <p>Interactive centerline extraction v1.5 Nicholas Leqeta</p>
         </div>
         
         <div class="main-content">
@@ -865,7 +912,7 @@
                         <label>Dark Threshold <span class="range-value" id="darkThresholdValue">0.20</span></label>
                         <input type="range" id="darkThreshold" min="0.05" max="0.8" step="0.05" value="0.20">
                         <button class="btn btn-secondary" id="autoDetectBtn" onclick="autoDetectThreshold()" style="margin-top: 8px; padding: 6px 12px; font-size: 14px; display: none;" disabled>🎯 Auto-Detect</button>
-                        <small style="color: #666; font-size: 0.8em;">Sensitivity to dark areas in the image</small>
+                        <small style="color: #666; font-size: 0.8em;">Sensitivity of the detection.</small>
                     </div>
                     <div style="margin-top: 10px;">
                         <button type="button" id="detectionAdvancedToggleBtn" onclick="toggleDetectionAdvancedSettings()" style="background: none; border: none; color: #4facfe; cursor: pointer; font-size: 0.85em; padding: 0;">⚙️ Advanced settings ▼</button>
@@ -904,7 +951,7 @@
                         <label>Min Path Length (px) <span class="range-value" id="minPathLengthValue">3</span></label>
                         <input type="range" id="minPathLength" min="1" max="20" step="1" value="3">
                         <button class="btn btn-secondary" id="autoDetectMinLengthBtn" onclick="autoDetectMinPathLength()" style="margin-top: 8px; padding: 6px 12px; font-size: 14px; display: none;" disabled>🎯 Auto-Detect</button>
-                        <small style="color: #666; font-size: 0.8em;">Discards short path segments (noise)</small>
+                        <small style="color: #666; font-size: 0.8em;">Increase to ignore shorter paths (dots).</small>
                     </div>
                 </div>
 
@@ -1000,6 +1047,9 @@
             <div class="content-area">
                 <div id="messageArea"></div>
                 <div class="image-display-meta" id="imageDisplayMeta"></div>
+                <div class="image-view-actions">
+                    <button class="image-view-reset-btn" id="resetImageViewBtn" onclick="resetImageViewport()">🔍 Reset View</button>
+                </div>
                 
                 <div class="image-display" id="imageDisplay">
                     <div style="text-align: center; color: #999;">
@@ -1031,13 +1081,13 @@
                 </div>
 
                 <div class="tile-tune-panel" id="tileTunePanel">
-                    <div class="tile-tune-title">Auto Detection Tuning Review</div>
+                    <div class="tile-tune-title">Auto Detection Tuning Review (Zoom in and check results, tweak detection parameters if needed</div>
                     <div class="tile-tune-details" id="tileTuneDetails">
                         Adjust threshold and min path length. Preview updates inside sampled tiles only.
                     </div>
                     <div class="tile-tune-actions">
                         <button class="btn" id="acceptTileTuneBtn" onclick="acceptTileTuningAndContinue()">✅ Accept and Continue</button>
-                        <button class="btn btn-secondary" id="resampleTileTuneBtn" onclick="resampleTileTuning()">🔁 Shuffle Tiles</button>
+                        <button class="btn btn-secondary" id="resampleTileTuneBtn" onclick="resampleTileTuning()">🔁 Resample</button>
                     </div>
                 </div>
 
@@ -1046,6 +1096,7 @@
                     <div class="results-grid" id="resultsGrid"></div>
                     <div class="action-buttons">
                         <button class="btn btn-secondary" id="downloadBtn" onclick="downloadSVG()" style="display: none;">💾 Download SVG</button>
+                        <button class="btn btn-secondary" id="resetSvgViewBtn" onclick="resetSvgViewport()" style="display: none;">🔍 Reset View</button>
                     </div>
                 </div>
 
@@ -1120,6 +1171,17 @@
             dragMoved: false,
             suppressClick: false,
             spacePressed: false,
+        };
+        let svgViewportState = {
+            scale: 1,
+            translateX: 0,
+            translateY: 0,
+            isDragging: false,
+            dragStartX: 0,
+            dragStartY: 0,
+            dragOriginX: 0,
+            dragOriginY: 0,
+            dragMoved: false,
         };
         let cropState = {
             enabled: false,
@@ -1249,6 +1311,22 @@
             imageDisplay.classList.toggle('is-dragging', Boolean(imageViewportState.isDragging));
         }
 
+        function isImageViewportChanged() {
+            return (
+                Math.abs(imageViewportState.scale - 1) > 0.001 ||
+                Math.abs(imageViewportState.translateX) > 0.5 ||
+                Math.abs(imageViewportState.translateY) > 0.5
+            );
+        }
+
+        function updateImageViewResetButtonVisibility() {
+            const btn = document.getElementById('resetImageViewBtn');
+            if (!btn) return;
+
+            const hasImage = Boolean(document.getElementById('mainImage'));
+            btn.style.display = (hasImage && isImageViewportChanged()) ? 'inline-block' : 'none';
+        }
+
         function applyImageViewportTransform() {
             const mainImage = document.getElementById('mainImage');
             if (mainImage) {
@@ -1258,6 +1336,7 @@
             applyDetectionImageOpacity();
             rerenderCurrentImageOverlays();
             updateImageDisplayInteractionState();
+            updateImageViewResetButtonVisibility();
         }
 
         function resetImageViewport() {
@@ -1272,6 +1351,41 @@
             imageViewportState.dragMoved = false;
             imageViewportState.suppressClick = false;
             applyImageViewportTransform();
+        }
+
+        function updateSvgDisplayInteractionState() {
+            const svgDisplay = document.getElementById('svgDisplay');
+            const svg = svgDisplay ? svgDisplay.querySelector('svg') : null;
+            if (!svgDisplay) return;
+
+            svgDisplay.classList.toggle('space-pan', Boolean(imageViewportState.spacePressed && svg));
+            svgDisplay.classList.toggle('is-dragging', Boolean(svgViewportState.isDragging));
+        }
+
+        function applySvgViewportTransform() {
+            const svgDisplay = document.getElementById('svgDisplay');
+            const svg = svgDisplay ? svgDisplay.querySelector('svg') : null;
+            if (!svg) {
+                updateSvgDisplayInteractionState();
+                return;
+            }
+
+            svg.style.transformOrigin = 'center center';
+            svg.style.transform = `translate(${svgViewportState.translateX}px, ${svgViewportState.translateY}px) scale(${svgViewportState.scale})`;
+            updateSvgDisplayInteractionState();
+        }
+
+        function resetSvgViewport() {
+            svgViewportState.scale = 1;
+            svgViewportState.translateX = 0;
+            svgViewportState.translateY = 0;
+            svgViewportState.isDragging = false;
+            svgViewportState.dragStartX = 0;
+            svgViewportState.dragStartY = 0;
+            svgViewportState.dragOriginX = 0;
+            svgViewportState.dragOriginY = 0;
+            svgViewportState.dragMoved = false;
+            applySvgViewportTransform();
         }
 
         function handleMainImageClick(event, imageSrc) {
@@ -2239,6 +2353,12 @@
             clearResults();
             document.getElementById('imageDisplay').innerHTML = initialImageDisplayMarkup;
             document.getElementById('imageDisplay').classList.remove('has-image', 'space-pan', 'is-dragging');
+            const resetImageViewBtn = document.getElementById('resetImageViewBtn');
+            if (resetImageViewBtn) {
+                resetImageViewBtn.style.display = 'none';
+            }
+            document.getElementById('svgDisplay').classList.remove('space-pan', 'is-dragging');
+            resetSvgViewport();
             const imageDisplayMeta = document.getElementById('imageDisplayMeta');
             if (imageDisplayMeta) {
                 imageDisplayMeta.innerHTML = '';
@@ -2261,6 +2381,7 @@
         const chooseFileBtn = document.getElementById('chooseFileBtn');
         const uploadArea = document.getElementById('uploadArea');
         const imageDisplay = document.getElementById('imageDisplay');
+        const svgDisplay = document.getElementById('svgDisplay');
         const showRawPreview = document.getElementById('showRawPreview');
         const dragOverlay = document.getElementById('dragOverlay');
         let dragCounter = 0;
@@ -2327,6 +2448,51 @@
             });
         }
 
+        if (svgDisplay) {
+            svgDisplay.addEventListener('wheel', function(event) {
+                const svg = svgDisplay.querySelector('svg');
+                if (!svg) return;
+
+                event.preventDefault();
+                const previousScale = svgViewportState.scale;
+                const deltaScale = event.deltaY < 0 ? 1.12 : (1 / 1.12);
+                const nextScale = Math.max(1, Math.min(12, previousScale * deltaScale));
+                if (Math.abs(nextScale - previousScale) < 0.0001) {
+                    return;
+                }
+
+                const rect = svg.getBoundingClientRect();
+                const imageCenterX = rect.left + rect.width / 2;
+                const imageCenterY = rect.top + rect.height / 2;
+                const pointerOffsetX = event.clientX - imageCenterX;
+                const pointerOffsetY = event.clientY - imageCenterY;
+                const scaleRatio = nextScale / previousScale;
+
+                svgViewportState.scale = nextScale;
+                svgViewportState.translateX -= pointerOffsetX * (scaleRatio - 1);
+                svgViewportState.translateY -= pointerOffsetY * (scaleRatio - 1);
+                applySvgViewportTransform();
+            }, { passive: false });
+
+            svgDisplay.addEventListener('mousedown', function(event) {
+                const svg = svgDisplay.querySelector('svg');
+                const wantsMiddleDrag = event.button === 1;
+                const wantsSpaceDrag = event.button === 0 && imageViewportState.spacePressed;
+                if (!svg || (!wantsMiddleDrag && !wantsSpaceDrag)) {
+                    return;
+                }
+
+                event.preventDefault();
+                svgViewportState.isDragging = true;
+                svgViewportState.dragMoved = false;
+                svgViewportState.dragStartX = event.clientX;
+                svgViewportState.dragStartY = event.clientY;
+                svgViewportState.dragOriginX = svgViewportState.translateX;
+                svgViewportState.dragOriginY = svgViewportState.translateY;
+                updateSvgDisplayInteractionState();
+            });
+        }
+
         window.addEventListener('mousemove', function(event) {
             // Crop edge dragging takes priority over viewport panning
             if (cropState.draggingEdge) {
@@ -2356,7 +2522,20 @@
                 return;
             }
 
-            if (!imageViewportState.isDragging) {
+            if (!imageViewportState.isDragging && !svgViewportState.isDragging) {
+                return;
+            }
+
+            if (svgViewportState.isDragging) {
+                const dx = event.clientX - svgViewportState.dragStartX;
+                const dy = event.clientY - svgViewportState.dragStartY;
+                if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+                    svgViewportState.dragMoved = true;
+                }
+
+                svgViewportState.translateX = svgViewportState.dragOriginX + dx;
+                svgViewportState.translateY = svgViewportState.dragOriginY + dy;
+                applySvgViewportTransform();
                 return;
             }
 
@@ -2384,7 +2563,13 @@
                 return;
             }
 
-            if (!imageViewportState.isDragging) {
+            if (!imageViewportState.isDragging && !svgViewportState.isDragging) {
+                return;
+            }
+
+            if (svgViewportState.isDragging) {
+                svgViewportState.isDragging = false;
+                updateSvgDisplayInteractionState();
                 return;
             }
 
@@ -2404,6 +2589,7 @@
 
             imageViewportState.spacePressed = true;
             updateImageDisplayInteractionState();
+            updateSvgDisplayInteractionState();
             event.preventDefault();
         });
 
@@ -2413,6 +2599,7 @@
             }
             imageViewportState.spacePressed = false;
             updateImageDisplayInteractionState();
+            updateSvgDisplayInteractionState();
         });
 
         // Clipboard paste support
@@ -3747,6 +3934,10 @@
                     const downloadBtn = document.getElementById('downloadBtn');
                     setDownloadButtonAccent(optimizationReached100);
                     downloadBtn.style.display = shouldShowDownloadButton() ? 'inline-block' : 'none';
+                    const resetSvgViewBtn = document.getElementById('resetSvgViewBtn');
+                    if (resetSvgViewBtn) {
+                        resetSvgViewBtn.style.display = 'inline-block';
+                    }
                 } else {
                     console.error('No SVG in response:', data);
                     showMessage(data.error || 'SVG generation failed', 'error');
@@ -3775,6 +3966,7 @@
             
             // Auto-fit SVG to container bounds
             autoFitSVG();
+            applySvgViewportTransform();
             
             console.log('SVG displayed with auto-fit');
         }
@@ -3819,7 +4011,10 @@
 
         // Re-fit SVG when window is resized
         window.addEventListener('resize', function() {
-            setTimeout(autoFitSVG, 100); // Small delay to let layout settle
+            setTimeout(() => {
+                autoFitSVG();
+                applySvgViewportTransform();
+            }, 100); // Small delay to let layout settle
         });
 
         function downloadSVG() {
@@ -3888,6 +4083,10 @@
             const downloadBtn = document.getElementById('downloadBtn');
             setDownloadButtonAccent(false);
             downloadBtn.style.display = 'none';
+            const resetSvgViewBtn = document.getElementById('resetSvgViewBtn');
+            if (resetSvgViewBtn) {
+                resetSvgViewBtn.style.display = 'none';
+            }
 
             // Hide stop optimization button from previous session
             const stopOptBtn = document.getElementById('stopOptBtn');
