@@ -519,6 +519,28 @@
             margin-top: 1px;
         }
 
+        .tile-tune-console {
+            display: none;
+            margin-top: 10px;
+            padding: 6px 10px;
+            max-height: 120px;
+            overflow-y: auto;
+            background: #1e1208;
+            border-radius: 6px;
+            border: 1px solid #5a330a;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.77em;
+            line-height: 1.65;
+            scroll-behavior: smooth;
+        }
+        .tile-tune-console::-webkit-scrollbar { width: 4px; }
+        .tile-tune-console::-webkit-scrollbar-thumb { background: #7a4a18; border-radius: 2px; }
+        .tile-tune-console-line { color: #c49a5e; }
+        .tile-tune-console-line.ttc-start { color: #f5c87a; font-weight: 600; }
+        .tile-tune-console-line.ttc-success { color: #87d988; }
+        .tile-tune-console-line.ttc-error { color: #ff8a80; }
+        .tile-tune-console-line.ttc-dim { color: #7a5a38; }
+
         @keyframes samplePulse {
             0% { opacity: 0.70; }
             50% { opacity: 1.0; }
@@ -659,6 +681,16 @@
             font-size: 0.78em;
             color: #888;
             margin-top: 3px;
+        }
+
+        .opt-status-panel {
+            margin-top: 10px;
+            padding: 12px 14px;
+            border-radius: 8px;
+            background: white;
+            border: 1px solid #e0e8f0;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.07);
+            font-size: 0.9em;
         }
 
         .stat-card {
@@ -1016,21 +1048,21 @@
                     <div class="parameter">
                         <label>
                             <input type="checkbox" id="enableOptimization" checked>
-                            Enable path optimisation
+                            Enable Path Optimisation
                         </label>
                         <small style="color: #666; font-size: 0.8em;">Fits a smooth path with options</small>
                     </div>
                     <div class="parameter">
                         <label>
                             <input type="checkbox" id="showPreOptimization">
-                            Include unoptimised paths
+                            Include Unoptimised Paths
                         </label>
                         <small style="color: #666; font-size: 0.8em;">Include the magenta paths in the SVG</small>
                     </div>
                     <div class="parameter">
                         <label>
                             <input type="checkbox" id="includeImage">
-                            Include original image
+                            Include Original Image
                         </label>
                         <small style="color: #666; font-size: 0.8em;">Include the source image in the SVG</small>
                     </div>
@@ -1039,7 +1071,7 @@
                 <div class="action-buttons">
                     <button class="btn" id="processBtn" onclick="processImage()" disabled>🚀 Process</button>
                     <button class="btn btn-secondary" id="autoProcessBtn" onclick="toggleAutoProcess()">🔄 Auto</button>
-                    <button class="btn btn-secondary" id="resetBtn" onclick="resetApplicationState()">↺ Reset</button>
+                    <button class="btn btn-secondary" id="resetBtn" onclick="resetApplicationState()">↺ Crop Reset</button>
                     <button class="btn btn-warning" id="stopOptBtn" onclick="stopOptimization()" style="display: none;">⏹️ Stop Optimization</button>
                 </div>
             </div>
@@ -1086,21 +1118,27 @@
                         Adjust threshold and min path length. Preview updates inside sampled tiles only.
                     </div>
                     <div class="tile-tune-actions">
-                        <button class="btn" id="acceptTileTuneBtn" onclick="acceptTileTuningAndContinue()">✅ Accept and Continue</button>
                         <button class="btn btn-secondary" id="resampleTileTuneBtn" onclick="resampleTileTuning()">🔁 Resample</button>
+                    </div>
+                    <div class="tile-tune-console" id="tileTuneConsole"></div>
+                    <div class="tile-tune-actions">
+                        <button class="btn" id="acceptTileTuneBtn" onclick="acceptTileTuningAndContinue()">✅ Accept and Continue</button>
                     </div>
                 </div>
 
                 <div class="results-panel" id="resultsPanel" style="display: none;">
                     <h3>📊 Results</h3>
                     <div class="results-grid" id="resultsGrid"></div>
-                    <div class="action-buttons">
-                        <button class="btn btn-secondary" id="downloadBtn" onclick="downloadSVG()" style="display: none;">💾 Download SVG</button>
-                        <button class="btn btn-secondary" id="resetSvgViewBtn" onclick="resetSvgViewport()" style="display: none;">🔍 Reset View</button>
-                    </div>
                 </div>
 
                 <div class="svg-display" id="svgDisplay" style="display: none;"></div>
+
+                <div class="opt-status-panel" id="optStatusPanel" style="display: none;"></div>
+
+                <div class="action-buttons" id="svgActionButtons">
+                    <button class="btn btn-secondary" id="downloadBtn" onclick="downloadSVG()" style="display: none;">💾 Download SVG</button>
+                    <button class="btn btn-secondary" id="resetSvgViewBtn" onclick="resetSvgViewport()" style="display: none;">🔍 Reset View</button>
+                </div>
             </div>
         </div>
     </div>
@@ -1702,6 +1740,27 @@
             }
         }
 
+        function tileTuneLog(msg, type) {
+            const box = document.getElementById('tileTuneConsole');
+            if (!box) return;
+            const now = new Date();
+            const ts = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const line = document.createElement('div');
+            line.className = 'tile-tune-console-line' + (type ? ' ttc-' + type : '');
+            line.textContent = '[' + ts + '] ' + msg;
+            box.appendChild(line);
+            if (box.children.length > 120) { box.removeChild(box.firstChild); }
+            box.style.display = 'block';
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function clearTileTuneConsole() {
+            const box = document.getElementById('tileTuneConsole');
+            if (!box) return;
+            box.innerHTML = '';
+            box.style.display = 'none';
+        }
+
         function renderTilePreviewOverlay(tileData, sourceShape) {
             const hasAnyPaths = Array.isArray(tileData) && tileData.some(t => t.paths && t.paths.length > 0);
             if (!Array.isArray(tileData) || !hasAnyPaths) {
@@ -1830,11 +1889,13 @@
             tileTuneReviewState.lastPreviewRuntimeMs = null;
             tileTuneReviewState.fullImagePreviewMode = false;
 
+            clearTileTuneConsole();
             const panel = document.getElementById('tileTunePanel');
             if (panel) panel.style.display = 'block';
 
             const samplingMode = String((sampleMetadata && sampleMetadata.sampling_mode) || 'full_image');
             const tileCount = Number((sampleMetadata && sampleMetadata.tile_count) || 0);
+            tileTuneLog('Tuning review started' + (tileCount > 0 ? ' — ' + tileCount + ' tiles sampled.' : ' (full image).'), 'start');
             tileTuneReviewState.pendingAutoSkipDecision = samplingMode === 'random_tiles_mosaic' && tileCount > 0;
             if (samplingMode === 'random_tiles_mosaic' && tileCount > 0) {
                 setTileTuneDetails(`Adjust sliders to tune threshold/min length. Preview updates inside ${tileCount} sampled tiles only.`);
@@ -1900,6 +1961,7 @@
                         tileTuneReviewState.fullImagePreviewMode = true;
                         tileTuneReviewState.previewInFlight = false;
                         updateTileTuneActionButtons();
+                        tileTuneLog(`⚡ Fast preview (${runtimeLabel}) — switching to full image mode.`, 'start');
                         showProgressMessage(
                             `Preview is fast (${runtimeLabel}), switching review overlay to full-image mode at native resolution for final tuning.`,
                             'info'
@@ -1926,6 +1988,11 @@
                     const previewScopeLabel = tileTuneReviewState.fullImagePreviewMode
                         ? 'full image'
                         : `${Math.max(1, Number((tileTuneReviewState.sampleMetadata && tileTuneReviewState.sampleMetadata.tile_count) || 0))} tiles`;
+                    tileTuneLog(
+                        `${noiseIcon} Preview [${previewScopeLabel}]: ${validPaths} paths, ${coverageFmt}px coverage, ${noisePct}% noise (${orphanPaths} orphans), ${runtimeMs}ms` +
+                        ` — thresh ${Number(data.dark_threshold || 0).toFixed(3)}, min ${Math.round(Number(data.min_path_length || 0))}`,
+                        noiseRatio < 0.15 ? 'success' : (noiseRatio < 0.35 ? '' : 'error')
+                    );
                     setTileTuneDetails(
                         `<div class="tile-score-card">` +
                         `<span class="tile-score-stat">🧭 <strong>${previewScopeLabel}</strong> scope</span>` +
@@ -1940,6 +2007,7 @@
                     if (isAbortError(error) || !tileTuneReviewState.active || requestToken !== tileTuneReviewState.previewToken) {
                         return;
                     }
+                    tileTuneLog('⚠ Preview error: ' + error.message, 'error');
                     showMessage(`Tile preview error: ${error.message}`, 'warning');
                 })
                 .finally(() => {
@@ -1979,6 +2047,7 @@
                 return;
             }
 
+            tileTuneLog('🔁 Resampling tile set...', 'start');
             setTileTuneDetails('Resampling tiles...');
             trackedFetch('/auto_tune_sample_region', {
                 method: 'POST',
@@ -2001,6 +2070,8 @@
                 tileTuneReviewState.sampleMetadata = sampleData.sample_metadata || null;
                 tileTuneReviewState.pendingAutoSkipDecision = true;
                 tileTuneReviewState.fullImagePreviewMode = false;
+                const newTileCount = Number((tileTuneReviewState.sampleMetadata && tileTuneReviewState.sampleMetadata.tile_count) || 0);
+                tileTuneLog('✅ Resampled — ' + (newTileCount > 0 ? newTileCount + ' tiles selected.' : 'region updated.'), 'success');
                 renderSampleBoundingBox(tileTuneReviewState.sampleMetadata, 0);
                 requestTileOnlyPreview();
             })
@@ -2008,6 +2079,7 @@
                 if (isAbortError(error) || !tileTuneReviewState.active) {
                     return;
                 }
+                tileTuneLog('❌ Resample error: ' + error.message, 'error');
                 showMessage(`Tile resample error: ${error.message}`, 'error');
             });
         }
@@ -3655,9 +3727,13 @@
                     <p><strong>${data.merged_paths_count ?? data.initial_paths_count}</strong> after endpoint merging</p>
                     <p style="font-size:0.8em; color:#888; margin-top:4px;">gap=${document.getElementById('mergeGap').value}px &nbsp;|&nbsp; angle priority=${document.getElementById('mergeAnglePriority').value}%</p>
                 </div>
-                <div class="result-item">
-                    <h3>Optimization Status</h3>
-                    <p id="optimization-status">${data.optimization_started ? 'Running in background...' : 'Disabled'}</p>
+            `;
+
+            const optStatusPanel = document.getElementById('optStatusPanel');
+            if (optStatusPanel) {
+                optStatusPanel.innerHTML = `
+                    <h3 style="margin: 0 0 8px; font-size: 0.95em; color: #444;">Optimisation Status</h3>
+                    <p id="optimization-status" style="margin: 0 0 6px;">${data.optimization_started ? 'Running in background...' : 'Disabled (click on Enable Path Optimisation to start)'}</p>
                     ${data.optimization_started ? `
                     <div class="opt-progress-wrap" id="opt-progress-wrap">
                         <div class="opt-progress-bar-track">
@@ -3668,9 +3744,10 @@
                     <div id="progress-container" style="margin-top: 10px;">
                         <div id="progress-messages" style="max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.8em; background: #f5f5f5; padding: 8px; border-radius: 4px;"></div>
                     </div>
-                </div>
-            `;
-            
+                `;
+                optStatusPanel.style.display = 'block';
+            }
+
             resultsPanel.style.display = 'block';
             console.log('Results panel should now be visible');
         }
@@ -4083,7 +4160,14 @@
             // Hide results panel
             const resultsPanel = document.getElementById('resultsPanel');
             resultsPanel.style.display = 'none';
-            
+
+            // Hide optimization status panel
+            const optStatusPanel = document.getElementById('optStatusPanel');
+            if (optStatusPanel) {
+                optStatusPanel.innerHTML = '';
+                optStatusPanel.style.display = 'none';
+            }
+
             // Hide download button
             const downloadBtn = document.getElementById('downloadBtn');
             setDownloadButtonAccent(false);
