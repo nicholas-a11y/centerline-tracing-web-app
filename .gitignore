@@ -52,3 +52,6 @@ deploy.sh
 # Python cache files
 __pycache__/
 *.pyc
+
+# VS Code workspace files
+.vscode/
