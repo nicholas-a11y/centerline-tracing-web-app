@@ -48,3 +48,7 @@ smarttrace/
 
 # Deployment scripts (keep specific ones in repo)
 deploy.sh
+
+# Python cache files
+__pycache__/
+*.pyc
