@@ -125,7 +125,6 @@ def process_centerlines(session):
         print("Fast extraction mode for unoptimized processing...")
         # Import the fast function from the shared engine module.
         from centerline_engine import create_fast_paths
-        import numpy as np
         from skimage import morphology
         
         # Quick binary conversion and skeletonization with minimal filtering
@@ -932,7 +931,6 @@ def process_immediate():
         # Always use fast extraction for immediate display
         print("Immediate extraction mode...")
         from centerline_engine import create_fast_paths
-        import numpy as np
         from skimage import morphology
         
         # Quick binary conversion and skeletonization
