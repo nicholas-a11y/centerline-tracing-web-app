@@ -1,0 +1,1090 @@
+#!/usr/bin/env python3
+"""
+Shared preprocessing and auto-tune helpers for the centerline web app.
+"""
+
+import time
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+
+from centerline_engine import extract_skeleton_paths, merge_nearby_paths
+
+
+AUTO_TUNE_TIME_BUDGET_SEC = 90.0
+AUTO_TUNE_CONFIDENCE_TARGET = 0.95
+AUTO_TUNE_RANDOM_TILE_DIM = 144
+AUTO_TUNE_RANDOM_TILE_COUNT = 12
+
+
+def _build_random_tile_mosaic(gray_image, tile_dim=AUTO_TUNE_RANDOM_TILE_DIM, tile_count=AUTO_TUNE_RANDOM_TILE_COUNT):
+    """Create a multi-tile random mosaic for auto-tune scoring on large images."""
+    height, width = gray_image.shape
+    tile_h = min(int(tile_dim), int(height))
+    tile_w = min(int(tile_dim), int(width))
+
+    if tile_h >= height and tile_w >= width:
+        return gray_image, {
+            'sampled': False,
+            'sample_shape': gray_image.shape,
+            'sample_origin': [0, 0],
+            'source_shape': gray_image.shape,
+            'sampling_mode': 'full_image',
+            'overlay_supported': True,
+        }
+
+    max_y = max(0, height - tile_h)
+    max_x = max(0, width - tile_w)
+    requested_count = max(2, int(tile_count))
+
+    rng_seed = int((time.perf_counter_ns() ^ (height << 11) ^ (width << 3)) & 0xFFFFFFFF)
+    rng = np.random.default_rng(rng_seed)
+
+    tiles = []
+    tile_origins = []
+    used_origins = set()
+
+    def _overlaps_existing(x, y):
+        for ox, oy in used_origins:
+            separated = (
+                (x + tile_w) <= ox or
+                (ox + tile_w) <= x or
+                (y + tile_h) <= oy or
+                (oy + tile_h) <= y
+            )
+            if not separated:
+                return True
+        return False
+
+    attempts = max(24, requested_count * 10)
+    for _ in range(attempts):
+        if len(tiles) >= requested_count:
+            break
+        y = int(rng.integers(0, max_y + 1)) if max_y > 0 else 0
+        x = int(rng.integers(0, max_x + 1)) if max_x > 0 else 0
+        key = (x, y)
+        if key in used_origins or _overlaps_existing(x, y):
+            continue
+        tile = gray_image[y:y + tile_h, x:x + tile_w]
+        if tile.shape[0] != tile_h or tile.shape[1] != tile_w:
+            continue
+        used_origins.add(key)
+        tiles.append(tile)
+        tile_origins.append([int(x), int(y)])
+
+    fallback_origins = [
+        (0, 0),
+        (max_x, 0),
+        (0, max_y),
+        (max_x, max_y),
+        (max_x // 2, max_y // 2),
+    ]
+    for x, y in fallback_origins:
+        if len(tiles) >= requested_count:
+            break
+        key = (int(x), int(y))
+        if key in used_origins or _overlaps_existing(int(x), int(y)):
+            continue
+        tile = gray_image[int(y):int(y) + tile_h, int(x):int(x) + tile_w]
+        if tile.shape[0] != tile_h or tile.shape[1] != tile_w:
+            continue
+        used_origins.add(key)
+        tiles.append(tile)
+        tile_origins.append([int(x), int(y)])
+
+    if not tiles:
+        return gray_image, {
+            'sampled': False,
+            'sample_shape': gray_image.shape,
+            'sample_origin': [0, 0],
+            'source_shape': gray_image.shape,
+            'sampling_mode': 'full_image_fallback',
+            'overlay_supported': True,
+        }
+
+    count = len(tiles)
+    cols = int(np.ceil(np.sqrt(count)))
+    rows = int(np.ceil(count / float(cols)))
+    mosaic = np.ones((rows * tile_h, cols * tile_w), dtype=np.float32)
+
+    for idx, tile in enumerate(tiles):
+        row = idx // cols
+        col = idx % cols
+        y0 = row * tile_h
+        x0 = col * tile_w
+        mosaic[y0:y0 + tile_h, x0:x0 + tile_w] = tile
+
+    return mosaic, {
+        'sampled': True,
+        'sample_shape': mosaic.shape,
+        'sample_origin': [0, 0],
+        'source_shape': gray_image.shape,
+        'sampling_mode': 'random_tiles_mosaic',
+        'tile_count': int(count),
+        'tile_shape': [int(tile_h), int(tile_w)],
+        'tile_origins': tile_origins,
+        'overlay_supported': False,
+    }
+
+
+def _resolve_crop_bounds(image_shape, crop_region):
+    """Convert normalized crop values to pixel bounds within image limits."""
+    if crop_region is None or not isinstance(crop_region, dict):
+        return None
+    try:
+        h, w = int(image_shape[0]), int(image_shape[1])
+        left = float(crop_region.get('left', 0.0))
+        top = float(crop_region.get('top', 0.0))
+        right = float(crop_region.get('right', 1.0))
+        bottom = float(crop_region.get('bottom', 1.0))
+    except Exception:
+        return None
+
+    left = max(0.0, min(1.0, left))
+    top = max(0.0, min(1.0, top))
+    right = max(0.0, min(1.0, right))
+    bottom = max(0.0, min(1.0, bottom))
+
+    x1 = max(0, min(w, int(round(left * w))))
+    y1 = max(0, min(h, int(round(top * h))))
+    x2 = max(0, min(w, int(round(right * w))))
+    y2 = max(0, min(h, int(round(bottom * h))))
+
+    if x2 <= x1 + 10 or y2 <= y1 + 10:
+        return None
+
+    if x1 == 0 and y1 == 0 and x2 == w and y2 == h:
+        return None
+
+    return {
+        'x1': int(x1),
+        'y1': int(y1),
+        'x2': int(x2),
+        'y2': int(y2),
+        'width': int(x2 - x1),
+        'height': int(y2 - y1),
+    }
+
+
+def _offset_sample_metadata_to_source(sample_metadata, offset_x, offset_y, source_shape):
+    """Shift sample metadata from crop-local coordinates back into full image space."""
+    if sample_metadata is None:
+        return {
+            'sampled': False,
+            'sample_shape': list(source_shape),
+            'sample_origin': [0, 0],
+            'source_shape': list(source_shape),
+            'sampling_mode': 'full_image',
+            'overlay_supported': True,
+        }
+
+    meta = dict(sample_metadata)
+    sample_origin = meta.get('sample_origin', [0, 0])
+    if isinstance(sample_origin, (list, tuple)) and len(sample_origin) >= 2:
+        meta['sample_origin'] = [int(sample_origin[0]) + int(offset_x), int(sample_origin[1]) + int(offset_y)]
+
+    tile_origins = meta.get('tile_origins', [])
+    if isinstance(tile_origins, list):
+        shifted = []
+        for origin in tile_origins:
+            if not isinstance(origin, (list, tuple)) or len(origin) < 2:
+                continue
+            shifted.append([int(origin[0]) + int(offset_x), int(origin[1]) + int(offset_y)])
+        meta['tile_origins'] = shifted
+
+    meta['source_shape'] = [int(source_shape[0]), int(source_shape[1])]
+    return meta
+
+
+def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None):
+    """Automatically detect the best minimum path length by analyzing path distribution."""
+    if test_lengths is None:
+        test_lengths = [1, 3, 5, 8, 12, 16, 20]
+
+    print(f"Auto-detecting min path length using threshold {dark_threshold:.3f}...")
+
+    try:
+        initial_paths = extract_skeleton_paths(gray_image, dark_threshold, min_object_size=3)
+        if len(initial_paths) == 0:
+            return {
+                'best_min_length': 3,
+                'best_score': 0,
+                'recommendation': 'no paths found - try adjusting threshold first'
+            }
+
+        merged_paths = merge_nearby_paths(initial_paths, max_gap=25)
+    except Exception as e:
+        return {
+            'best_min_length': 3,
+            'best_score': 0,
+            'recommendation': f'error in path extraction: {str(e)}'
+        }
+
+    path_lengths = [len(path) for path in merged_paths]
+    path_lengths.sort(reverse=True)
+
+    if len(path_lengths) == 0:
+        return {
+            'best_min_length': 3,
+            'best_score': 0,
+            'recommendation': 'no merged paths found'
+        }
+
+    total_paths = len(path_lengths)
+    median_length = path_lengths[len(path_lengths) // 2] if path_lengths else 0
+
+    print(f"  Found {total_paths} merged paths, lengths: {min(path_lengths)}-{max(path_lengths)}, median: {median_length}")
+
+    best_min_length = test_lengths[0]
+    best_score = 0
+    length_results = []
+
+    for min_length in test_lengths:
+        valid_paths = [path for path in merged_paths if len(path) >= min_length]
+
+        if len(valid_paths) == 0:
+            score = 0
+        else:
+            path_count = len(valid_paths)
+            avg_length = sum(len(path) for path in valid_paths) / len(valid_paths)
+            total_length = sum(len(path) for path in valid_paths)
+
+            count_score = min(path_count / max(total_paths * 0.3, 1), 1.0)
+            length_score = min(avg_length / max(median_length * 1.5, 10), 1.0)
+            coverage_score = min(total_length / max(sum(path_lengths) * 0.7, 100), 1.0)
+
+            penalty = 0.5 if path_count < max(total_paths * 0.1, 2) else 1.0
+            score = (count_score * 0.4 + length_score * 0.3 + coverage_score * 0.3) * penalty
+
+        length_results.append({
+            'min_length': min_length,
+            'valid_paths': len(valid_paths) if 'valid_paths' in locals() else 0,
+            'score': score
+        })
+
+        if score > best_score:
+            best_score = score
+            best_min_length = min_length
+
+        print(f"    Min length {min_length}: {len(valid_paths) if 'valid_paths' in locals() else 0} paths, score: {score:.3f}")
+
+    recommendation = 'auto-detected' if best_score > 0.3 else ('low confidence - consider manual adjustment' if best_score > 0.1 else 'manual adjustment recommended')
+
+    print(f"  Best min path length: {best_min_length} (score: {best_score:.3f})")
+
+    return {
+        'best_min_length': best_min_length,
+        'best_score': best_score,
+        'all_results': length_results,
+        'recommendation': recommendation,
+        'path_stats': {
+            'total_paths': total_paths,
+            'median_length': median_length,
+            'length_range': [min(path_lengths), max(path_lengths)] if path_lengths else [0, 0]
+        }
+    }
+
+
+def auto_detect_dark_threshold(gray_image, sample_size=1000, threshold_range=(0.05, 0.8), num_thresholds=15):
+    """Automatically detect the best dark threshold by sampling the image."""
+    height, width = gray_image.shape
+    sample_indices = np.random.choice(height * width, min(sample_size, height * width), replace=False)
+    sample_coords = [(idx // width, idx % width) for idx in sample_indices]
+    sample_values = [gray_image[y, x] for y, x in sample_coords]
+
+    thresholds = np.linspace(threshold_range[0], threshold_range[1], num_thresholds)
+    best_threshold = threshold_range[0]
+    best_score = 0
+    threshold_results = []
+
+    print(f"Auto-detecting dark threshold from {len(sample_values)} sample pixels...")
+
+    for threshold in thresholds:
+        try:
+            initial_paths = extract_skeleton_paths(gray_image, threshold, min_object_size=3)
+
+            if len(initial_paths) == 0:
+                score = 0
+            else:
+                merged_paths = merge_nearby_paths(initial_paths, max_gap=25)
+                valid_paths = [path for path in merged_paths if len(path) >= 3]
+
+                if len(valid_paths) == 0:
+                    score = 0
+                else:
+                    total_length = sum(len(path) for path in valid_paths)
+                    path_count_score = min(len(valid_paths) / 10.0, 1.0)
+                    length_score = min(total_length / 1000.0, 1.0)
+                    score = path_count_score * length_score
+
+            threshold_results.append({
+                'threshold': threshold,
+                'score': score,
+                'path_count': len(initial_paths) if 'initial_paths' in locals() else 0,
+                'valid_count': len(valid_paths) if 'valid_paths' in locals() else 0
+            })
+
+            if score > best_score:
+                best_score = score
+                best_threshold = threshold
+
+            print(f"  Threshold {threshold:.3f}: {len(initial_paths) if 'initial_paths' in locals() else 0} paths, score: {score:.3f}")
+        except Exception as e:
+            print(f"  Threshold {threshold:.3f}: Failed - {e}")
+            threshold_results.append({
+                'threshold': threshold,
+                'score': 0,
+                'path_count': 0,
+                'valid_count': 0
+            })
+
+    print(f"Best threshold: {best_threshold:.3f} (score: {best_score:.3f})")
+
+    return {
+        'best_threshold': best_threshold,
+        'best_score': best_score,
+        'all_results': threshold_results,
+        'recommendation': 'auto-detected' if best_score > 0 else 'manual adjustment needed'
+    }
+
+
+def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num_thresholds=10,
+                                    base_min_lengths=None, preview_max_dim=900,
+                                    time_budget_sec=AUTO_TUNE_TIME_BUDGET_SEC,
+                                    sample_metadata=None,
+                                    should_continue=None,
+                                    on_best_result=None,
+                                    on_progress=None,
+                                    confidence_target=0.95):
+    """Jointly tune threshold and min path length on a preview image for a strong first extraction."""
+    if base_min_lengths is None:
+        base_min_lengths = [1, 3, 5, 8, 12, 16, 20]
+
+    started_at = time.perf_counter()
+    timed_out = False
+    cancelled = False
+    high_confidence_reached = False
+
+    if should_continue is None:
+        def should_continue():
+            return True
+
+    height, width = gray_image.shape
+    scale = 1.0
+    preview_image = gray_image
+
+    if max(height, width) > preview_max_dim:
+        scale = preview_max_dim / float(max(height, width))
+        preview_size = (max(1, int(round(width * scale))), max(1, int(round(height * scale))))
+        resample_filter = Image.Resampling.BILINEAR if hasattr(Image, 'Resampling') else Image.BILINEAR
+        preview_pil = Image.fromarray((gray_image * 255).astype(np.uint8)).resize(preview_size, resample_filter)
+        preview_image = np.asarray(preview_pil).astype(np.float32) / 255.0
+
+    mean_intensity = float(np.mean(preview_image))
+    dark_ratio_mid = float(np.mean(preview_image < 0.55))
+    dark_ratio_high = float(np.mean(preview_image < 0.80))
+    bright_score = float(np.clip((mean_intensity - 0.72) / 0.20, 0.0, 1.0))
+    sparse_mid_score = float(np.clip((0.45 - dark_ratio_high) / 0.45, 0.0, 1.0))
+    sparse_dark_score = float(np.clip((0.18 - dark_ratio_mid) / 0.18, 0.0, 1.0))
+    line_art_bias_strength = float(np.clip(
+        bright_score * 0.45 + sparse_mid_score * 0.35 + sparse_dark_score * 0.20,
+        0.0,
+        1.0
+    ))
+
+    candidate_lengths = []
+    seen_preview_lengths = set()
+    for full_length in base_min_lengths:
+        preview_length = max(1, int(round(full_length * scale)))
+        if preview_length in seen_preview_lengths:
+            continue
+        seen_preview_lengths.add(preview_length)
+        candidate_lengths.append((int(full_length), preview_length))
+
+    threshold_min = float(min(threshold_range[0], threshold_range[1]))
+    threshold_max = float(max(threshold_range[0], threshold_range[1]))
+    max_threshold_evals = max(2, int(num_thresholds))
+    merge_gap = max(6, int(round(25 * scale)))
+
+    best_result = None
+    second_best_score = 0.0
+    all_results = []
+
+    best_paths_for_progress = []
+    tested_thresholds = []
+    tested_threshold_keys = set()
+    overlay_supported = True
+    if sample_metadata is not None:
+        overlay_supported = bool(sample_metadata.get('overlay_supported', True))
+
+    sampling_mode = 'full_image'
+    tile_count = 1
+    if sample_metadata is not None:
+        sampling_mode = str(sample_metadata.get('sampling_mode', sampling_mode))
+        tile_count = max(1, int(sample_metadata.get('tile_count', 1)))
+
+    def _sampling_progress_fields():
+        if sampling_mode == 'random_tiles_mosaic':
+            return {
+                'sampling_mode': sampling_mode,
+                'current_tile_index': 0,
+                'current_tile_total': int(tile_count),
+            }
+        return {
+            'sampling_mode': sampling_mode,
+            'current_tile_index': 1,
+            'current_tile_total': 1,
+        }
+
+    def _emit_progress(phase='evaluating', threshold=None, threshold_index=None,
+                       current_min_length=0, threshold_best=None,
+                       current_paths_for_progress=None):
+        if on_progress is None:
+            return
+
+        current_confidence = 0.0
+        if best_result is not None:
+            current_confidence = max(0.0, min(1.0, (best_result['score'] - second_best_score) / max(best_result['score'], 1e-6)))
+
+        payload = {
+            'elapsed_sec': float(time.perf_counter() - started_at),
+            'timed_out': False,
+            'cancelled': False,
+            'high_confidence_reached': False,
+            'best_threshold': float(best_result['threshold']) if best_result is not None else 0.20,
+            'best_min_length': int(best_result['best_min_length']) if best_result is not None else 3,
+            'quality_score': float(best_result['score']) if best_result is not None else 0.0,
+            'confidence_score': float(current_confidence),
+            'sample_metadata': sample_metadata or {'sampled': False},
+            'live_paths': list(best_paths_for_progress),
+            'live_paths_current': list(current_paths_for_progress) if current_paths_for_progress is not None else [],
+            'live_paths_current_threshold': float(threshold) if threshold is not None else 0.0,
+            'live_paths_current_min_length': int(current_min_length if current_min_length else (best_result['best_min_length'] if best_result is not None else 3)),
+            'live_paths_current_score': float(threshold_best.get('score', 0.0)) if threshold_best is not None else 0.0,
+            'live_paths_frame_id': int(len(all_results)),
+            'live_paths_scale': float(scale),
+            'live_paths_sample_origin': list(sample_metadata.get('sample_origin', [0, 0])) if sample_metadata else [0, 0],
+            'live_paths_source_shape': list(sample_metadata.get('source_shape', list(preview_image.shape))) if sample_metadata else list(preview_image.shape),
+            'iterations_done': len(all_results),
+            'iterations_total': int(max_threshold_evals),
+            'current_phase': str(phase),
+            'current_threshold_index': int(threshold_index) if threshold_index is not None else int(len(all_results) + 1),
+        }
+        payload.update(_sampling_progress_fields())
+        on_progress(payload)
+
+    def _encode_overlay_paths(source_paths, preview_min_length, max_paths=16):
+        filtered_paths = [p for p in source_paths if len(p) >= int(preview_min_length)]
+        ranked_paths = sorted(filtered_paths, key=len, reverse=True)[:max_paths]
+        return [
+            [[int(pt[0]), int(pt[1])] for pt in p[::max(1, len(p) // 25)]]
+            for p in ranked_paths if len(p) >= 2
+        ]
+
+    def _threshold_key(value):
+        return int(round(float(value) * 1_000_000))
+
+    def _pick_next_threshold():
+        mid = (threshold_min + threshold_max) * 0.5
+        seed_thresholds = [mid, (threshold_min + mid) * 0.5, (mid + threshold_max) * 0.5]
+        for candidate in seed_thresholds:
+            if _threshold_key(candidate) not in tested_threshold_keys:
+                return float(candidate)
+
+        if best_result is not None and all_results:
+            best_t = float(best_result['threshold'])
+            sorted_results = sorted(all_results, key=lambda item: float(item.get('threshold', 0.0)))
+            left_neighbor = None
+            right_neighbor = None
+            for item in sorted_results:
+                threshold_value = float(item.get('threshold', 0.0))
+                if threshold_value < best_t:
+                    left_neighbor = threshold_value
+                elif threshold_value > best_t and right_neighbor is None:
+                    right_neighbor = threshold_value
+                    break
+
+            local_candidates = []
+            if left_neighbor is not None:
+                local_candidates.append((abs(best_t - left_neighbor), (best_t + left_neighbor) * 0.5))
+            else:
+                local_candidates.append((abs(best_t - threshold_min), (best_t + threshold_min) * 0.5))
+            if right_neighbor is not None:
+                local_candidates.append((abs(right_neighbor - best_t), (best_t + right_neighbor) * 0.5))
+            else:
+                local_candidates.append((abs(threshold_max - best_t), (best_t + threshold_max) * 0.5))
+
+            local_candidates.sort(key=lambda item: item[0], reverse=True)
+            for _, candidate in local_candidates:
+                if _threshold_key(candidate) not in tested_threshold_keys:
+                    return float(candidate)
+
+        anchors = [threshold_min] + sorted(tested_thresholds) + [threshold_max]
+        best_gap = 0.0
+        best_candidate = None
+        for idx in range(len(anchors) - 1):
+            gap_start = float(anchors[idx])
+            gap_end = float(anchors[idx + 1])
+            gap = gap_end - gap_start
+            if gap <= 1e-4:
+                continue
+            candidate = (gap_start + gap_end) * 0.5
+            if _threshold_key(candidate) in tested_threshold_keys:
+                continue
+            if gap > best_gap:
+                best_gap = gap
+                best_candidate = candidate
+
+        return float(best_candidate) if best_candidate is not None else None
+
+    def _evaluate_threshold(threshold):
+        nonlocal timed_out, cancelled
+        try:
+            threshold_index = int(len(all_results) + 1)
+            _emit_progress(phase='extracting_paths', threshold=threshold, threshold_index=threshold_index, current_min_length=0)
+            initial_paths = extract_skeleton_paths(preview_image, float(threshold), min_object_size=3)
+            if not initial_paths:
+                return ({'threshold': float(threshold), 'best_min_length': 3, 'score': 0.0, 'valid_paths': 0, 'longest_path': 0}, [])
+
+            _emit_progress(phase='merging_paths', threshold=threshold, threshold_index=threshold_index, current_min_length=0)
+            merged_paths = merge_nearby_paths(initial_paths, max_gap=merge_gap, verbose=False, should_continue=should_continue)
+            threshold_best = None
+
+            for full_min_length, preview_min_length in candidate_lengths:
+                _emit_progress(phase='scoring_min_length', threshold=threshold, threshold_index=threshold_index, current_min_length=int(full_min_length), threshold_best=threshold_best)
+                if not should_continue():
+                    cancelled = True
+                    print('Auto-tune cancelled while evaluating candidates')
+                    break
+                if (time.perf_counter() - started_at) > time_budget_sec:
+                    timed_out = True
+                    print(f"Auto-tune timed out at {time_budget_sec:.1f}s while evaluating min lengths")
+                    break
+
+                valid_paths = [path for path in merged_paths if len(path) >= preview_min_length]
+
+                if not valid_paths:
+                    candidate = {
+                        'threshold': float(threshold),
+                        'best_min_length': int(full_min_length),
+                        'preview_min_length': int(preview_min_length),
+                        'score': 0.0,
+                        'valid_paths': 0,
+                        'longest_path': 0,
+                        'top_total_length': 0.0,
+                        'median_top_length': 0.0
+                    }
+                else:
+                    lengths = sorted((len(path) for path in valid_paths), reverse=True)
+                    top_lengths = lengths[:min(6, len(lengths))]
+                    longest_path = float(top_lengths[0])
+                    top_total_length = float(sum(top_lengths))
+                    median_top_length = float(np.median(top_lengths))
+                    valid_count = len(valid_paths)
+
+                    fragment_penalty = 1.0 / (1.0 + max(valid_count - 60, 0) / 60.0)
+                    path_count_bonus = 1.0 + min(valid_count, 12) / 60.0
+                    high_threshold_bonus = 1.0 + line_art_bias_strength * max(0.0, (float(threshold) - 0.55) / 0.25) * 0.50
+                    low_threshold_penalty = 1.0 - line_art_bias_strength * max(0.0, (0.45 - float(threshold)) / 0.40) * 0.25
+                    threshold_bias = max(0.50, high_threshold_bonus * low_threshold_penalty)
+                    score = (
+                        longest_path * 0.55 +
+                        top_total_length * 0.30 +
+                        median_top_length * 0.15
+                    ) * fragment_penalty * path_count_bonus * threshold_bias
+
+                    candidate = {
+                        'threshold': float(threshold),
+                        'best_min_length': int(full_min_length),
+                        'preview_min_length': int(preview_min_length),
+                        'score': float(score),
+                        'threshold_bias': float(threshold_bias),
+                        'valid_paths': int(valid_count),
+                        'longest_path': int(round(longest_path / max(scale, 1e-6))),
+                        'top_total_length': float(top_total_length / max(scale, 1e-6)),
+                        'median_top_length': float(median_top_length / max(scale, 1e-6))
+                    }
+
+                if threshold_best is None:
+                    threshold_best = candidate
+                else:
+                    candidate_score = float(candidate.get('score', 0.0))
+                    current_best_score = float(threshold_best.get('score', 0.0))
+                    score_delta = candidate_score - current_best_score
+                    if score_delta > 1e-6 or (
+                        abs(score_delta) <= 1e-6 and
+                        int(candidate.get('best_min_length', 0)) > int(threshold_best.get('best_min_length', 0))
+                    ):
+                        threshold_best = candidate
+
+            if threshold_best is None:
+                return ({
+                    'threshold': float(threshold),
+                    'best_min_length': 3,
+                    'preview_min_length': 3,
+                    'score': 0.0,
+                    'valid_paths': 0,
+                    'longest_path': 0,
+                    'top_total_length': 0.0,
+                    'median_top_length': 0.0
+                }, merged_paths)
+
+            return threshold_best, merged_paths
+        except Exception as e:
+            print(f"  Threshold {threshold:.3f}: auto-tune failed - {e}")
+            return ({
+                'threshold': float(threshold),
+                'best_min_length': 3,
+                'preview_min_length': 3,
+                'score': 0.0,
+                'valid_paths': 0,
+                'longest_path': 0,
+                'error': str(e)
+            }, [])
+
+    print(f"Auto-tuning extraction parameters on preview {preview_image.shape} (scale {scale:.3f})...")
+    print(
+        '  Line-art bias: '
+        f"strength={line_art_bias_strength:.2f}, "
+        f"mean={mean_intensity:.3f}, dark<0.80={dark_ratio_high:.3f}, dark<0.55={dark_ratio_mid:.3f}"
+    )
+
+    while len(all_results) < max_threshold_evals:
+        threshold = _pick_next_threshold()
+        if threshold is None:
+            break
+
+        threshold_key = _threshold_key(threshold)
+        tested_threshold_keys.add(threshold_key)
+        tested_thresholds.append(float(threshold))
+
+        if not should_continue():
+            cancelled = True
+            print('Auto-tune cancelled by client request')
+            break
+        if (time.perf_counter() - started_at) > time_budget_sec:
+            timed_out = True
+            print(f"Auto-tune timed out at {time_budget_sec:.1f}s before threshold {threshold:.3f}")
+            break
+        threshold_best, merged_paths = _evaluate_threshold(threshold)
+        all_results.append(threshold_best)
+
+        current_paths_for_progress = []
+        if overlay_supported:
+            try:
+                preview_min_length = int(threshold_best.get('preview_min_length', threshold_best['best_min_length']))
+                current_paths_for_progress = _encode_overlay_paths(merged_paths, preview_min_length)
+            except Exception:
+                current_paths_for_progress = []
+
+        if best_result is None or threshold_best['score'] > best_result['score']:
+            if best_result is not None:
+                second_best_score = best_result['score']
+            best_result = threshold_best
+            if overlay_supported:
+                try:
+                    best_paths_for_progress = list(current_paths_for_progress)
+                except Exception:
+                    pass
+            else:
+                best_paths_for_progress = []
+            if on_best_result is not None:
+                on_best_result({
+                    'best_threshold': float(best_result['threshold']),
+                    'best_min_length': int(best_result['best_min_length']),
+                    'quality_score': float(best_result['score']),
+                    'confidence_score': float(max(0.0, min(1.0, (best_result['score'] - second_best_score) / max(best_result['score'], 1e-6)))),
+                    'recommendation': 'partial best-so-far',
+                    'preview_shape': preview_image.shape,
+                    'preview_scale': float(scale),
+                    'longest_path': int(best_result.get('longest_path', 0)),
+                    'valid_paths': int(best_result.get('valid_paths', 0)),
+                    'timed_out': False,
+                    'cancelled': False,
+                    'elapsed_sec': float(time.perf_counter() - started_at),
+                    'sample_metadata': sample_metadata or {'sampled': False}
+                })
+        elif threshold_best['score'] > second_best_score:
+            second_best_score = threshold_best['score']
+
+        print(
+            f"  Threshold {threshold:.3f}: best min length {threshold_best['best_min_length']}, "
+            f"score {threshold_best['score']:.2f}, longest {threshold_best['longest_path']}"
+        )
+
+        current_confidence = 0.0
+        if best_result is not None:
+            current_confidence = max(0.0, min(1.0, (best_result['score'] - second_best_score) / max(best_result['score'], 1e-6)))
+
+        if on_progress is not None:
+            _emit_progress(
+                phase='threshold_complete',
+                threshold=threshold,
+                threshold_index=len(all_results),
+                current_min_length=int(threshold_best.get('best_min_length', 3)),
+                threshold_best=threshold_best,
+                current_paths_for_progress=current_paths_for_progress,
+            )
+
+        if len(all_results) >= 2 and current_confidence >= confidence_target:
+            high_confidence_reached = True
+            print(f"Auto-tune reached confidence target {confidence_target:.2f} at {current_confidence:.3f}; stopping early")
+            break
+
+        if cancelled or timed_out:
+            break
+
+    if best_result is None or best_result['score'] <= 0:
+        return {
+            'best_threshold': 0.20,
+            'best_min_length': 3,
+            'quality_score': 0.0,
+            'confidence_score': 0.0,
+            'recommendation': 'failed to detect best settings',
+            'preview_shape': preview_image.shape,
+            'preview_scale': scale,
+            'longest_path': 0,
+            'valid_paths': 0,
+            'all_results': all_results,
+            'timed_out': timed_out,
+            'cancelled': cancelled,
+            'high_confidence_reached': high_confidence_reached,
+            'elapsed_sec': float(time.perf_counter() - started_at),
+            'sample_metadata': sample_metadata or {'sampled': False}
+        }
+
+    confidence_score = max(0.0, min(1.0, (best_result['score'] - second_best_score) / max(best_result['score'], 1e-6)))
+    if confidence_score >= 0.18:
+        recommendation = 'high confidence'
+    elif confidence_score >= 0.08:
+        recommendation = 'moderate confidence'
+    else:
+        recommendation = 'low confidence - manual adjustment may still help'
+
+    return {
+        'best_threshold': float(best_result['threshold']),
+        'best_min_length': int(best_result['best_min_length']),
+        'quality_score': float(best_result['score']),
+        'confidence_score': float(confidence_score),
+        'recommendation': recommendation,
+        'preview_shape': preview_image.shape,
+        'preview_scale': float(scale),
+        'longest_path': int(best_result['longest_path']),
+        'valid_paths': int(best_result['valid_paths']),
+        'all_results': all_results,
+        'timed_out': timed_out,
+        'cancelled': cancelled,
+        'high_confidence_reached': high_confidence_reached,
+        'elapsed_sec': float(time.perf_counter() - started_at),
+        'sample_metadata': sample_metadata or {'sampled': False}
+    }
+
+
+def _normalize_background_if_needed(gray_image, normalization_mode='auto', normalization_sensitivity='medium'):
+    """Conditionally flatten uneven backgrounds while preserving dark strokes."""
+    from skimage import exposure, filters
+
+    requested_mode = str(normalization_mode or 'auto').strip().lower()
+    if requested_mode not in ('auto', 'on', 'off'):
+        requested_mode = 'auto'
+
+    requested_sensitivity = str(normalization_sensitivity or 'medium').strip().lower()
+    if requested_sensitivity not in ('low', 'medium', 'high'):
+        requested_sensitivity = 'medium'
+
+    sensitivity_scale = {'low': 1.20, 'medium': 1.00, 'high': 0.82}[requested_sensitivity]
+    gray = np.clip(gray_image.astype(np.float32), 0.0, 1.0)
+    background = filters.gaussian(gray, sigma=24.0, preserve_range=True)
+
+    edge_strength = np.abs(filters.sobel(gray))
+    bright_cutoff = float(np.quantile(gray, 0.70))
+    edge_cutoff = float(np.quantile(edge_strength, 0.60))
+    bright_mask = (gray >= bright_cutoff) & (edge_strength <= edge_cutoff)
+    bright_background = background[bright_mask]
+
+    if bright_background.size >= 500:
+        bg_p05, bg_p95 = np.percentile(bright_background, [5, 95])
+        bg_range = float(bg_p95 - bg_p05)
+        bg_std = float(np.std(bright_background))
+    else:
+        bg_p05, bg_p95 = np.percentile(background, [5, 95])
+        bg_range = float(bg_p95 - bg_p05)
+        bg_std = float(np.std(background))
+
+    illumination_gradient = float(np.mean(np.abs(filters.sobel(background))))
+    dark_ratio = float(np.mean(gray < 0.65))
+    paper_level = float(np.percentile(gray, 90))
+    ink_candidates = gray[gray <= (paper_level - 0.08)]
+    ink_level = float(np.percentile(ink_candidates, 25)) if ink_candidates.size >= 200 else float(np.percentile(gray, 2))
+    ink_contrast = max(0.0, paper_level - ink_level)
+
+    local_trend = filters.gaussian(gray, sigma=1.6, preserve_range=True)
+    texture_residual = gray - local_trend
+    bright_texture = texture_residual[bright_mask]
+    background_texture = float(np.std(bright_texture)) if bright_texture.size >= 500 else float(np.std(texture_residual))
+
+    range_score = float(np.clip((bg_range - 0.035) / 0.040, 0.0, 1.0))
+    std_score = float(np.clip((bg_std - 0.008) / 0.020, 0.0, 1.0))
+    gradient_score = float(np.clip((illumination_gradient - 0.004) / 0.015, 0.0, 1.0))
+    normalization_score = 0.55 * range_score + 0.25 * std_score + 0.20 * gradient_score
+    if dark_ratio > 0.62:
+        normalization_score *= 0.70
+
+    decision_score = float(np.round(normalization_score, 3))
+    decision_threshold = 0.35 * sensitivity_scale
+    bg_range_threshold = 0.075 * sensitivity_scale
+    should_normalize = bool(decision_score >= decision_threshold or bg_range > bg_range_threshold)
+
+    low_contrast_shaded = bool(ink_contrast < 0.24 and (bg_range > 0.040 or illumination_gradient > 0.0060 or background_texture > 0.0060))
+    force_normalize = bool(low_contrast_shaded and (decision_score >= 0.28 or bg_range > 0.055 or background_texture > 0.0065))
+    faint_sparse_ink = bool(dark_ratio < 0.030 and ink_contrast < 0.40 and bg_range > 0.030 and background_texture > 0.0010)
+    if faint_sparse_ink:
+        force_normalize = True
+    if force_normalize:
+        should_normalize = True
+
+    high_contrast_clean_line_art = bool(ink_contrast >= 0.42 and dark_ratio < 0.30 and background_texture < 0.0058 and bg_std < 0.024 and illumination_gradient < 0.011)
+    if high_contrast_clean_line_art and not force_normalize:
+        should_normalize = False
+
+    inflated_range_clean_art = bool(ink_contrast >= 0.70 and dark_ratio < 0.16 and illumination_gradient < 0.0032 and background_texture < 0.020)
+    if inflated_range_clean_art and not force_normalize:
+        should_normalize = False
+
+    perfect_contrast_no_gradient = bool(ink_contrast >= 0.80 and illumination_gradient < 0.010)
+    if perfect_contrast_no_gradient and not force_normalize:
+        should_normalize = False
+
+    line_art_guard = bool(
+        dark_ratio < 0.22 and
+        bg_std < 0.017 and
+        illumination_gradient < 0.0085 and
+        bg_range < 0.080 and
+        background_texture < 0.0050 and
+        (decision_score < 0.32 or ink_contrast >= 0.15)
+    )
+    if line_art_guard and not force_normalize:
+        should_normalize = False
+
+    if requested_mode == 'off':
+        should_normalize = False
+    elif requested_mode == 'on':
+        should_normalize = True
+
+    if requested_mode == 'off':
+        reason = 'disabled by user'
+    elif requested_mode == 'on':
+        reason = 'forced by user'
+    elif force_normalize:
+        reason = 'faint sparse ink detail' if faint_sparse_ink else 'low-contrast ink with background shading'
+    elif should_normalize and bg_range > bg_range_threshold:
+        reason = 'strong background shading range'
+    elif should_normalize:
+        reason = 'combined background variance score'
+    elif inflated_range_clean_art:
+        reason = 'clean high-contrast drawing (range inflated by line structure)'
+    elif high_contrast_clean_line_art:
+        reason = 'high-contrast clean line-art'
+    elif line_art_guard:
+        reason = 'sparse line-art on uniform background'
+    else:
+        reason = 'background uniform enough'
+
+    metadata = {
+        'applied': should_normalize,
+        'background_range': round(bg_range, 4),
+        'background_std': round(bg_std, 4),
+        'illumination_gradient': round(illumination_gradient, 4),
+        'normalization_score': decision_score,
+        'dark_ratio': round(dark_ratio, 4),
+        'ink_contrast': round(ink_contrast, 4),
+        'background_texture': round(background_texture, 4),
+        'reason': reason,
+        'mode': 'none',
+        'requested_mode': requested_mode,
+        'requested_sensitivity': requested_sensitivity,
+    }
+
+    if not should_normalize:
+        return gray, metadata
+
+    safe_background = np.clip(background, 1e-3, 1.0)
+    normalized = (gray / safe_background) * float(np.mean(safe_background))
+    normalized = np.clip(normalized, 0.0, 1.0)
+
+    low, high = np.percentile(normalized, [2, 98])
+    if high - low > 1e-6:
+        normalized = exposure.rescale_intensity(normalized, in_range=(low, high), out_range=(0.0, 1.0))
+
+    metadata['mode'] = 'divide_and_rescale'
+    metadata['post_low'] = round(float(low), 4)
+    metadata['post_high'] = round(float(high), 4)
+
+    return np.clip(normalized.astype(np.float32), 0.0, 1.0), metadata
+
+
+def load_and_process_image(image_path, normalization_mode='auto', normalization_sensitivity='medium'):
+    """Load an image/PDF and return raw+extraction grayscale images in 0-1 range."""
+    from skimage import color, io
+    from PIL import Image as PILImage
+
+    extension = Path(image_path).suffix.lower()
+
+    if extension == '.pdf':
+        try:
+            import importlib as _il
+            pdfium = _il.import_module('pypdfium2')
+        except Exception as exc:
+            raise ValueError('PDF upload requires pypdfium2. Install dependencies and retry.') from exc
+        try:
+            pdf = pdfium.PdfDocument(image_path)
+            if len(pdf) == 0:
+                raise ValueError('PDF has no pages')
+            page = pdf[0]
+            bitmap = page.render(scale=2.0)
+            pil_page = bitmap.to_pil().convert('RGB')
+            img = np.asarray(pil_page).astype(np.float32) / 255.0
+            pdf.close()
+            gray = color.rgb2gray(img)
+        except Exception as exc:
+            raise ValueError(f'Failed to render PDF: {exc}') from exc
+    elif extension == '.png':
+        with PILImage.open(image_path) as pil_src:
+            png_gamma_val = pil_src.info.get('gamma', None)
+            print(f"[load] PNG mode={pil_src.mode} size={pil_src.size} gamma={png_gamma_val}")
+            pil_rgba = pil_src.convert('RGBA')
+            white_bg = PILImage.new('RGBA', pil_rgba.size, (255, 255, 255, 255))
+            white_bg.alpha_composite(pil_rgba)
+            rgb_arr = np.asarray(white_bg.convert('RGB')).astype(np.float32) / 255.0
+            print(f"[load] after composite: min={rgb_arr.min():.4f} max={rgb_arr.max():.4f} mean={rgb_arr.mean():.4f}")
+
+        if png_gamma_val is not None and 0.0 < png_gamma_val < 0.5:
+            rgb_arr = np.clip(np.power(rgb_arr, png_gamma_val), 0.0, 1.0)
+            print(f"[load] gamma {png_gamma_val:.5f} applied -> min={rgb_arr.min():.4f} max={rgb_arr.max():.4f}")
+
+        gray = color.rgb2gray(rgb_arr)
+    else:
+        img = io.imread(image_path)
+        print(f"[load] skimage dtype={img.dtype} shape={img.shape} min={int(np.min(img))} max={int(np.max(img))}")
+
+        if len(img.shape) == 3:
+            channels = img.shape[2]
+            if channels == 4:
+                rgb = img[:, :, :3].astype(np.float32)
+                alpha = img[:, :, 3].astype(np.float32)
+                if rgb.max() > 1.0:
+                    rgb /= 255.0
+                if alpha.max() > 1.0:
+                    alpha /= 255.0
+                composited_rgb = rgb * alpha[:, :, None] + (1.0 - alpha[:, :, None])
+                gray = color.rgb2gray(composited_rgb)
+            elif channels == 3:
+                rgb = img.astype(np.float32)
+                if rgb.max() > 1.0:
+                    rgb /= 255.0
+                gray = color.rgb2gray(rgb)
+            else:
+                raise ValueError(f'Unsupported image format with {channels} channels')
+        elif len(img.shape) == 2:
+            gray = img.astype(np.float32)
+            if gray.max() > 1.0:
+                gray /= 255.0
+        else:
+            raise ValueError(f'Unsupported image shape: {img.shape}')
+
+    raw_gray = np.clip(gray.astype(np.float32), 0.0, 1.0)
+    print(f"[load] raw_gray  min={raw_gray.min():.4f} max={raw_gray.max():.4f} mean={raw_gray.mean():.4f} std={raw_gray.std():.4f}")
+
+    gray_range = float(raw_gray.max() - raw_gray.min())
+    if gray_range < 0.05 and raw_gray.mean() < 0.1:
+        p_lo = float(np.percentile(raw_gray, 1))
+        p_hi = float(np.percentile(raw_gray, 99))
+        if p_hi > p_lo:
+            raw_gray = np.clip((raw_gray - p_lo) / (p_hi - p_lo), 0.0, 1.0)
+            print(f"[load] near-black flat image (range={gray_range:.4f}); contrast stretched -> min={raw_gray.min():.4f} max={raw_gray.max():.4f}")
+
+    extraction_gray, preprocessing_info = _normalize_background_if_needed(
+        raw_gray,
+        normalization_mode=normalization_mode,
+        normalization_sensitivity=normalization_sensitivity,
+    )
+    return raw_gray, extraction_gray, preprocessing_info
+
+
+def _extract_tile_preview_paths(gray_image, sample_metadata, dark_threshold, min_path_length, per_tile_limit=3, full_resolution=False):
+    """Extract path overlays per sampled tile with quality stats."""
+    if gray_image is None or sample_metadata is None:
+        return [], {}
+
+    image_h, image_w = gray_image.shape
+    sampling_mode = str(sample_metadata.get('sampling_mode', 'full_image'))
+    tile_shape = sample_metadata.get('tile_shape') or [0, 0]
+    tile_origins = sample_metadata.get('tile_origins') or []
+
+    if sampling_mode == 'random_tiles_mosaic' and tile_origins:
+        tile_h = int(tile_shape[0]) if len(tile_shape) >= 1 else 0
+        tile_w = int(tile_shape[1]) if len(tile_shape) >= 2 else 0
+        if tile_h <= 0 or tile_w <= 0:
+            return [], {}
+    else:
+        tile_h, tile_w = int(image_h), int(image_w)
+        tile_origins = [[0, 0]]
+
+    max_gap = max(4, int(round(min(tile_h, tile_w) * 0.17)))
+    out_tiles = []
+
+    for tile_index, origin in enumerate(tile_origins, start=1):
+        if not isinstance(origin, (list, tuple)) or len(origin) < 2:
+            continue
+        ox = int(origin[0])
+        oy = int(origin[1])
+        if ox < 0 or oy < 0 or ox + tile_w > image_w or oy + tile_h > image_h:
+            continue
+
+        tile = gray_image[oy:oy + tile_h, ox:ox + tile_w]
+        initial_paths = extract_skeleton_paths(tile, float(dark_threshold), min_object_size=3)
+        if not initial_paths:
+            continue
+
+        merged_paths = merge_nearby_paths(initial_paths, max_gap=max_gap, verbose=False)
+        valid_paths = [path for path in merged_paths if len(path) >= int(min_path_length)]
+        orphan_paths = [path for path in merged_paths if len(path) < int(min_path_length)]
+        tile_total_length = sum(len(path) for path in valid_paths)
+
+        tile_entry = {
+            'tile_index': int(tile_index),
+            'valid_count': len(valid_paths),
+            'orphan_count': len(orphan_paths),
+            'total_length': tile_total_length,
+            'paths': [],
+        }
+
+        for rank, path in enumerate(sorted(valid_paths, key=len, reverse=True)[:max(1, int(per_tile_limit))]):
+            stride = 1 if full_resolution else max(1, len(path) // 30)
+            encoded = []
+            for pt in path[::stride]:
+                py = int(pt[0]) + oy
+                px = int(pt[1]) + ox
+                encoded.append([py, px])
+            if len(encoded) >= 2:
+                tile_entry['paths'].append({
+                    'rank': rank,
+                    'length': int(len(path)),
+                    'points': encoded,
+                })
+
+        out_tiles.append(tile_entry)
+
+    total_valid = sum(tile['valid_count'] for tile in out_tiles)
+    total_orphan = sum(tile['orphan_count'] for tile in out_tiles)
+    total_length = sum(tile['total_length'] for tile in out_tiles)
+    agg_stats = {
+        'total_valid_paths': total_valid,
+        'total_orphan_paths': total_orphan,
+        'total_path_length': total_length,
+        'tile_count': len(out_tiles),
+        'noise_ratio': round(total_orphan / max(1, total_valid + total_orphan), 3),
+    }
+
+    return out_tiles, agg_stats
