@@ -1190,6 +1190,7 @@
         let lastAutoTuneSampleMetadata = null;
         let lastLiveOverlayProgressData = null;
         let lastMagentaSkeletonPaths = null;
+        let downloadSvgClickLockUntil = 0;
         let currentUploadDisplayImages = {
             raw: null,
             normalized: null,
@@ -4015,6 +4016,7 @@
                     const downloadBtn = document.getElementById('downloadBtn');
                     setDownloadButtonAccent(optimizationReached100);
                     downloadBtn.style.display = shouldShowDownloadButton() ? 'inline-block' : 'none';
+                    downloadBtn.disabled = false;
                     const resetSvgViewBtn = document.getElementById('resetSvgViewBtn');
                     if (resetSvgViewBtn) {
                         resetSvgViewBtn.style.display = 'inline-block';
@@ -4104,7 +4106,25 @@
                 return;
             }
 
-            window.open(`/download_svg/${currentSessionId}`, '_blank');
+            const now = Date.now();
+            if (now < downloadSvgClickLockUntil) {
+                return;
+            }
+
+            downloadSvgClickLockUntil = now + 2500;
+            const downloadBtn = document.getElementById('downloadBtn');
+            if (downloadBtn) {
+                downloadBtn.disabled = true;
+            }
+
+            // Reuse one tab/window to avoid opening many concurrent downloads.
+            window.open(`/download_svg/${currentSessionId}`, 'centerline_svg_download');
+
+            setTimeout(() => {
+                if (downloadBtn) {
+                    downloadBtn.disabled = false;
+                }
+            }, 2500);
         }
 
         function showMessage(message, type) {
@@ -4169,6 +4189,8 @@
             const downloadBtn = document.getElementById('downloadBtn');
             setDownloadButtonAccent(false);
             downloadBtn.style.display = 'none';
+            downloadBtn.disabled = false;
+            downloadSvgClickLockUntil = 0;
             const resetSvgViewBtn = document.getElementById('resetSvgViewBtn');
             if (resetSvgViewBtn) {
                 resetSvgViewBtn.style.display = 'none';
