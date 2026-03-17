@@ -1224,6 +1224,7 @@
         let lastMagentaSkeletonPaths = null;
         let currentUploadFileName = null;
         let downloadSvgClickLockUntil = 0;
+        let downloadSvgFrame = null;
         let lastRenderedSvgContent = null;
         let currentSvgObjectUrl = null;
         let currentSvgExportFilename = 'centerline_export.svg';
@@ -3854,7 +3855,7 @@
                             : NORMAL_SVG_VIEW_REFRESH_MS;
                         const shouldRefreshSvg = (now - lastSvgProgressRefreshAt) >= refreshIntervalMs;
 
-                        if (shouldRefreshSvg) {
+                        if (shouldRefreshSvg && now >= downloadSvgClickLockUntil) {
                             console.log(`Updating SVG with ${done} optimized paths`);
                             lastSvgProgressRefreshAt = now;
                             generateSVG('progressive');
@@ -4257,8 +4258,14 @@
                 downloadBtn.disabled = true;
             }
 
-            // Reuse one tab/window to avoid opening many concurrent downloads.
-            window.open(`/download_svg/${currentSessionId}`, 'centerline_svg_download');
+            if (!downloadSvgFrame) {
+                downloadSvgFrame = document.createElement('iframe');
+                downloadSvgFrame.style.display = 'none';
+                downloadSvgFrame.setAttribute('aria-hidden', 'true');
+                document.body.appendChild(downloadSvgFrame);
+            }
+
+            downloadSvgFrame.src = `/download_svg/${currentSessionId}?t=${Date.now()}`;
 
             setTimeout(() => {
                 if (downloadBtn) {
