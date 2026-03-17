@@ -135,6 +135,7 @@ class CenterlineSession:
             'sample_metadata': {'sampled': False},
         }
         self.partial_optimized_paths = []  # Store partially optimized paths
+        self.svg_cache = {}
         self.lock = threading.Lock()  # Lock for thread-safe access to partial_optimized_paths
         self.parameters = {
             'dark_threshold': 0.20,
@@ -221,25 +222,195 @@ def _update_benchmark_bucket(session, bucket_name, payload):
     metrics[bucket_name] = bucket
 
 
-def _record_benchmark_svg(session, display_mode, elapsed_ms, svg_content, suppressed):
+def _record_benchmark_svg(session, display_mode, elapsed_ms, svg_content, suppressed, cache_hit=False):
     _update_benchmark_bucket(session, 'latest_svg', {
         'mode': str(display_mode),
         'elapsed_ms': round(float(elapsed_ms), 3),
         'svg_chars': int(len(svg_content)),
         'svg_bytes_utf8': int(len(svg_content.encode('utf-8'))),
         'preview_paths_suppressed': bool(suppressed),
+        'cache_hit': bool(cache_hit),
     })
 
 
-def _record_benchmark_download(session, elapsed_ms, file_path):
-    try:
-        file_size = int(os.path.getsize(file_path))
-    except OSError:
-        file_size = 0
+def _record_benchmark_download(session, elapsed_ms, file_size, cache_hit=False):
     _update_benchmark_bucket(session, 'latest_download', {
         'elapsed_ms': round(float(elapsed_ms), 3),
-        'svg_file_bytes': file_size,
+        'svg_file_bytes': int(file_size),
+        'cache_hit': bool(cache_hit),
     })
+
+
+def _latest_benchmark_recorded_at_ms(metrics):
+    latest_recorded_at_ms = int(metrics.get('created_at_ms', 0) or 0)
+
+    for stage_payload in metrics.get('stages', {}).values():
+        latest_recorded_at_ms = max(latest_recorded_at_ms, int(stage_payload.get('recorded_at_ms', 0) or 0))
+
+    for bucket_name in ('latest_svg', 'latest_download', 'optimization'):
+        bucket_payload = metrics.get(bucket_name, {})
+        latest_recorded_at_ms = max(latest_recorded_at_ms, int(bucket_payload.get('recorded_at_ms', 0) or 0))
+
+    return latest_recorded_at_ms
+
+
+def _build_benchmark_summary(session, metrics, payload):
+    latest_recorded_at_ms = _latest_benchmark_recorded_at_ms(metrics)
+    if latest_recorded_at_ms <= 0:
+        latest_recorded_at_ms = int(round(time.time() * 1000.0))
+
+    stage_elapsed_ms = 0.0
+    for stage_payload in metrics.get('stages', {}).values():
+        elapsed_ms = stage_payload.get('elapsed_ms')
+        if isinstance(elapsed_ms, (int, float)):
+            stage_elapsed_ms += float(elapsed_ms)
+
+    optimization_elapsed_ms = metrics.get('optimization', {}).get('elapsed_ms')
+
+    if payload.get('optimization_complete'):
+        current_phase = 'optimization_complete'
+    elif payload.get('has_results'):
+        current_phase = 'results_ready'
+    elif metrics.get('stages', {}).get('process_immediate'):
+        current_phase = 'optimization_running'
+    else:
+        current_phase = 'uploaded'
+
+    wall_clock_ms = max(0.0, float(latest_recorded_at_ms) - float(metrics.get('created_at_ms', 0) or 0))
+
+    summary = {
+        'current_phase': current_phase,
+        'wall_clock_ms': round(wall_clock_ms, 3),
+        'wall_clock_sec': round(wall_clock_ms / 1000.0, 4),
+        'recorded_stage_ms': round(stage_elapsed_ms, 3),
+    }
+    if isinstance(optimization_elapsed_ms, (int, float)):
+        summary['optimization_ms'] = round(float(optimization_elapsed_ms), 3)
+
+    return summary
+
+
+def _path_snapshot_stats(paths):
+    paths = paths or []
+    return len(paths), sum(len(path) for path in paths)
+
+
+def _svg_render_signature(
+    render_variant,
+    include_image,
+    show_pre,
+    curve_fit_tolerance,
+    endpoint_tangent_strictness,
+    force_orthogonal_as_lines,
+    pre_paths,
+    optimized_paths,
+    suppress_paths_in_view,
+    has_circle_system,
+    optimization_generation,
+    optimization_complete,
+):
+    pre_count, pre_points = _path_snapshot_stats(pre_paths)
+    optimized_count, optimized_points = _path_snapshot_stats(optimized_paths)
+    return (
+        str(render_variant),
+        bool(include_image),
+        bool(show_pre),
+        round(float(curve_fit_tolerance), 4),
+        round(float(endpoint_tangent_strictness), 4),
+        bool(force_orthogonal_as_lines),
+        bool(suppress_paths_in_view),
+        bool(has_circle_system),
+        int(optimization_generation),
+        bool(optimization_complete),
+        int(pre_count),
+        int(pre_points),
+        int(optimized_count),
+        int(optimized_points),
+    )
+
+
+def _get_cached_svg_render(session, cache_key):
+    return session.svg_cache.get(cache_key)
+
+
+def _store_cached_svg_render(session, cache_key, svg_content, suppressed):
+    if len(session.svg_cache) >= 8:
+        oldest_key = next(iter(session.svg_cache))
+        session.svg_cache.pop(oldest_key, None)
+    session.svg_cache[cache_key] = {
+        'svg': svg_content,
+        'preview_paths_suppressed': bool(suppressed),
+    }
+
+
+def _render_svg_content(
+    session,
+    render_variant,
+    background_image,
+    circle_system,
+    optimized_paths,
+    pre_optimization_paths,
+    curve_fit_tolerance,
+    endpoint_tangent_strictness,
+    force_orthogonal_as_lines,
+    include_image,
+    show_pre,
+    suppress_paths_in_view=False,
+):
+    cache_key = _svg_render_signature(
+        render_variant,
+        include_image,
+        show_pre,
+        curve_fit_tolerance,
+        endpoint_tangent_strictness,
+        force_orthogonal_as_lines,
+        pre_optimization_paths,
+        optimized_paths,
+        suppress_paths_in_view,
+        circle_system is not None,
+        session.optimization_generation,
+        session.optimization_complete,
+    )
+    cached_render = _get_cached_svg_render(session, cache_key)
+    if cached_render is not None:
+        return cached_render['svg'], cached_render['preview_paths_suppressed'], True
+
+    temp_svg = os.path.join(tempfile.gettempdir(), f"centerline_render_{session.session_id}_{abs(hash(cache_key))}.svg")
+
+    import centerline_engine as wo
+    original_output = wo.OUTPUT_PATH
+    original_show_bitmap = wo.SHOW_BITMAP
+    original_show_pre = wo.SHOW_PRE_OPTIMIZATION_PATHS
+
+    try:
+        wo.OUTPUT_PATH = temp_svg
+        wo.SHOW_BITMAP = include_image
+        wo.SHOW_PRE_OPTIMIZATION_PATHS = show_pre
+        create_svg_output(
+            background_image,
+            circle_system,
+            optimized_paths,
+            [1.0] * len(optimized_paths),
+            pre_optimization_paths,
+            curve_fit_tolerance=curve_fit_tolerance,
+            endpoint_tangent_strictness=endpoint_tangent_strictness,
+            force_orthogonal_as_lines=force_orthogonal_as_lines,
+        )
+
+        if not os.path.exists(temp_svg):
+            raise FileNotFoundError(f"SVG generation failed - file not created: {temp_svg}")
+
+        with open(temp_svg, 'r') as file_handle:
+            svg_content = file_handle.read()
+    finally:
+        wo.OUTPUT_PATH = original_output
+        wo.SHOW_BITMAP = original_show_bitmap
+        wo.SHOW_PRE_OPTIMIZATION_PATHS = original_show_pre
+        if os.path.exists(temp_svg):
+            os.remove(temp_svg)
+
+    _store_cached_svg_render(session, cache_key, svg_content, suppress_paths_in_view)
+    return svg_content, suppress_paths_in_view, False
 
 
 def _benchmark_metrics_response(session):
@@ -253,6 +424,7 @@ def _benchmark_metrics_response(session):
     payload['optimization_complete'] = bool(session.optimization_complete)
     payload['optimized_path_count'] = len(session.partial_optimized_paths)
     payload['has_results'] = bool(session.results and 'error' not in session.results)
+    payload['summary'] = _build_benchmark_summary(session, metrics, payload)
     return payload
 
 
@@ -1119,7 +1291,7 @@ def upload_file():
         # Store session
         sessions[session_id] = session
         
-        # Convert raw and normalized images to base64 for UI preview toggling.
+        # Only encode the distinct preview variants we actually need to return.
         preview_encode_started_at = time.perf_counter()
         raw_img = Image.fromarray((raw_gray * 255).astype(np.uint8))
         raw_buf = BytesIO()
@@ -1127,31 +1299,37 @@ def upload_file():
         raw_buf.seek(0)
         raw_img_data = base64.b64encode(raw_buf.read()).decode('utf-8')
 
-        normalized_img = Image.fromarray((extraction_gray * 255).astype(np.uint8))
-        normalized_buf = BytesIO()
-        normalized_img.save(normalized_buf, format='PNG')
-        normalized_buf.seek(0)
-        normalized_img_data = base64.b64encode(normalized_buf.read()).decode('utf-8')
+        normalization_applied = bool(preprocessing_info.get('applied', False))
+        if normalization_applied:
+            normalized_img = Image.fromarray((extraction_gray * 255).astype(np.uint8))
+            normalized_buf = BytesIO()
+            normalized_img.save(normalized_buf, format='PNG')
+            normalized_buf.seek(0)
+            normalized_img_data = base64.b64encode(normalized_buf.read()).decode('utf-8')
+        else:
+            normalized_img_data = raw_img_data
+
         preview_encode_elapsed_ms = (time.perf_counter() - preview_encode_started_at) * 1000.0
         _record_benchmark_stage(session, 'preview_image_encoding', preview_encode_elapsed_ms, {
             'raw_image_b64_chars': len(raw_img_data),
             'normalized_image_b64_chars': len(normalized_img_data),
+            'encoded_variant_count': 2 if normalization_applied else 1,
+            'reused_preview_image': not normalization_applied,
         })
 
-        normalization_applied = bool(preprocessing_info.get('applied', False))
         default_img_data = normalized_img_data if normalization_applied else raw_img_data
 
         response_payload = {
             'success': True,
             'session_id': session_id,
             'image_data': default_img_data,
-            'raw_image_data': raw_img_data,
-            'normalized_image_data': normalized_img_data,
             'normalization_applied': normalization_applied,
             'image_shape': raw_gray.shape,
             'parameters': session.parameters,
             'preprocessing': preprocessing_info
         }
+        if normalization_applied:
+            response_payload['raw_image_data'] = raw_img_data
         if session.benchmark_enabled:
             response_payload['benchmark_enabled'] = True
             response_payload['benchmark_metrics_url'] = f"/benchmark_metrics/{session_id}"
@@ -1705,75 +1883,34 @@ def generate_svg():
 
     try:
         svg_started_at = time.perf_counter()
-        temp_svg = f"/tmp/centerline_result_{session_id}.svg"
-        
-        # Set global variables for SVG generation
-        import centerline_engine as wo
-        original_output = wo.OUTPUT_PATH
-        original_show_bitmap = wo.SHOW_BITMAP
-        original_show_pre = wo.SHOW_PRE_OPTIMIZATION_PATHS
-        
-        wo.OUTPUT_PATH = temp_svg
-        wo.SHOW_BITMAP = session.parameters.get('include_image', False)
-        
-        # Respect user toggle for showing magenta pre-optimization paths in all modes.
-        wo.SHOW_PRE_OPTIMIZATION_PATHS = show_pre
-        
         background_image = session.display_image if session.display_image is not None else session.image
-
-        # Generate SVG based on mode
-        if display_mode == 'immediate':
-            # Only magenta paths, no blue
-            _log_debug("Creating immediate SVG")
-            create_svg_output(
-                background_image,
-                None,  # No circle system
-                [],    # No optimized paths (no blue lines)
-                [],    # No scores
-                pre_optimization_paths,  # Show magenta paths
-                curve_fit_tolerance=curve_fit_tolerance,
-                endpoint_tangent_strictness=endpoint_tangent_strictness,
-                force_orthogonal_as_lines=force_orthogonal_as_lines,
-            )
-        else:
-            # Progressive or final - show both magenta and blue
-            _log_debug(f"Creating {display_mode} SVG with {len(optimized_paths)} blue paths and {len(pre_optimization_paths)} magenta paths")
-            create_svg_output(
-                background_image,
-                circle_system,
-                optimized_paths,  # Blue paths
-                [1.0] * len(optimized_paths),  # Dummy scores
-                pre_optimization_paths,  # Magenta paths
-                curve_fit_tolerance=curve_fit_tolerance,
-                endpoint_tangent_strictness=endpoint_tangent_strictness,
-                force_orthogonal_as_lines=force_orthogonal_as_lines,
-            )
-        
-        # Restore original settings
-        wo.OUTPUT_PATH = original_output
-        wo.SHOW_BITMAP = original_show_bitmap
-        wo.SHOW_PRE_OPTIMIZATION_PATHS = original_show_pre
-        
-        # Read and return SVG content
-        if os.path.exists(temp_svg):
-            with open(temp_svg, 'r') as f:
-                svg_content = f.read()
-            _log_debug(f"SVG file created successfully, size: {len(svg_content)} characters")
-            os.remove(temp_svg)
-            _record_benchmark_svg(
-                session,
-                display_mode,
-                (time.perf_counter() - svg_started_at) * 1000.0,
-                svg_content,
-                suppress_paths_in_view,
-            )
-            return jsonify({
-                'svg': svg_content,
-                'preview_paths_suppressed': suppress_paths_in_view,
-            })
-        else:
-            _log_debug(f"SVG file not found at: {temp_svg}")
-            return jsonify({'error': 'SVG generation failed - file not created'})
+        svg_content, suppressed, cache_hit = _render_svg_content(
+            session,
+            f"view:{display_mode}",
+            background_image,
+            None if display_mode == 'immediate' else circle_system,
+            [] if display_mode == 'immediate' else optimized_paths,
+            pre_optimization_paths,
+            curve_fit_tolerance,
+            endpoint_tangent_strictness,
+            force_orthogonal_as_lines,
+            bool(session.parameters.get('include_image', False)),
+            show_pre,
+            suppress_paths_in_view=suppress_paths_in_view,
+        )
+        _log_debug(f"SVG content ready, size: {len(svg_content)} characters (cache_hit={cache_hit})")
+        _record_benchmark_svg(
+            session,
+            display_mode,
+            (time.perf_counter() - svg_started_at) * 1000.0,
+            svg_content,
+            suppressed,
+            cache_hit=cache_hit,
+        )
+        return jsonify({
+            'svg': svg_content,
+            'preview_paths_suppressed': suppressed,
+        })
             
     except Exception as e:
         return jsonify({'error': f'SVG generation error: {str(e)}'})
@@ -1811,17 +1948,6 @@ def download_svg(session_id):
         name_without_ext = os.path.splitext(original_filename)[0]
         download_filename = f"{name_without_ext}_centerline.svg"
         
-        # Create temporary SVG file
-        temp_svg = os.path.join(tempfile.gettempdir(), f"centerline_download_{session_id}.svg")
-        
-        # Generate SVG with user settings
-        import centerline_engine as wo
-        original_output = wo.OUTPUT_PATH
-        original_show_bitmap = wo.SHOW_BITMAP
-        original_show_pre = wo.SHOW_PRE_OPTIMIZATION_PATHS
-        
-        wo.OUTPUT_PATH = temp_svg
-        wo.SHOW_BITMAP = session.parameters.get('include_image', False)  # User-controlled
         background_image = session.display_image if session.display_image is not None else session.image
         
         # Determine what to show based on available data
@@ -1829,61 +1955,50 @@ def download_svg(session_id):
         if has_progressive_data:
             # Use progressive data
             _log_debug(f"Generating download SVG with progressive data: {len(session.initial_paths)} initial paths, {len(session.partial_optimized_paths)} optimized paths")
-            wo.SHOW_PRE_OPTIMIZATION_PATHS = show_pre
-            
-            create_svg_output(
-                background_image,
-                None,  # No circle system in progressive mode
-                session.partial_optimized_paths,  # Blue optimized paths (may be empty if just started)
-                [1.0] * len(session.partial_optimized_paths),  # Dummy scores
-                session.initial_paths if show_pre else [],  # Magenta initial paths
-                curve_fit_tolerance=curve_fit_tolerance,
-                endpoint_tangent_strictness=endpoint_tangent_strictness,
-                force_orthogonal_as_lines=force_orthogonal_as_lines,
-            )
+            optimized_paths = list(session.partial_optimized_paths)
+            pre_optimization_paths = session.initial_paths if show_pre else []
+            circle_system = None
+            render_variant = 'download:progressive'
         else:
             # Use traditional results
             results = session.results
             optimization_enabled = session.parameters.get('enable_optimization', True)
             if not optimization_enabled:
                 show_pre = True
-            wo.SHOW_PRE_OPTIMIZATION_PATHS = show_pre
-            
-            if results['circle_system'] is not None:
-                create_svg_output(
-                    background_image,
-                    results['circle_system'],
-                    results['optimized_paths'],
-                    results['optimized_scores'],
-                    results['pre_optimization_paths'],
-                    curve_fit_tolerance=curve_fit_tolerance,
-                    endpoint_tangent_strictness=endpoint_tangent_strictness,
-                    force_orthogonal_as_lines=force_orthogonal_as_lines,
-                )
-            else:
-                create_svg_output(
-                    background_image,
-                    None,
-                    results['optimized_paths'],
-                    results['optimized_scores'],
-                    results['pre_optimization_paths'],
-                    curve_fit_tolerance=curve_fit_tolerance,
-                    endpoint_tangent_strictness=endpoint_tangent_strictness,
-                    force_orthogonal_as_lines=force_orthogonal_as_lines,
-                )
-        
-        # Restore original settings
-        wo.OUTPUT_PATH = original_output
-        wo.SHOW_BITMAP = original_show_bitmap
-        wo.SHOW_PRE_OPTIMIZATION_PATHS = original_show_pre
+            optimized_paths = results['optimized_paths']
+            pre_optimization_paths = results['pre_optimization_paths']
+            circle_system = results['circle_system']
+            render_variant = 'download:final'
+
+        svg_content, _, cache_hit = _render_svg_content(
+            session,
+            render_variant,
+            background_image,
+            circle_system,
+            optimized_paths,
+            pre_optimization_paths,
+            curve_fit_tolerance,
+            endpoint_tangent_strictness,
+            force_orthogonal_as_lines,
+            bool(session.parameters.get('include_image', False)),
+            show_pre,
+            suppress_paths_in_view=False,
+        )
+        svg_bytes = svg_content.encode('utf-8')
 
         _record_benchmark_download(
             session,
             (time.perf_counter() - download_started_at) * 1000.0,
-            temp_svg,
+            len(svg_bytes),
+            cache_hit=cache_hit,
         )
-        
-        return send_file(temp_svg, as_attachment=True, download_name=download_filename)
+
+        return send_file(
+            BytesIO(svg_bytes),
+            mimetype='image/svg+xml',
+            as_attachment=True,
+            download_name=download_filename,
+        )
         
     except Exception as e:
         return f"Error generating download: {str(e)}", 500
