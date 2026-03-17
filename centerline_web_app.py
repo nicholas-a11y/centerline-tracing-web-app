@@ -38,17 +38,34 @@ from centerline_core import (
     auto_tune_extraction_parameters,
     load_and_process_image,
 )
-from test_ui_backend import (
-    ALL_FIXTURE_IDS,
-    create_run,
-    get_fixture_detail,
-    get_run_progress,
-    get_run_summary,
-    list_runs,
-)
+TEST_UI_ENABLED = False
+TEST_UI_IMPORT_ERROR = None
+
+try:
+    from test_ui_backend import (
+        ALL_FIXTURE_IDS,
+        create_run,
+        get_fixture_detail,
+        get_run_progress,
+        get_run_summary,
+        list_runs,
+    )
+    TEST_UI_ENABLED = True
+except Exception as exc:
+    # Production images may omit pytest/test dependencies. Keep core app alive.
+    ALL_FIXTURE_IDS = []
+    TEST_UI_IMPORT_ERROR = str(exc)
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+
+
+def _test_ui_unavailable_response():
+    detail = TEST_UI_IMPORT_ERROR or "test_ui_backend unavailable"
+    return jsonify({
+        'error': 'Test UI is unavailable in this deployment environment',
+        'detail': detail,
+    }), 503
 
 # Global storage for session data
 sessions = {}
@@ -831,18 +848,24 @@ def index():
 @app.route('/test-ui')
 def test_ui():
     """Dedicated UI for pytest run management and fixture-layer inspection."""
+    if not TEST_UI_ENABLED:
+        return render_template('index.html')
     return render_template('test_management.html', fixture_ids=ALL_FIXTURE_IDS)
 
 
 @app.route('/api/test-runs', methods=['GET'])
 def api_list_test_runs():
     """Return known persisted and in-memory test runs."""
+    if not TEST_UI_ENABLED:
+        return _test_ui_unavailable_response()
     return jsonify({'runs': list_runs()})
 
 
 @app.route('/api/test-runs/execute', methods=['POST'])
 def api_execute_test_run():
     """Start a new background pytest run with visualization artifacts."""
+    if not TEST_UI_ENABLED:
+        return _test_ui_unavailable_response()
     data = request.json or {}
     update_goldens = bool(data.get('update_goldens', False))
     fixture_ids = data.get('fixture_ids', None)
@@ -860,6 +883,8 @@ def api_execute_test_run():
 @app.route('/api/test-runs/<run_id>', methods=['GET'])
 def api_get_test_run(run_id):
     """Fetch run summary and optional fixture detail payload."""
+    if not TEST_UI_ENABLED:
+        return _test_ui_unavailable_response()
     summary = get_run_summary(run_id)
     if summary is None:
         return jsonify({'error': 'Unknown run_id'}), 404
@@ -877,6 +902,8 @@ def api_get_test_run(run_id):
 @app.route('/api/test-runs/<run_id>/progress', methods=['GET'])
 def api_get_test_run_progress(run_id):
     """Poll progress/log messages for a specific run."""
+    if not TEST_UI_ENABLED:
+        return _test_ui_unavailable_response()
     progress = get_run_progress(run_id)
     if progress is None:
         return jsonify({'error': 'Unknown run_id'}), 404
