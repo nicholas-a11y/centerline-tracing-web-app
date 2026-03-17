@@ -92,15 +92,19 @@ def _test_ui_unavailable_response():
 # Global storage for session data
 sessions = {}
 SVG_VIEW_PATH_RENDER_LIMIT = 5000
+BENCHMARK_FILENAME_PREFIXES = ('bench__', 'metrics__')
 
 class CenterlineSession:
     def __init__(self, session_id):
         self.session_id = session_id
+        self.created_at = time.time()
         self.image = None
         self.display_image = None
         self.image_path = None
         self.image_file_size = 0
         self.original_filename = None
+        self.benchmark_enabled = False
+        self.benchmark_metrics = None
         self.preprocessing_info = {}
         self.results = None
         self.initial_paths = None  # Store raw magenta paths
@@ -167,6 +171,89 @@ def _effective_min_path_length(params, extraction_profile):
     if max_min_path_length is None:
         return requested_min_length
     return max(1, min(requested_min_length, int(max_min_path_length)))
+
+
+def _should_capture_benchmark_metrics(filename):
+    cleaned = os.path.basename(str(filename or '')).lower()
+    return any(cleaned.startswith(prefix) for prefix in BENCHMARK_FILENAME_PREFIXES)
+
+
+def _ensure_benchmark_metrics(session):
+    if not session.benchmark_enabled:
+        return None
+    if session.benchmark_metrics is None:
+        session.benchmark_metrics = {
+            'session_id': session.session_id,
+            'filename': session.original_filename,
+            'enabled': True,
+            'created_at_epoch': float(session.created_at),
+            'created_at_ms': int(round(session.created_at * 1000.0)),
+            'upload_size_bytes': int(session.image_file_size or 0),
+            'preprocessing': {},
+            'stages': {},
+            'latest_svg': {},
+            'latest_download': {},
+            'optimization': {},
+        }
+    return session.benchmark_metrics
+
+
+def _record_benchmark_stage(session, stage_name, elapsed_ms, extra=None):
+    metrics = _ensure_benchmark_metrics(session)
+    if metrics is None:
+        return
+    payload = {
+        'elapsed_ms': round(float(elapsed_ms), 3),
+        'recorded_at_ms': int(round(time.time() * 1000.0)),
+    }
+    if extra:
+        payload.update(extra)
+    metrics['stages'][stage_name] = payload
+
+
+def _update_benchmark_bucket(session, bucket_name, payload):
+    metrics = _ensure_benchmark_metrics(session)
+    if metrics is None:
+        return
+    bucket = dict(metrics.get(bucket_name, {}))
+    bucket.update(payload)
+    bucket['recorded_at_ms'] = int(round(time.time() * 1000.0))
+    metrics[bucket_name] = bucket
+
+
+def _record_benchmark_svg(session, display_mode, elapsed_ms, svg_content, suppressed):
+    _update_benchmark_bucket(session, 'latest_svg', {
+        'mode': str(display_mode),
+        'elapsed_ms': round(float(elapsed_ms), 3),
+        'svg_chars': int(len(svg_content)),
+        'svg_bytes_utf8': int(len(svg_content.encode('utf-8'))),
+        'preview_paths_suppressed': bool(suppressed),
+    })
+
+
+def _record_benchmark_download(session, elapsed_ms, file_path):
+    try:
+        file_size = int(os.path.getsize(file_path))
+    except OSError:
+        file_size = 0
+    _update_benchmark_bucket(session, 'latest_download', {
+        'elapsed_ms': round(float(elapsed_ms), 3),
+        'svg_file_bytes': file_size,
+    })
+
+
+def _benchmark_metrics_response(session):
+    metrics = _ensure_benchmark_metrics(session)
+    if metrics is None:
+        return None
+
+    payload = dict(metrics)
+    payload['original_filename'] = session.original_filename
+    payload['image_shape'] = list(session.image.shape) if session.image is not None else None
+    payload['optimization_complete'] = bool(session.optimization_complete)
+    payload['optimized_path_count'] = len(session.partial_optimized_paths)
+    payload['has_results'] = bool(session.results and 'error' not in session.results)
+    return payload
 
 
 def process_centerlines(session):
@@ -999,29 +1086,41 @@ def upload_file():
     
     # Store original filename
     session.original_filename = file.filename
+    session.benchmark_enabled = _should_capture_benchmark_metrics(file.filename)
     
     # Save uploaded file
     temp_dir = tempfile.gettempdir()
     temp_path = os.path.join(temp_dir, f"centerline_{session_id}_{file.filename}")
     file.save(temp_path)
     session.image_file_size = os.path.getsize(temp_path)
+    _ensure_benchmark_metrics(session)
     
     try:
+        load_started_at = time.perf_counter()
         # Load and preprocess image for extraction, while keeping original for display.
         raw_gray, extraction_gray, preprocessing_info = load_and_process_image(
             temp_path,
             normalization_mode=requested_mode,
             normalization_sensitivity=requested_sensitivity,
         )
+        load_elapsed_ms = (time.perf_counter() - load_started_at) * 1000.0
         session.image = extraction_gray
         session.display_image = raw_gray
         session.preprocessing_info = preprocessing_info
         session.image_path = temp_path
+        _record_benchmark_stage(session, 'load_and_preprocess', load_elapsed_ms, {
+            'raw_shape': list(raw_gray.shape),
+            'normalization_applied': bool(preprocessing_info.get('applied', False)),
+        })
+        metrics = _ensure_benchmark_metrics(session)
+        if metrics is not None:
+            metrics['preprocessing'] = dict(preprocessing_info)
         
         # Store session
         sessions[session_id] = session
         
         # Convert raw and normalized images to base64 for UI preview toggling.
+        preview_encode_started_at = time.perf_counter()
         raw_img = Image.fromarray((raw_gray * 255).astype(np.uint8))
         raw_buf = BytesIO()
         raw_img.save(raw_buf, format='PNG')
@@ -1033,11 +1132,16 @@ def upload_file():
         normalized_img.save(normalized_buf, format='PNG')
         normalized_buf.seek(0)
         normalized_img_data = base64.b64encode(normalized_buf.read()).decode('utf-8')
+        preview_encode_elapsed_ms = (time.perf_counter() - preview_encode_started_at) * 1000.0
+        _record_benchmark_stage(session, 'preview_image_encoding', preview_encode_elapsed_ms, {
+            'raw_image_b64_chars': len(raw_img_data),
+            'normalized_image_b64_chars': len(normalized_img_data),
+        })
 
         normalization_applied = bool(preprocessing_info.get('applied', False))
         default_img_data = normalized_img_data if normalization_applied else raw_img_data
-        
-        return jsonify({
+
+        response_payload = {
             'success': True,
             'session_id': session_id,
             'image_data': default_img_data,
@@ -1047,7 +1151,12 @@ def upload_file():
             'image_shape': raw_gray.shape,
             'parameters': session.parameters,
             'preprocessing': preprocessing_info
-        })
+        }
+        if session.benchmark_enabled:
+            response_payload['benchmark_enabled'] = True
+            response_payload['benchmark_metrics_url'] = f"/benchmark_metrics/{session_id}"
+
+        return jsonify(response_payload)
         
     except Exception as e:
         return jsonify({'error': f'Error processing image: {str(e)}'})
@@ -1068,6 +1177,7 @@ def process_immediate():
         session.parameters.update(data['parameters'])
     
     try:
+        immediate_started_at = time.perf_counter()
         # Quick raw path extraction
         params = session.parameters
         gray = session.image
@@ -1176,6 +1286,14 @@ def process_immediate():
             )
             session.optimization_thread.start()
             immediate_results['optimization_started'] = True
+
+        _record_benchmark_stage(session, 'process_immediate', (time.perf_counter() - immediate_started_at) * 1000.0, {
+            'initial_paths_count': len(initial_paths),
+            'merged_paths_count': len(merged_paths),
+            'valid_paths_count': len(valid_paths),
+            'optimization_started': bool(immediate_results['optimization_started']),
+            'crop_applied': bool(crop_offset_row != 0 or crop_offset_col != 0),
+        })
         
         return jsonify({
             'success': True,
@@ -1299,9 +1417,36 @@ def background_optimization(session, generation):
                 f"({segment_reduction:.1f}% reduction)"
             )
         )
+        _update_benchmark_bucket(session, 'optimization', {
+            'status': 'complete',
+            'elapsed_ms': round(elapsed_seconds * 1000.0, 3),
+            'elapsed_sec': round(elapsed_seconds, 4),
+            'input_path_count': int(len(valid_paths)),
+            'optimized_path_count': int(len(session.partial_optimized_paths)),
+            'original_total_segments': int(original_total_segments),
+            'optimized_total_segments': int(optimized_total_segments),
+            'segment_reduction_pct': round(float(segment_reduction), 3),
+        })
         
     except Exception as e:
+        _update_benchmark_bucket(session, 'optimization', {
+            'status': 'error',
+            'error': str(e),
+        })
         session.progress_queue.put(f"Optimization error: {str(e)}")
+
+
+@app.route('/benchmark_metrics/<session_id>')
+def benchmark_metrics(session_id):
+    """Return session benchmark metrics when filename-triggered metrics capture is enabled."""
+    if session_id not in sessions:
+        return jsonify({'error': 'Invalid session'}), 404
+
+    session = sessions[session_id]
+    payload = _benchmark_metrics_response(session)
+    if payload is None:
+        return jsonify({'error': 'Benchmark metrics not enabled for this session'}), 404
+    return jsonify(payload)
 
 @app.route('/progress/<session_id>')
 def get_progress(session_id):
@@ -1433,6 +1578,7 @@ def process():
             session.parameters['show_pre_optimization'] = True
     
     try:
+        process_started_at = time.perf_counter()
         # Process centerlines
         results = process_centerlines(session)
         
@@ -1457,6 +1603,13 @@ def process():
                 'optimized_points': optimized_points,
                 'point_reduction_percentage': round(reduction_percentage, 1)
             }
+
+            _record_benchmark_stage(session, 'process', (time.perf_counter() - process_started_at) * 1000.0, {
+                'paths_count': len(results['optimized_paths']),
+                'original_points': int(original_points),
+                'optimized_points': int(optimized_points),
+                'point_reduction_percentage': round(float(reduction_percentage), 3),
+            })
             
             return jsonify(response)
         else:
@@ -1551,6 +1704,7 @@ def generate_svg():
         pre_optimization_paths = []
 
     try:
+        svg_started_at = time.perf_counter()
         temp_svg = f"/tmp/centerline_result_{session_id}.svg"
         
         # Set global variables for SVG generation
@@ -1606,6 +1760,13 @@ def generate_svg():
                 svg_content = f.read()
             _log_debug(f"SVG file created successfully, size: {len(svg_content)} characters")
             os.remove(temp_svg)
+            _record_benchmark_svg(
+                session,
+                display_mode,
+                (time.perf_counter() - svg_started_at) * 1000.0,
+                svg_content,
+                suppress_paths_in_view,
+            )
             return jsonify({
                 'svg': svg_content,
                 'preview_paths_suppressed': suppress_paths_in_view,
@@ -1633,6 +1794,7 @@ def download_svg(session_id):
         return "No valid results", 404
     
     try:
+        download_started_at = time.perf_counter()
         curve_fit_tolerance = max(
             0.35,
             min(8.0, float(session.parameters.get('cubic_fit_tolerance', 1.0))),
@@ -1714,6 +1876,12 @@ def download_svg(session_id):
         wo.OUTPUT_PATH = original_output
         wo.SHOW_BITMAP = original_show_bitmap
         wo.SHOW_PRE_OPTIMIZATION_PATHS = original_show_pre
+
+        _record_benchmark_download(
+            session,
+            (time.perf_counter() - download_started_at) * 1000.0,
+            temp_svg,
+        )
         
         return send_file(temp_svg, as_attachment=True, download_name=download_filename)
         

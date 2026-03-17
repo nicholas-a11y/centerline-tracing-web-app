@@ -12,6 +12,7 @@ import numpy as np
 from skimage import io, color, filters, morphology
 from skimage.morphology import binary_erosion, footprint_rectangle
 from scipy import interpolate
+from functools import lru_cache
 import svgwrite
 import base64
 from io import BytesIO
@@ -477,6 +478,299 @@ def rdp_simplify(points, epsilon):
     
     return [tuple(points[i]) for i in indices]
 
+
+def _remove_duplicate_points(points):
+    """Drop consecutive duplicates so downstream geometry stays stable."""
+    if not points:
+        return []
+
+    cleaned = [tuple(points[0])]
+    for pt in points[1:]:
+        current = tuple(pt)
+        if current != cleaned[-1]:
+            cleaned.append(current)
+    return cleaned
+
+
+def _path_length(points):
+    if len(points) < 2:
+        return 0.0
+    pts = np.asarray(points, dtype=float)
+    return float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum())
+
+
+def _point_to_segment_distance(point, start, end):
+    point = np.asarray(point, dtype=float)
+    start = np.asarray(start, dtype=float)
+    end = np.asarray(end, dtype=float)
+    segment = end - start
+    denom = float(np.dot(segment, segment))
+    if denom <= 1e-9:
+        return float(np.linalg.norm(point - start))
+    t = float(np.dot(point - start, segment) / denom)
+    t = max(0.0, min(1.0, t))
+    projection = start + t * segment
+    return float(np.linalg.norm(point - projection))
+
+
+def _line_distance_stats(points):
+    if len(points) <= 2:
+        return 0.0, 0.0
+
+    pts = np.asarray(points, dtype=float)
+    start = pts[0]
+    end = pts[-1]
+    seg = end - start
+    seg_len = float(np.linalg.norm(seg))
+    if seg_len <= 1e-9:
+        distances = [float(np.linalg.norm(p - start)) for p in pts[1:-1]]
+        return (float(max(distances)) if distances else 0.0, float(np.mean(distances)) if distances else 0.0)
+
+    distances = [_point_to_segment_distance(p, start, end) for p in pts[1:-1]]
+    return (float(max(distances)) if distances else 0.0, float(np.mean(distances)) if distances else 0.0)
+
+
+def _max_turn_angle(points):
+    if len(points) < 3:
+        return 0.0
+
+    pts = np.asarray(points, dtype=float)
+    max_angle = 0.0
+    for idx in range(1, len(pts) - 1):
+        v1 = pts[idx] - pts[idx - 1]
+        v2 = pts[idx + 1] - pts[idx]
+        n1 = float(np.linalg.norm(v1))
+        n2 = float(np.linalg.norm(v2))
+        if n1 <= 1e-9 or n2 <= 1e-9:
+            continue
+        cosang = float(np.clip(np.dot(v1, v2) / (n1 * n2), -1.0, 1.0))
+        angle = float(np.degrees(np.arccos(cosang)))
+        if angle > max_angle:
+            max_angle = angle
+    return max_angle
+
+
+def _project_points_to_line(points, start, end):
+    pts = np.asarray(points, dtype=float)
+    start = np.asarray(start, dtype=float)
+    end = np.asarray(end, dtype=float)
+    seg = end - start
+    denom = float(np.dot(seg, seg))
+    if denom <= 1e-9:
+        return pts.copy()
+
+    projected = []
+    for pt in pts:
+        t = float(np.dot(pt - start, seg) / denom)
+        t = max(0.0, min(1.0, t))
+        projected.append(start + t * seg)
+
+    projected = np.asarray(projected, dtype=float)
+    projected[0] = start
+    projected[-1] = end
+    return projected
+
+
+def _is_path_closed(points, close_threshold=1.5):
+    if len(points) < 3:
+        return False
+    pts = np.asarray(points, dtype=float)
+    return float(np.linalg.norm(pts[0] - pts[-1])) <= float(close_threshold)
+
+
+def _find_straight_terminal_run(points, at_start=True, min_points=5, max_points=12, deviation_tol=0.45, turn_tol=18.0):
+    if len(points) < min_points + 1:
+        return None
+
+    scan = list(points if at_start else reversed(points))
+    upper = min(len(scan), max_points)
+    best_end = None
+    for end_idx in range(min_points - 1, upper):
+        subset = scan[: end_idx + 1]
+        max_dev, mean_dev = _line_distance_stats(subset)
+        if max_dev <= deviation_tol and mean_dev <= deviation_tol * 0.5 and _max_turn_angle(subset) <= turn_tol:
+            best_end = end_idx
+        elif best_end is not None:
+            break
+
+    if best_end is None:
+        return None
+    return best_end if at_start else (len(points) - 1 - best_end)
+
+
+def _straighten_path_runs(points, deviation_tol=0.45):
+    cleaned = _remove_duplicate_points(points)
+    if len(cleaned) < 5:
+        return cleaned
+
+    pts = np.asarray(cleaned, dtype=float)
+    max_dev, mean_dev = _line_distance_stats(pts)
+    if max_dev <= max(0.8, deviation_tol * 1.6) and mean_dev <= max(0.25, deviation_tol * 0.75):
+        projected = _project_points_to_line(pts, pts[0], pts[-1])
+        return _remove_duplicate_points([tuple(p) for p in projected])
+
+    if _is_path_closed(cleaned):
+        return cleaned
+
+    adjusted = pts.copy()
+    prefix_end = _find_straight_terminal_run(cleaned, at_start=True, deviation_tol=deviation_tol)
+    if prefix_end is not None and prefix_end >= 1:
+        adjusted[: prefix_end + 1] = _project_points_to_line(
+            adjusted[: prefix_end + 1], adjusted[0], adjusted[prefix_end]
+        )
+
+    suffix_start = _find_straight_terminal_run(cleaned, at_start=False, deviation_tol=deviation_tol)
+    if suffix_start is not None and suffix_start < len(adjusted) - 1:
+        adjusted[suffix_start:] = _project_points_to_line(
+            adjusted[suffix_start:], adjusted[suffix_start], adjusted[-1]
+        )
+
+    return _remove_duplicate_points([tuple(p) for p in adjusted])
+
+
+def _resample_even_spacing(points):
+    if len(points) < 4:
+        return list(points)
+
+    pts = np.asarray(points, dtype=float)
+    seg = np.diff(pts, axis=0)
+    seg_len = np.linalg.norm(seg, axis=1)
+    total = float(seg_len.sum())
+    if total <= 1e-9:
+        return list(points)
+
+    cumulative = np.concatenate(([0.0], np.cumsum(seg_len)))
+    targets = np.linspace(0.0, total, len(points))
+    resampled = []
+    j = 1
+    for dist in targets:
+        while j < len(cumulative) and cumulative[j] < dist:
+            j += 1
+        if j == len(cumulative):
+            interp = pts[-1]
+        else:
+            span = max(float(cumulative[j] - cumulative[j - 1]), 1e-6)
+            ratio = (dist - cumulative[j - 1]) / span
+            interp = pts[j - 1] + ratio * (pts[j] - pts[j - 1])
+        resampled.append((float(interp[0]), float(interp[1])))
+    return _remove_duplicate_points(resampled)
+
+
+def _orientation(a, b, c):
+    return float((b[1] - a[1]) * (c[0] - b[0]) - (b[0] - a[0]) * (c[1] - b[1]))
+
+
+def _point_on_segment(point, start, end, tol=1e-6):
+    return (
+        min(start[0], end[0]) - tol <= point[0] <= max(start[0], end[0]) + tol
+        and min(start[1], end[1]) - tol <= point[1] <= max(start[1], end[1]) + tol
+    )
+
+
+def _segments_intersect(a1, a2, b1, b2, tol=1e-6):
+    o1 = _orientation(a1, a2, b1)
+    o2 = _orientation(a1, a2, b2)
+    o3 = _orientation(b1, b2, a1)
+    o4 = _orientation(b1, b2, a2)
+
+    if ((o1 > tol and o2 < -tol) or (o1 < -tol and o2 > tol)) and ((o3 > tol and o4 < -tol) or (o3 < -tol and o4 > tol)):
+        return True
+
+    if abs(o1) <= tol and _point_on_segment(b1, a1, a2, tol):
+        return True
+    if abs(o2) <= tol and _point_on_segment(b2, a1, a2, tol):
+        return True
+    if abs(o3) <= tol and _point_on_segment(a1, b1, b2, tol):
+        return True
+    if abs(o4) <= tol and _point_on_segment(a2, b1, b2, tol):
+        return True
+    return False
+
+
+def _path_has_self_intersection(points, close_threshold=1.5):
+    pts = _remove_duplicate_points(points)
+    if len(pts) < 4:
+        return False
+
+    closed = _is_path_closed(pts, close_threshold=close_threshold)
+    segments = [(np.asarray(pts[idx], dtype=float), np.asarray(pts[idx + 1], dtype=float)) for idx in range(len(pts) - 1)]
+    for i, (a1, a2) in enumerate(segments):
+        for j in range(i + 1, len(segments)):
+            if j == i + 1:
+                continue
+            if closed and i == 0 and j == len(segments) - 1:
+                continue
+            b1, b2 = segments[j]
+            if np.linalg.norm(a1 - b1) <= 1e-6 or np.linalg.norm(a1 - b2) <= 1e-6:
+                continue
+            if np.linalg.norm(a2 - b1) <= 1e-6 or np.linalg.norm(a2 - b2) <= 1e-6:
+                continue
+            if _segments_intersect(a1, a2, b1, b2):
+                return True
+    return False
+
+
+def _has_suspicious_near_closure(points, close_distance=8.0, closure_ratio=3.0):
+    pts = _remove_duplicate_points(points)
+    if len(pts) < 5:
+        return False
+    if _is_path_closed(pts, close_threshold=min(1.5, close_distance)):
+        return False
+
+    start_end = float(np.linalg.norm(np.asarray(pts[0], dtype=float) - np.asarray(pts[-1], dtype=float)))
+    total_length = _path_length(pts)
+    return start_end <= close_distance and total_length >= max(24.0, closure_ratio * max(start_end, 1.0))
+
+
+def _path_geometry_rejection_reason(candidate, reference=None, reject_length_inflation=True, reject_near_closure=True):
+    cleaned = _remove_duplicate_points(candidate)
+    if len(cleaned) < 2:
+        return "degenerate geometry"
+    if _path_has_self_intersection(cleaned):
+        return "self-intersection"
+
+    if reference is not None:
+        ref_cleaned = _remove_duplicate_points(reference)
+        ref_length = _path_length(ref_cleaned)
+        cand_length = _path_length(cleaned)
+        if reject_length_inflation and ref_length > 1e-6 and cand_length > ref_length * 1.12:
+            return "length inflation"
+
+        if reject_near_closure and not _is_path_closed(ref_cleaned):
+            closure_distance = max(3.0, min(10.0, 0.06 * ref_length + 2.5))
+            if _has_suspicious_near_closure(cleaned, close_distance=closure_distance, closure_ratio=3.2):
+                return "artificial loop closure"
+
+    return None
+
+
+@lru_cache(maxsize=2048)
+def _precondition_path_cached(path_key, tolerance_key):
+    cleaned = _remove_duplicate_points(path_key)
+    if len(cleaned) < 4:
+        return tuple(cleaned)
+
+    even = _resample_even_spacing(cleaned)
+    epsilon = max(0.35, float(tolerance_key))
+    simplified = rdp_simplify(even, epsilon)
+    if len(simplified) < 2:
+        simplified = even
+
+    straightened = _straighten_path_runs(simplified, deviation_tol=max(0.35, epsilon * 0.6))
+    if len(straightened) >= 4:
+        tightened = rdp_simplify(straightened, max(0.25, epsilon * 0.5))
+        if len(tightened) >= 2:
+            straightened = tightened
+
+    return tuple(_remove_duplicate_points(straightened))
+
+
+def precondition_path_for_optimization(path, base_tolerance=0.85):
+    """Apply a cheap simplification/straightening pass before expensive scoring."""
+    path_key = tuple((float(pt[0]), float(pt[1])) for pt in path)
+    tolerance_key = round(float(base_tolerance), 3)
+    return list(_precondition_path_cached(path_key, tolerance_key))
+
 def smooth_path_spline(path, smoothing_factor=0.01):
     """Smooth path using spline interpolation."""
     if len(path) < 4:
@@ -544,47 +838,26 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
     Optimize path with a conservative RDP pre-simplification followed by a high-quality spline fit.
     This approach prioritizes smoothness and fidelity over aggressive point reduction.
     """
-    current_path = path
+    requested_tolerance = float(params.get('rdp_tolerance', 4.0))
+    smoothing_factor = float(params.get('smoothing_factor', 0.006))
+    simplification_strength = max(0.0, min(100.0, float(params.get('simplification_strength', 50.0))))
+    simplification_ratio = simplification_strength / 100.0
+    arc_fit_strength = max(0.0, min(100.0, float(params.get('arc_fit_strength', 72.0))))
+    line_fit_strength = max(0.0, min(100.0, float(params.get('line_fit_strength', 22.0))))
+    short_path_protection = max(0.0, min(100.0, float(params.get('short_path_protection', 65.0))))
+    arc_fit_ratio = arc_fit_strength / 100.0
+    line_fit_ratio = line_fit_strength / 100.0
+    short_path_protection_ratio = short_path_protection / 100.0
+    mean_closeness_px = max(0.25, float(params.get('mean_closeness_px', 1.8)))
+    peak_closeness_px = max(mean_closeness_px, float(params.get('peak_closeness_px', 4.5)))
+    score_preservation_ratio = max(0.70, min(0.999, float(params.get('score_preservation', 80.0)) / 100.0))
+    min_path_length = int(params.get('min_path_length', 3))
+
+    reference_path = _remove_duplicate_points(path)
+    current_path = reference_path
     best_score = float(initial_score) if initial_score is not None else circle_system.evaluate_path(current_path)
 
     print(f"    Optimizing path: {len(path)} points, initial score: {best_score:.2f}")
-
-    def _remove_duplicate_points(points):
-        """Drop consecutive duplicates so downstream math stays stable."""
-        if not points:
-            return points
-        cleaned = [points[0]]
-        for pt in points[1:]:
-            if pt != cleaned[-1]:
-                cleaned.append(pt)
-        return cleaned
-
-    def _resample_even_spacing(points):
-        """Resample to even arc-length spacing to reduce pixel jitter."""
-        if len(points) < 4:
-            return points
-        pts = np.asarray(points, dtype=float)
-        seg = np.diff(pts, axis=0)
-        seg_len = np.linalg.norm(seg, axis=1)
-        total = seg_len.sum()
-        if total == 0:
-            return points
-        cumulative = np.concatenate(([0.0], np.cumsum(seg_len)))
-        targets = np.linspace(0.0, total, len(points))
-        resampled = []
-        j = 1
-        for dist in targets:
-            while j < len(cumulative) and cumulative[j] < dist:
-                j += 1
-            if j == len(cumulative):
-                interp = pts[-1]
-            else:
-                span = max(cumulative[j] - cumulative[j - 1], 1e-6)
-                ratio = (dist - cumulative[j - 1]) / span
-                interp = pts[j - 1] + ratio * (pts[j] - pts[j - 1])
-            resampled.append((float(interp[0]), float(interp[1])))
-        rounded = [(int(round(p[0])), int(round(p[1]))) for p in resampled]
-        return _remove_duplicate_points(rounded)
 
     def _reduce_vertices_evenly(points, target_count):
         """Keep endpoints while reducing control vertices for display simplicity."""
@@ -602,19 +875,6 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
         indices = np.linspace(0, len(interior) - 1, keep_interior).astype(int)
         reduced = [points[0]] + [interior[i] for i in indices] + [points[-1]]
         return _remove_duplicate_points(reduced)
-
-    def _point_to_segment_distance(point, start, end):
-        point = np.asarray(point, dtype=float)
-        start = np.asarray(start, dtype=float)
-        end = np.asarray(end, dtype=float)
-        segment = end - start
-        denom = float(np.dot(segment, segment))
-        if denom <= 1e-9:
-            return float(np.linalg.norm(point - start))
-        t = float(np.dot(point - start, segment) / denom)
-        t = max(0.0, min(1.0, t))
-        projection = start + t * segment
-        return float(np.linalg.norm(point - projection))
 
     def _reference_to_candidate_metrics(reference, candidate, max_samples=120):
         """Measure how closely the simplified blue path still follows the magenta source."""
@@ -638,21 +898,6 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
 
         return float(np.mean(distances)), float(np.percentile(distances, 95))
 
-    requested_tolerance = float(params.get('rdp_tolerance', 4.0))
-    smoothing_factor = float(params.get('smoothing_factor', 0.006))
-    simplification_strength = max(0.0, min(100.0, float(params.get('simplification_strength', 50.0))))
-    simplification_ratio = simplification_strength / 100.0
-    arc_fit_strength = max(0.0, min(100.0, float(params.get('arc_fit_strength', 72.0))))
-    line_fit_strength = max(0.0, min(100.0, float(params.get('line_fit_strength', 22.0))))
-    short_path_protection = max(0.0, min(100.0, float(params.get('short_path_protection', 65.0))))
-    arc_fit_ratio = arc_fit_strength / 100.0
-    line_fit_ratio = line_fit_strength / 100.0
-    short_path_protection_ratio = short_path_protection / 100.0
-    mean_closeness_px = max(0.25, float(params.get('mean_closeness_px', 1.8)))
-    peak_closeness_px = max(mean_closeness_px, float(params.get('peak_closeness_px', 4.5)))
-    score_preservation_ratio = max(0.70, min(0.999, float(params.get('score_preservation', 80.0)) / 100.0))
-    min_path_length = int(params.get('min_path_length', 3))
-    reference_path = _remove_duplicate_points(path)
     path_length = max(1.0, float(params.get('path_length', len(reference_path))))
     max_path_length = max(path_length, float(params.get('max_path_length', path_length)))
 
@@ -686,6 +931,27 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
         sharp_ratio = float(np.mean(angles > 35.0)) if len(angles) else 0.0
         return mean_angle, sharp_ratio
 
+    preconditioned_path = precondition_path_for_optimization(
+        reference_path,
+        base_tolerance=max(0.45, requested_tolerance * 0.22),
+    )
+    if len(preconditioned_path) >= min_path_length and len(preconditioned_path) <= len(reference_path):
+        precondition_reason = _path_geometry_rejection_reason(preconditioned_path, reference_path)
+        if precondition_reason is None:
+            precondition_score = circle_system.evaluate_path(preconditioned_path)
+            mean_dist, p95_dist = _reference_to_candidate_metrics(reference_path, preconditioned_path)
+            if (
+                precondition_score >= best_score * max(0.92, score_preservation_ratio - 0.05)
+                and mean_dist <= max(mean_closeness_px, 1.4)
+                and p95_dist <= max(peak_closeness_px, 3.2)
+            ):
+                current_path = preconditioned_path
+                best_score = precondition_score
+                print(
+                    f"      ✓ Accepted magenta preconditioning: {len(reference_path)} -> {len(preconditioned_path)} points, "
+                    f"score: {precondition_score:.2f}"
+                )
+
     cleaned_path = _remove_duplicate_points(current_path)
     even_path = _resample_even_spacing(cleaned_path)
 
@@ -703,6 +969,11 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
         try:
             simplified_path = rdp_simplify(even_path, adaptive_tolerance)
             if len(simplified_path) >= min_path_length:
+                rejection_reason = _path_geometry_rejection_reason(simplified_path, reference_path)
+                if rejection_reason is not None:
+                    print(f"      ✗ Rejected adaptive pre-simplification ({rejection_reason}).")
+                    simplified_path = None
+            if simplified_path is not None and len(simplified_path) >= min_path_length:
                 rdp_score = circle_system.evaluate_path(simplified_path)
                 print(
                     f"      Adaptive RDP: {len(current_path)} -> {len(simplified_path)} points, "
@@ -725,7 +996,10 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
                 current_path,
                 smoothing_factor * (1.0 + 3.0 * arc_fit_ratio),
             )
-            if len(smoothed_path) >= min_path_length:
+            rejection_reason = _path_geometry_rejection_reason(smoothed_path, reference_path)
+            if rejection_reason is not None:
+                print(f"      ✗ Rejected high-quality spline fit ({rejection_reason}).")
+            elif len(smoothed_path) >= min_path_length:
                 smooth_score = circle_system.evaluate_path(smoothed_path)
                 print(f"      Spline smooth: {len(current_path)} -> {len(smoothed_path)} points, score: {smooth_score:.2f}")
 
@@ -741,6 +1015,11 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
 
         candidate = _remove_duplicate_points(candidate)
         if len(candidate) < min_path_length or len(candidate) >= len(current_path):
+            return
+
+        rejection_reason = _path_geometry_rejection_reason(candidate, reference_path)
+        if rejection_reason is not None:
+            print(f"      ✗ Rejected {label.lower()} ({rejection_reason}).")
             return
 
         candidate_score = circle_system.evaluate_path(candidate)
@@ -946,6 +1225,25 @@ def merge_nearby_paths(paths, max_gap=30, angle_priority=0.30, verbose=True, sho
         dot = float(np.clip(np.dot(out_a, out_b), -1.0, 1.0))
         # Best bridge is when outward directions oppose each other (dot ~ -1).
         return (1.0 - dot) * 0.5
+
+    def _build_merged_path(path_a, path_b, connection_type):
+        if connection_type == 'end_to_start':
+            return list(path_a) + list(path_b)
+        if connection_type == 'end_to_end':
+            return list(path_a) + list(reversed(path_b))
+        if connection_type == 'start_to_start':
+            return list(reversed(path_b)) + list(path_a)
+        if connection_type == 'start_to_end':
+            return list(path_b) + list(path_a)
+        return list(path_a)
+
+    def _merge_is_safe(path_a, path_b, connection_type):
+        merged = _remove_duplicate_points(_build_merged_path(path_a, path_b, connection_type))
+        if _path_has_self_intersection(merged):
+            return False
+        if _has_suspicious_near_closure(merged, close_distance=max(3.0, max_gap * 0.9), closure_ratio=3.0):
+            return False
+        return True
     
     for i, path1 in enumerate(paths):
         if i in used_indices or len(path1) < 2:
@@ -963,6 +1261,8 @@ def merge_nearby_paths(paths, max_gap=30, angle_priority=0.30, verbose=True, sho
 
             for j, path2 in enumerate(paths):
                 if j == i or j in used_indices or len(path2) < 2:
+                    continue
+                if _is_path_closed(current_path) or _is_path_closed(path2):
                     continue
 
                 # Check all possible endpoint combinations.
@@ -982,6 +1282,10 @@ def merge_nearby_paths(paths, max_gap=30, angle_priority=0.30, verbose=True, sho
                     angle_score = _angle_match_score(
                         current_path, endpoint_a, path2, endpoint_b
                     )
+                    if distance > max_gap * 0.55 and angle_score < 0.55:
+                        continue
+                    if not _merge_is_safe(current_path, path2, connection_type):
+                        continue
                     distance_score = 1.0 - (distance / max(max_gap, 1e-9))
                     combined_score = (
                         distance_priority * distance_score
