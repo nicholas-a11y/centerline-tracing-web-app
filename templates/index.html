@@ -3794,11 +3794,16 @@
         }
 
         let progressInterval;
+        let lastSvgProgressRefreshAt = 0;
+        const LARGE_SVG_VIEW_PATH_LIMIT = 5000;
+        const LARGE_SVG_VIEW_REFRESH_MS = 8000;
+        const NORMAL_SVG_VIEW_REFRESH_MS = 1000;
 
         function startProgressMonitoring() {
             console.log('Starting progress monitoring...');
             if (progressInterval) clearInterval(progressInterval);
             const progressEpoch = requestEpoch;
+            lastSvgProgressRefreshAt = 0;
             
             // Show stop button
             const stopBtn = document.getElementById('stopOptBtn');
@@ -3839,15 +3844,24 @@
                         }
                     }
                     
-                    if (data.optimized_count > 0) {
-                        // Update SVG with progressive results
-                        console.log(`Updating SVG with ${data.optimized_count} optimized paths`);
-                        generateSVG('progressive');
+                    const total = Number(data.total_paths || 0);
+                    const done = Number(data.optimized_count || 0);
+
+                    if (done > 0) {
+                        const now = Date.now();
+                        const refreshIntervalMs = total > LARGE_SVG_VIEW_PATH_LIMIT
+                            ? LARGE_SVG_VIEW_REFRESH_MS
+                            : NORMAL_SVG_VIEW_REFRESH_MS;
+                        const shouldRefreshSvg = (now - lastSvgProgressRefreshAt) >= refreshIntervalMs;
+
+                        if (shouldRefreshSvg) {
+                            console.log(`Updating SVG with ${done} optimized paths`);
+                            lastSvgProgressRefreshAt = now;
+                            generateSVG('progressive');
+                        }
                     }
 
                     // Update progress bar
-                    const total = Number(data.total_paths || 0);
-                    const done = Number(data.optimized_count || 0);
                     if (total > 0) {
                         const pct = Math.min(100, Math.round(done / total * 100));
                         const bar = document.getElementById('opt-progress-bar');
@@ -4126,7 +4140,9 @@
                     displaySVG(data.svg);
                     lastRenderedSvgMode = mode;
                     
-                    if (mode === 'immediate') {
+                    if (data.preview_paths_suppressed) {
+                        showProgressMessage('SVG view path rendering suppressed for large jobs. Processing continues normally and download will still include the paths.', 'info');
+                    } else if (mode === 'immediate') {
                         showProgressMessage('Magenta skeleton paths displayed! Optimization running in background...', 'success');
                     } else if (mode === 'progressive') {
                         // Message area removed: no progressive status toast.
@@ -4289,6 +4305,7 @@
             lastMagentaSkeletonPaths = null;
             clearMagentaSkeletonOverlay();
             optimizationReached100 = false;
+            lastSvgProgressRefreshAt = 0;
             lastRenderedSvgMode = null;
             lastRenderedSvgContent = null;
             currentPreprocessingInfo = null;

@@ -70,6 +70,7 @@ def _test_ui_unavailable_response():
 
 # Global storage for session data
 sessions = {}
+SVG_VIEW_PATH_RENDER_LIMIT = 5000
 
 class CenterlineSession:
     def __init__(self, session_id):
@@ -1485,6 +1486,8 @@ def generate_svg():
 
     show_pre = session.parameters.get('show_pre_optimization', False)
     
+    detected_paths_count = len(session.initial_paths) if session.initial_paths else 0
+
     # Check what data we have available
     if display_mode == 'immediate' and session.initial_paths:
         # Show only magenta paths immediately
@@ -1516,6 +1519,15 @@ def generate_svg():
         
     else:
         return jsonify({'error': 'No results available yet'})
+
+    suppress_paths_in_view = detected_paths_count > SVG_VIEW_PATH_RENDER_LIMIT
+    if suppress_paths_in_view and (optimized_paths or pre_optimization_paths):
+        print(
+            f"Suppressing SVG preview paths because detected path count "
+            f"{detected_paths_count} exceeds limit {SVG_VIEW_PATH_RENDER_LIMIT}"
+        )
+        optimized_paths = []
+        pre_optimization_paths = []
 
     try:
         temp_svg = f"/tmp/centerline_result_{session_id}.svg"
@@ -1573,7 +1585,10 @@ def generate_svg():
                 svg_content = f.read()
             print(f"SVG file created successfully, size: {len(svg_content)} characters")
             os.remove(temp_svg)
-            return jsonify({'svg': svg_content})
+            return jsonify({
+                'svg': svg_content,
+                'preview_paths_suppressed': suppress_paths_in_view,
+            })
         else:
             print(f"SVG file not found at: {temp_svg}")
             return jsonify({'error': 'SVG generation failed - file not created'})
