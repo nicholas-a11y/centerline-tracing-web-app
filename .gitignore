@@ -30,6 +30,7 @@ worksok.py
 worksok2.py
 worksok3.py
 test*.py
+!test_ui_backend.py
 *.clb
 *.hprof
 
