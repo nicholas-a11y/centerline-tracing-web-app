@@ -1,0 +1,17 @@
+{
+  "id": "corner-l-shape-r45",
+  "description": "L-shaped corner rotated 45\u00b0 clockwise \u2014 two diagonal lines meeting",
+  "category": "corner",
+  "size": 64,
+  "stroke_width": 2,
+  "tolerance_px": 1.5,
+  "expected_segment_types": [
+    "line"
+  ],
+  "png_file": "corner-l-shape-r45_64px_sw2.png",
+  "stats": {
+    "total_pixels": 4096,
+    "stroke_pixels": 157,
+    "coverage": 0.0383
+  }
+}

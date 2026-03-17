@@ -1,0 +1,18 @@
+{
+  "id": "square-opposing-curves",
+  "description": "Square loop with outward and inward curved opposite sides",
+  "category": "curve",
+  "size": 64,
+  "stroke_width": 3,
+  "tolerance_px": 2.4,
+  "expected_segment_types": [
+    "line",
+    "cubic"
+  ],
+  "png_file": "square-opposing-curves_64px_sw3.png",
+  "stats": {
+    "total_pixels": 4096,
+    "stroke_pixels": 486,
+    "coverage": 0.1187
+  }
+}

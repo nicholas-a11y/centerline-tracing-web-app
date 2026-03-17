@@ -1,0 +1,18 @@
+{
+  "id": "curve-to-straight-to-curve",
+  "description": "Curve to straight to curve \u2014 tests cubic-line-cubic continuity",
+  "category": "curve",
+  "size": 64,
+  "stroke_width": 3,
+  "tolerance_px": 2.0,
+  "expected_segment_types": [
+    "line",
+    "cubic"
+  ],
+  "png_file": "curve-to-straight-to-curve_64px_sw3.png",
+  "stats": {
+    "total_pixels": 4096,
+    "stroke_pixels": 252,
+    "coverage": 0.0615
+  }
+}

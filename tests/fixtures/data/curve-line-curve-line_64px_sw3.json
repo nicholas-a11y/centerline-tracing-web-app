@@ -1,0 +1,18 @@
+{
+  "id": "curve-line-curve-line",
+  "description": "Straight into curve into straight \u2014 tests line/cubic transitions",
+  "category": "curve",
+  "size": 64,
+  "stroke_width": 3,
+  "tolerance_px": 2.0,
+  "expected_segment_types": [
+    "line",
+    "cubic"
+  ],
+  "png_file": "curve-line-curve-line_64px_sw3.png",
+  "stats": {
+    "total_pixels": 4096,
+    "stroke_pixels": 207,
+    "coverage": 0.0505
+  }
+}

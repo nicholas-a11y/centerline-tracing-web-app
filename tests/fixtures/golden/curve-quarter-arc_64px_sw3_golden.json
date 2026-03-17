@@ -1,8 +1,8 @@
 {
   "approved_at": "2026-03-17",
   "fixture_id": "curve-quarter-arc",
-  "segment_count": 38,
-  "mean_deviation_px": 2.055,
-  "max_deviation_px": 2.723,
+  "segment_count": 5,
+  "mean_deviation_px": 0.158,
+  "max_deviation_px": 0.403,
   "coverage": 1.0
 }

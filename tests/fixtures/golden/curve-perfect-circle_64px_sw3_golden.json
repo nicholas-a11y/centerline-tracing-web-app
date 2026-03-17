@@ -1,0 +1,8 @@
+{
+  "approved_at": "2026-03-17",
+  "fixture_id": "curve-perfect-circle",
+  "segment_count": 9,
+  "mean_deviation_px": 0.304,
+  "max_deviation_px": 0.825,
+  "coverage": 1.0
+}

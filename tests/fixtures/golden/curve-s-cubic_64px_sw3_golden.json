@@ -1,8 +1,8 @@
 {
   "approved_at": "2026-03-17",
   "fixture_id": "curve-s-cubic",
-  "segment_count": 66,
-  "mean_deviation_px": 0.695,
-  "max_deviation_px": 1.455,
+  "segment_count": 8,
+  "mean_deviation_px": 0.262,
+  "max_deviation_px": 0.949,
   "coverage": 1.0
 }

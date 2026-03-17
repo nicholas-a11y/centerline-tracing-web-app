@@ -122,6 +122,9 @@ class CenterlineSession:
             'mean_closeness_px': 1.8,  # Average allowed distance from blue path to magenta path
             'peak_closeness_px': 4.5,  # 95th percentile allowed distance from blue path to magenta path
             'score_preservation': 80.0,  # Minimum retained circle score percentage for accepted fits
+            'cubic_fit_tolerance': 1.0,  # SVG cubic fitting tolerance in px (lower = tighter, more segments)
+            'endpoint_tangent_strictness': 85.0,  # Strength of start/end handle alignment to extracted path direction (not fixture/golden data)
+            'force_orthogonal_as_lines': True,  # Force axis-aligned/corner paths to use line segments only
             'min_path_length': 3,      # Increase to 8-15 for longer segments
             'enable_optimization': True,   # Enable path optimization and circle evaluation
             'show_pre_optimization': False,  # Show unoptimized paths in SVG
@@ -1422,6 +1425,16 @@ def generate_svg():
     if 'parameters' in data:
         session.parameters.update(data['parameters'])
 
+    curve_fit_tolerance = max(
+        0.35,
+        min(8.0, float(session.parameters.get('cubic_fit_tolerance', 1.0))),
+    )
+    endpoint_tangent_strictness = max(
+        0.0,
+        min(100.0, float(session.parameters.get('endpoint_tangent_strictness', 85.0))),
+    )
+    force_orthogonal_as_lines = bool(session.parameters.get('force_orthogonal_as_lines', True))
+
     show_pre = session.parameters.get('show_pre_optimization', False)
     
     # Check what data we have available
@@ -1482,7 +1495,10 @@ def generate_svg():
                 None,  # No circle system
                 [],    # No optimized paths (no blue lines)
                 [],    # No scores
-                pre_optimization_paths  # Show magenta paths
+                pre_optimization_paths,  # Show magenta paths
+                curve_fit_tolerance=curve_fit_tolerance,
+                endpoint_tangent_strictness=endpoint_tangent_strictness,
+                force_orthogonal_as_lines=force_orthogonal_as_lines,
             )
         else:
             # Progressive or final - show both magenta and blue
@@ -1492,7 +1508,10 @@ def generate_svg():
                 circle_system,
                 optimized_paths,  # Blue paths
                 [1.0] * len(optimized_paths),  # Dummy scores
-                pre_optimization_paths  # Magenta paths
+                pre_optimization_paths,  # Magenta paths
+                curve_fit_tolerance=curve_fit_tolerance,
+                endpoint_tangent_strictness=endpoint_tangent_strictness,
+                force_orthogonal_as_lines=force_orthogonal_as_lines,
             )
         
         # Restore original settings
@@ -1530,6 +1549,16 @@ def download_svg(session_id):
         return "No valid results", 404
     
     try:
+        curve_fit_tolerance = max(
+            0.35,
+            min(8.0, float(session.parameters.get('cubic_fit_tolerance', 1.0))),
+        )
+        endpoint_tangent_strictness = max(
+            0.0,
+            min(100.0, float(session.parameters.get('endpoint_tangent_strictness', 85.0))),
+        )
+        force_orthogonal_as_lines = bool(session.parameters.get('force_orthogonal_as_lines', True))
+
         # Create filename based on original upload
         original_filename = session.original_filename or 'centerline_extraction'
         # Remove extension and add _centerline.svg
@@ -1561,7 +1590,10 @@ def download_svg(session_id):
                 None,  # No circle system in progressive mode
                 session.partial_optimized_paths,  # Blue optimized paths (may be empty if just started)
                 [1.0] * len(session.partial_optimized_paths),  # Dummy scores
-                session.initial_paths if show_pre else []  # Magenta initial paths
+                session.initial_paths if show_pre else [],  # Magenta initial paths
+                curve_fit_tolerance=curve_fit_tolerance,
+                endpoint_tangent_strictness=endpoint_tangent_strictness,
+                force_orthogonal_as_lines=force_orthogonal_as_lines,
             )
         else:
             # Use traditional results
@@ -1577,7 +1609,10 @@ def download_svg(session_id):
                     results['circle_system'],
                     results['optimized_paths'],
                     results['optimized_scores'],
-                    results['pre_optimization_paths']
+                    results['pre_optimization_paths'],
+                    curve_fit_tolerance=curve_fit_tolerance,
+                    endpoint_tangent_strictness=endpoint_tangent_strictness,
+                    force_orthogonal_as_lines=force_orthogonal_as_lines,
                 )
             else:
                 create_svg_output(
@@ -1585,7 +1620,10 @@ def download_svg(session_id):
                     None,
                     results['optimized_paths'],
                     results['optimized_scores'],
-                    results['pre_optimization_paths']
+                    results['pre_optimization_paths'],
+                    curve_fit_tolerance=curve_fit_tolerance,
+                    endpoint_tangent_strictness=endpoint_tangent_strictness,
+                    force_orthogonal_as_lines=force_orthogonal_as_lines,
                 )
         
         # Restore original settings

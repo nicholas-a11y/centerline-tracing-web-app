@@ -159,6 +159,22 @@ def _to_points(arr: np.ndarray) -> list[list[float]]:
     return [[float(r), float(c)] for r, c in arr]
 
 
+def _orient_open_curve_to_start(points: np.ndarray, ref_start: np.ndarray | None) -> np.ndarray:
+    """Return points reversed when that better matches the reference start.
+
+    This is used for UI layer display only, so the first rendered analytic point
+    aligns with the extracted/fitted path direction users inspect in the canvas.
+    """
+    if ref_start is None or points.shape[0] < 2:
+        return points
+
+    d_first = float(np.linalg.norm(points[0] - ref_start))
+    d_last = float(np.linalg.norm(points[-1] - ref_start))
+    if d_last < d_first:
+        return points[::-1].copy()
+    return points
+
+
 def _to_python_number(value: Any) -> Any:
     if isinstance(value, (np.integer,)):
         return int(value)
@@ -279,6 +295,12 @@ def _fixture_analysis(fixture_id: str) -> dict[str, Any]:
         flat_fitted = np.zeros((0, 2), dtype=np.float32)
 
     ideal_pts = fx.defn.ideal_sample(FIXTURE_SIZE, IDEAL_SAMPLE_N).astype(np.float32)
+    ref_start = None
+    if sampled_paths and sampled_paths[0]:
+        ref_start = np.asarray(sampled_paths[0][0], dtype=np.float32)
+    elif non_empty and non_empty[0]:
+        ref_start = np.asarray(non_empty[0][0], dtype=np.float32)
+    display_ideal_pts = _orient_open_curve_to_start(ideal_pts, ref_start)
     dev = analytical_deviation(flat_fitted, ideal_pts)
 
     pixel_points = np.argwhere(fx.pixels < 128)
@@ -318,7 +340,7 @@ def _fixture_analysis(fixture_id: str) -> dict[str, Any]:
         },
         "contract_flags": contract_flags,
         "layers": {
-            "golden_analytic_path": _to_points(ideal_pts),
+            "golden_analytic_path": _to_points(display_ideal_pts),
             "golden_pixel_points": _to_points(pixel_points.astype(np.float32)),
             "skeleton_paths": skeleton_layers,
             "optimized_sampled_paths": sampled_paths,

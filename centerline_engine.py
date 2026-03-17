@@ -1113,7 +1113,16 @@ def remove_overlapping_paths(paths, overlap_threshold=0.5, min_distance=10):
     
     return filtered_paths
 
-def create_svg_output(image, circle_system, optimized_paths, path_scores, pre_optimization_paths=None):
+def create_svg_output(
+    image,
+    circle_system,
+    optimized_paths,
+    path_scores,
+    pre_optimization_paths=None,
+    curve_fit_tolerance=1.0,
+    endpoint_tangent_strictness=85.0,
+    force_orthogonal_as_lines=True,
+):
     """Create SVG output with bitmap, pre-optimization paths, and optimized paths."""
     print("Creating SVG output...")
     
@@ -1155,9 +1164,17 @@ def create_svg_output(image, circle_system, optimized_paths, path_scores, pre_op
                 opacity=PRE_OPTIMIZATION_PATH_OPACITY
             ))
     
+    # Fit optimized paths to SVG-native line/cubic segments.
+    fitted_segments = fit_curve_segments(
+        optimized_paths,
+        tolerance_px=max(0.35, float(curve_fit_tolerance)),
+        endpoint_tangent_strictness=float(endpoint_tangent_strictness),
+        force_orthogonal_as_lines=bool(force_orthogonal_as_lines),
+    )
+
     # Add optimized paths
     print(f"Adding {len(optimized_paths)} optimized paths...")
-    for i, (path, score) in enumerate(zip(optimized_paths, path_scores)):
+    for i, (path, score, segments) in enumerate(zip(optimized_paths, path_scores, fitted_segments)):
         if len(path) < 2:
             continue
         
@@ -1166,14 +1183,45 @@ def create_svg_output(image, circle_system, optimized_paths, path_scores, pre_op
         width = 2.0
         opacity = 1.0  # Keep consistent opacity for all optimized paths
         
-        # Create SVG path with +0.5 pixel offset to align with circle centers
+        # Emit true SVG cubic segments when available.
         path_data = []
-        for j, point in enumerate(path):
-            y, x = point
-            if j == 0:
-                path_data.append(f"M {x + 0.5:.2f} {y + 0.5:.2f}")
-            else:
-                path_data.append(f"L {x + 0.5:.2f} {y + 0.5:.2f}")
+        if segments:
+            start_point = segments[0].get("start_point", list(path[0]))
+            sy, sx = float(start_point[0]), float(start_point[1])
+            path_data.append(f"M {sx + 0.5:.2f} {sy + 0.5:.2f}")
+
+            for seg in segments:
+                end = seg.get("end_point")
+                if not isinstance(end, (list, tuple)) or len(end) != 2:
+                    continue
+
+                ey, ex = float(end[0]), float(end[1])
+                if seg.get("type") == "cubic":
+                    c1 = seg.get("control1")
+                    c2 = seg.get("control2")
+                    if (
+                        isinstance(c1, (list, tuple))
+                        and len(c1) == 2
+                        and isinstance(c2, (list, tuple))
+                        and len(c2) == 2
+                    ):
+                        c1y, c1x = float(c1[0]), float(c1[1])
+                        c2y, c2x = float(c2[0]), float(c2[1])
+                        path_data.append(
+                            f"C {c1x + 0.5:.2f} {c1y + 0.5:.2f} "
+                            f"{c2x + 0.5:.2f} {c2y + 0.5:.2f} "
+                            f"{ex + 0.5:.2f} {ey + 0.5:.2f}"
+                        )
+                        continue
+
+                path_data.append(f"L {ex + 0.5:.2f} {ey + 0.5:.2f}")
+        else:
+            for j, point in enumerate(path):
+                y, x = point
+                if j == 0:
+                    path_data.append(f"M {x + 0.5:.2f} {y + 0.5:.2f}")
+                else:
+                    path_data.append(f"L {x + 0.5:.2f} {y + 0.5:.2f}")
         
         dwg.add(dwg.path(
             d=" ".join(path_data),
@@ -2095,253 +2143,730 @@ if __name__ == "__main__":
 def fit_curve_segments(
     paths: list,
     tolerance_px: float = 1.0,
+    endpoint_tangent_strictness: float = 85.0,
+    force_orthogonal_as_lines: bool = True,
 ) -> list:
-    """Fit cubic Bézier segments to a list of skeleton paths.
+    """Fit line/cubic segments to paths using Schneider-style iterative fitting."""
 
-    Input
-    -----
-    paths : list of paths, each path = [[row, col], ...]
-        Typically the output of extract_skeleton_paths().
+    fit_error = max(0.35, float(tolerance_px))
+    tangent_blend = max(0.0, min(1.0, float(endpoint_tangent_strictness) / 100.0))
 
-    tolerance_px : float
-        Maximum allowed deviation between the fitted curve and the input
-        skeleton pixels.  Smaller → more segments, closer fit.
+    def _as_point(pt):
+        return np.array([float(pt[0]), float(pt[1])], dtype=float)
 
-    Output
-    ------
-    list[list[dict]] — one list of segment dicts per input path.
+    def _as_float_pair(pt):
+        return [float(pt[0]), float(pt[1])]
 
-    Each segment dict has the form:
-        {"type": "line",   "end_point": [row, col]}
-        {"type": "cubic",  "control1": [row, col],
-                           "control2": [row, col],
-                           "end_point": [row, col]}
-
-    The first point of the input path is the implicit start of path's first
-    segment and is NOT included in the output.
-
-    STUB NOTE
-    ---------
-    This implementation converts every path to consecutive line segments.
-    All structural contract tests pass.  Curve-quality contract tests
-    (test_mean_deviation_within_tolerance, test_curve_fixtures_have_cubic_segments)
-    are *expected* to fail against this stub — that is intentional and proves
-    the baseline is genuinely inadequate for true curves.
-
-    Replace this body with a real cubic fitter (e.g. Schneider / Fit-Curves)
-    during the engine overhaul.  The test suite will then verify the improvement.
-    """
-    def _as_int_point(pt):
-        return [int(pt[0]), int(pt[1])]
-
-    def _is_axis_dominant(path_points):
-        if len(path_points) < 3:
-            return False
-
-        total = 0
-        axis_steps = 0
-        diag_steps = 0
-        for i in range(1, len(path_points)):
-            dr = int(path_points[i][0]) - int(path_points[i - 1][0])
-            dc = int(path_points[i][1]) - int(path_points[i - 1][1])
-            if dr == 0 and dc == 0:
-                continue
-            total += 1
-            if dr == 0 or dc == 0:
-                axis_steps += 1
-            else:
-                diag_steps += 1
-
-        if total == 0 or diag_steps == 0:
-            return False
-
-        return (axis_steps / float(total)) >= 0.7
-
-    def _segment_axis(a, b):
-        dr = int(b[0]) - int(a[0])
-        dc = int(b[1]) - int(a[1])
-        if dr == 0 and dc == 0:
-            return None
-        if abs(dc) >= abs(dr):
-            return "h"
-        return "v"
-
-    def _orthogonalize_path(path_points):
-        if not _is_axis_dominant(path_points):
-            return [_as_int_point(p) for p in path_points]
-
-        out = [_as_int_point(path_points[0])]
-        for i in range(1, len(path_points)):
-            prev = out[-1]
-            curr = _as_int_point(path_points[i])
-
-            dr = curr[0] - prev[0]
-            dc = curr[1] - prev[1]
-            if dr == 0 and dc == 0:
-                continue
-
-            # For diagonal steps on mostly axis-aligned paths, split into two
-            # orthogonal legs and prefer continuity with neighboring segments.
-            if dr != 0 and dc != 0:
-                prev_axis = None
-                next_axis = None
-                if i >= 2:
-                    prev_axis = _segment_axis(path_points[i - 2], path_points[i - 1])
-                if i + 1 < len(path_points):
-                    next_axis = _segment_axis(path_points[i], path_points[i + 1])
-
-                preferred = prev_axis or next_axis
-                if preferred == "h":
-                    elbow = [prev[0], curr[1]]
-                elif preferred == "v":
-                    elbow = [curr[0], prev[1]]
-                else:
-                    elbow = [prev[0], curr[1]] if abs(dc) >= abs(dr) else [curr[0], prev[1]]
-
-                if elbow != out[-1] and elbow != curr:
-                    out.append(elbow)
-
-            if curr != out[-1]:
-                out.append(curr)
-
-        # Safety pass: if any diagonal step remains, split it into orthogonal
-        # legs so dominant-angle paths keep square corners and axis endpoints.
-        cleaned = [out[0]]
-        for i in range(1, len(out)):
-            prev = cleaned[-1]
-            curr = out[i]
-            dr = curr[0] - prev[0]
-            dc = curr[1] - prev[1]
-
-            if dr != 0 and dc != 0:
-                prev_axis = None
-                next_axis = None
-                if len(cleaned) >= 2:
-                    prev_axis = _segment_axis(cleaned[-2], cleaned[-1])
-                if i + 1 < len(out):
-                    next_axis = _segment_axis(out[i], out[i + 1])
-
-                preferred = prev_axis or next_axis
-                if preferred == "h":
-                    elbow = [prev[0], curr[1]]
-                elif preferred == "v":
-                    elbow = [curr[0], prev[1]]
-                else:
-                    elbow = [prev[0], curr[1]] if abs(dc) >= abs(dr) else [curr[0], prev[1]]
-
-                if elbow != cleaned[-1] and elbow != curr:
-                    cleaned.append(elbow)
-
-            if curr != cleaned[-1]:
-                cleaned.append(curr)
-
+    def _clean_points(path_points):
+        cleaned = []
+        for pt in path_points:
+            p = _as_point(pt)
+            if not cleaned or np.linalg.norm(p - cleaned[-1]) > 1e-9:
+                cleaned.append(p)
         return cleaned
 
-    def _snap_endpoints(path_points):
-        """
-        Fix 1-2-pixel off-axis jogs at path endpoints produced by skeleton-
-        thinning artifacts.  After orthogonalization the endpoint pixel can sit
-        one row/column away from the arm's dominant axis, generating a small
-        staircase jog before the path settles.  We detect the dominant H/V
-        direction of the near-endpoint run, project the terminal point onto that
-        axis, and remove the now-redundant intermediate vertices.
-        Only applied when the offset is ≤ 2 pixels and the path is axis-dominant.
-        """
-        if len(path_points) < 5:
-            return path_points
-        # After orthogonalization all steps are axis-aligned. Use a plain
-        # fraction check rather than _is_axis_dominant (which returns False
-        # when diag_steps == 0, i.e. already fully orthogonal paths).
-        total = len(path_points) - 1
-        axis_steps = sum(
-            1 for i in range(1, len(path_points))
-            if path_points[i][0] == path_points[i - 1][0] or
-               path_points[i][1] == path_points[i - 1][1]
-        )
-        if total == 0 or (axis_steps / total) < 0.7:
-            return path_points
+    def _normalize(v):
+        n = np.linalg.norm(v)
+        if n <= 1e-9:
+            return np.array([0.0, 0.0], dtype=float)
+        return v / n
 
-        def _near_axis(window):
-            """Return ('r', dominant_row) or ('c', dominant_col) for a list of points."""
-            h_rows, v_cols = [], []
-            for a, b in zip(window, window[1:]):
-                if a == b:
+    def _line_distance_stats(points):
+        if len(points) <= 2:
+            return 0.0, 0.0
+        p0 = points[0]
+        p3 = points[-1]
+        seg = p3 - p0
+        seg_len = np.linalg.norm(seg)
+        if seg_len <= 1e-9:
+            d = [float(np.linalg.norm(p - p0)) for p in points[1:-1]]
+            return (float(max(d)) if d else 0.0, float(np.mean(d)) if d else 0.0)
+
+        distances = []
+        for p in points[1:-1]:
+            cross = seg[0] * (p[1] - p0[1]) - seg[1] * (p[0] - p0[0])
+            distances.append(abs(float(cross)) / seg_len)
+        return (float(max(distances)) if distances else 0.0, float(np.mean(distances)) if distances else 0.0)
+
+    def _max_turn_angle(points):
+        if len(points) < 3:
+            return 0.0
+
+        max_angle = 0.0
+        for i in range(1, len(points) - 1):
+            v1 = points[i] - points[i - 1]
+            v2 = points[i + 1] - points[i]
+            n1 = np.linalg.norm(v1)
+            n2 = np.linalg.norm(v2)
+            if n1 <= 1e-9 or n2 <= 1e-9:
+                continue
+            cosang = np.clip(float(np.dot(v1, v2) / (n1 * n2)), -1.0, 1.0)
+            angle = float(np.degrees(np.arccos(cosang)))
+            if angle > max_angle:
+                max_angle = angle
+        return max_angle
+
+    def _axis_step_ratio(points):
+        """Return fraction of rounded steps that are axis-aligned."""
+        if len(points) < 2:
+            return 1.0
+
+        axis_steps = 0
+        total_steps = 0
+        ints = [
+            np.array([int(round(p[0])), int(round(p[1]))], dtype=int)
+            for p in points
+        ]
+
+        for i in range(1, len(ints)):
+            dr = int(ints[i][0] - ints[i - 1][0])
+            dc = int(ints[i][1] - ints[i - 1][1])
+            if dr == 0 and dc == 0:
+                continue
+            total_steps += 1
+            if dr == 0 or dc == 0:
+                axis_steps += 1
+
+        if total_steps == 0:
+            return 1.0
+        return float(axis_steps) / float(total_steps)
+
+    def _fit_axis_lines(points):
+        """Return line-only segments for orthogonal/corner-like paths."""
+        ints = [
+            [int(round(p[0])), int(round(p[1]))]
+            for p in points
+        ]
+        raw_ints = [list(p) for p in ints]
+        is_closed_axis_loop = (
+            len(ints) >= 4
+            and np.linalg.norm(np.array(ints[0], dtype=float) - np.array(ints[-1], dtype=float)) <= 1.5
+        )
+
+        def _build_axis_runs(int_points):
+            step_axes = []
+            for i in range(1, len(int_points)):
+                dr = int_points[i][0] - int_points[i - 1][0]
+                dc = int_points[i][1] - int_points[i - 1][1]
+                if dr == 0 and dc == 0:
+                    step_axes.append(None)
+                elif abs(dc) >= abs(dr):
+                    step_axes.append("h")
+                else:
+                    step_axes.append("v")
+
+            runs = []
+            i = 0
+            while i < len(step_axes):
+                axis = step_axes[i]
+                if axis is None:
+                    i += 1
                     continue
-                if a[0] == b[0]:
-                    h_rows.append(a[0])
-                elif a[1] == b[1]:
-                    v_cols.append(a[1])
-            if len(h_rows) >= len(v_cols) and h_rows:
-                return ('r', max(set(h_rows), key=h_rows.count))
-            if v_cols:
-                return ('c', max(set(v_cols), key=v_cols.count))
+                start = i
+                i += 1
+                while i < len(step_axes) and (step_axes[i] is None or step_axes[i] == axis):
+                    i += 1
+                end = i - 1
+                runs.append({"axis": axis, "start": start, "end": end})
+            return runs
+
+        def _merge_closed_loop_runs(runs):
+            if not runs:
+                return runs
+
+            merged = list(runs)
+            if len(merged) >= 2 and merged[0]["axis"] == merged[-1]["axis"]:
+                merged = [
+                    {
+                        "axis": merged[0]["axis"],
+                        "start": merged[-1]["start"],
+                        "end": merged[0]["end"],
+                    }
+                ] + merged[1:-1]
+
+            changed = True
+            while changed and len(merged) >= 3:
+                changed = False
+                for i in range(1, len(merged) - 1):
+                    curr_len = merged[i]["end"] - merged[i]["start"] + 1
+                    if curr_len > 2:
+                        continue
+                    if merged[i - 1]["axis"] != merged[i + 1]["axis"]:
+                        continue
+
+                    merged = (
+                        merged[: i - 1]
+                        + [{
+                            "axis": merged[i - 1]["axis"],
+                            "start": merged[i - 1]["start"],
+                            "end": merged[i + 1]["end"],
+                        }]
+                        + merged[i + 2 :]
+                    )
+                    changed = True
+                    break
+
+            if len(merged) >= 2 and merged[0]["axis"] == merged[-1]["axis"]:
+                merged = [
+                    {
+                        "axis": merged[0]["axis"],
+                        "start": merged[-1]["start"],
+                        "end": merged[0]["end"],
+                    }
+                ] + merged[1:-1]
+            return merged
+
+        def _closed_loop_runs_to_lines(run_defs, int_points):
+            if not run_defs:
+                return []
+
+            segs = []
+            point_count = len(int_points)
+            for run in run_defs:
+                end_point = int_points[(run["end"] + 1) % point_count]
+                segs.append({"type": "line", "end_point": _as_float_pair(end_point)})
+
+            if segs:
+                segs[0]["start_point"] = _as_float_pair(int_points[run_defs[0]["start"]])
+            return segs
+
+        if is_closed_axis_loop:
+            raw_closed = list(raw_ints)
+            if len(raw_closed) >= 2 and raw_closed[0] == raw_closed[-1]:
+                raw_closed = raw_closed[:-1]
+
+            closed_runs = _merge_closed_loop_runs(_build_axis_runs(raw_closed + [raw_closed[0]]))
+            if len(closed_runs) >= 4:
+                return _closed_loop_runs_to_lines(closed_runs, raw_closed)
+
+        # For axis-dominant traces, smooth each dominant-axis run by snapping
+        # the minor coordinate to the run median. This suppresses one-pixel
+        # skeleton artifacts at starts/corners without forcing to raw vertices.
+        if len(ints) >= 3:
+            step_axes = []
+            for i in range(1, len(ints)):
+                dr = ints[i][0] - ints[i - 1][0]
+                dc = ints[i][1] - ints[i - 1][1]
+                if dr == 0 and dc == 0:
+                    step_axes.append(None)
+                elif abs(dc) >= abs(dr):
+                    step_axes.append("h")
+                else:
+                    step_axes.append("v")
+
+            runs = []
+            i = 0
+            while i < len(step_axes):
+                axis = step_axes[i]
+                if axis is None:
+                    i += 1
+                    continue
+                start = i
+                i += 1
+                while i < len(step_axes) and (step_axes[i] is None or step_axes[i] == axis):
+                    i += 1
+                end = i - 1
+                runs.append((axis, start, end))
+
+            for axis, edge_start, edge_end in runs:
+                point_start = edge_start
+                point_end = edge_end + 1
+                run_points = ints[point_start : point_end + 1]
+                if len(run_points) < 2:
+                    continue
+
+                if axis == "h":
+                    median_row = sorted(p[0] for p in run_points)[len(run_points) // 2]
+                    for idx in range(point_start, point_end + 1):
+                        ints[idx][0] = median_row
+                else:
+                    median_col = sorted(p[1] for p in run_points)[len(run_points) // 2]
+                    for idx in range(point_start, point_end + 1):
+                        ints[idx][1] = median_col
+
+        # For near-1D paths (nearly horizontal or vertical), snap the minor
+        # axis to its median value.  This removes staircase noise at skeleton
+        # endpoints so that a horizontal/vertical line does not acquire a
+        # spurious tilt caused by one or two pixels being off-centre.
+        rows = [r for r, _ in ints]
+        cols = [c for _, c in ints]
+        row_ext = max(rows) - min(rows)
+        col_ext = max(cols) - min(cols)
+        if col_ext > row_ext * 5:
+            # Predominantly horizontal — snap all rows to median row.
+            median_row = sorted(rows)[len(rows) // 2]
+            ints = [[median_row, c] for _, c in ints]
+        elif row_ext > col_ext * 5:
+            # Predominantly vertical — snap all cols to median col.
+            median_col = sorted(cols)[len(cols) // 2]
+            ints = [[r, median_col] for r, _ in ints]
+
+        ints = [(p[0], p[1]) for p in ints]
+
+        simplified = rdp_simplify(ints, max(0.8, fit_error * 1.2)) if len(ints) >= 3 else ints
+        if len(simplified) < 2:
+            simplified = [ints[0], ints[-1]]
+
+        segs = [
+            {"type": "line", "end_point": _as_float_pair(p)}
+            for p in simplified[1:]
+        ]
+        # Expose the (possibly snapped) start so that the SVG M command uses
+        # the corrected coordinate rather than the raw skeleton first point.
+        if segs:
+            segs[0]["start_point"] = _as_float_pair(simplified[0])
+        return segs
+
+    def _find_terminal_straight_run(points, at_start=True, min_steps=6, min_length=6.0):
+        """Return the index bounding a straight run at an open path terminal."""
+        if len(points) < (min_steps + 3):
             return None
 
-        pts = list(path_points)
-        win = min(6, len(pts))
+        # Do not peel off terminal spans from traces that are globally close to
+        # a single slanted line; that would fragment simple rotated lines.
+        max_dev, mean_dev = _line_distance_stats(points)
+        if max_dev <= max(1.1, fit_error * 1.45) and mean_dev <= max(0.4, fit_error * 0.55):
+            return None
+        if _max_turn_angle(points) <= 18.0:
+            return None
 
-        # --- Fix start ---
-        info = _near_axis(pts[1:win])
-        if info:
-            axis, val = info
-            if axis == 'r' and pts[0][0] != val and abs(pts[0][0] - val) <= 2:
-                pts[0] = [val, pts[0][1]]
-                i = 1
-                while i < len(pts) - 1 and pts[i][0] != val:
-                    pts.pop(i)
-                if len(pts) >= 2 and pts[0] == pts[1]:
-                    pts.pop(1)
-            elif axis == 'c' and pts[0][1] != val and abs(pts[0][1] - val) <= 2:
-                pts[0] = [pts[0][0], val]
-                i = 1
-                while i < len(pts) - 1 and pts[i][1] != val:
-                    pts.pop(i)
-                if len(pts) >= 2 and pts[0] == pts[1]:
-                    pts.pop(1)
+        scan = points if at_start else list(reversed(points))
+        ints = [
+            np.array([int(round(p[0])), int(round(p[1]))], dtype=int)
+            for p in scan
+        ]
 
-        # --- Fix end ---
-        win = min(6, len(pts))
-        info = _near_axis(pts[-win:-1])
-        if info:
-            axis, val = info
-            if axis == 'r' and pts[-1][0] != val and abs(pts[-1][0] - val) <= 2:
-                pts[-1] = [val, pts[-1][1]]
-                i = len(pts) - 2
-                while i > 0 and pts[i][0] != val:
-                    pts.pop(i)
-                    i -= 1
-                if len(pts) >= 2 and pts[-1] == pts[-2]:
-                    pts.pop(-1)
-            elif axis == 'c' and pts[-1][1] != val and abs(pts[-1][1] - val) <= 2:
-                pts[-1] = [pts[-1][0], val]
-                i = len(pts) - 2
-                while i > 0 and pts[i][1] != val:
-                    pts.pop(i)
-                    i -= 1
-                if len(pts) >= 2 and pts[-1] == pts[-2]:
-                    pts.pop(-1)
+        direction = None
+        run_end = None
+        for i in range(1, len(ints)):
+            step = ints[i] - ints[i - 1]
+            if step[0] == 0 and step[1] == 0:
+                continue
+            if direction is None:
+                direction = step
+                run_end = i
+                continue
+            if step[0] == direction[0] and step[1] == direction[1]:
+                run_end = i
+                continue
+            break
 
-        return pts
+        if direction is None or run_end is None:
+            return None
+
+        if run_end < min_steps:
+            return None
+        if float(np.linalg.norm(scan[run_end] - scan[0])) < float(min_length):
+            return None
+        if run_end >= len(scan) - 2:
+            return None
+
+        return run_end if at_start else (len(points) - 1 - run_end)
+
+    def _curve_is_effectively_line(curve):
+        """Return True for axis-aligned cubics whose controls are also axis-aligned."""
+        delta = curve[3] - curve[0]
+        axis_tol = max(0.15, fit_error * 0.05)
+        ctrl_tol = max(0.2, fit_error * 0.08)
+
+        if abs(float(delta[0])) <= axis_tol:
+            target_row = 0.5 * float(curve[0][0] + curve[3][0])
+            return max(abs(float(curve[1][0] - target_row)), abs(float(curve[2][0] - target_row))) <= ctrl_tol
+
+        if abs(float(delta[1])) <= axis_tol:
+            target_col = 0.5 * float(curve[0][1] + curve[3][1])
+            return max(abs(float(curve[1][1] - target_col)), abs(float(curve[2][1] - target_col))) <= ctrl_tol
+
+        return False
+
+    def _estimate_endpoint_tangent(points, at_start=True, lookahead=6):
+        """Estimate a stable endpoint tangent from multiple forward/backward secants."""
+        if len(points) < 2:
+            return np.array([0.0, 0.0], dtype=float)
+
+        anchor = points[0] if at_start else points[-1]
+        # On longer paths, tiny endpoint hooks can dominate a short-window
+        # estimate and flip the handle direction. Expand the secant window so
+        # the tangent follows the broader path trend rather than a few noisy
+        # terminal samples.
+        adaptive_lookahead = max(int(lookahead), len(points) // 4)
+        max_hops = min(adaptive_lookahead, len(points) - 1)
+        accum = np.array([0.0, 0.0], dtype=float)
+        weight_sum = 0.0
+
+        for hop in range(1, max_hops + 1):
+            if at_start:
+                vec = points[hop] - anchor
+            else:
+                vec = anchor - points[-1 - hop]
+
+            ln = np.linalg.norm(vec)
+            if ln <= 1e-9:
+                continue
+
+            # Favor farther secants to suppress staircase noise near endpoints.
+            weight = float(hop * hop)
+            accum += (vec / ln) * weight
+            weight_sum += weight
+
+        if weight_sum > 0:
+            tangent = _normalize(accum)
+            if np.linalg.norm(tangent) > 1e-9:
+                return tangent
+
+        fallback = (points[1] - points[0]) if at_start else (points[-2] - points[-1])
+        return _normalize(fallback)
+
+    def _is_closed_loop(points):
+        if len(points) < 6:
+            return False
+        return float(np.linalg.norm(points[0] - points[-1])) <= max(1.25, fit_error * 1.5)
+
+    def _estimate_closed_loop_tangent(points, lookahead=8):
+        """Estimate the tangent at a closed-loop seam using secants across it."""
+        if len(points) < 4:
+            return np.array([0.0, 0.0], dtype=float)
+
+        max_hops = min(max(int(lookahead), len(points) // 8), max(1, (len(points) - 2) // 2))
+        accum = np.array([0.0, 0.0], dtype=float)
+        weight_sum = 0.0
+
+        for hop in range(1, max_hops + 1):
+            prev_pt = points[-1 - hop]
+            next_pt = points[hop]
+            vec = next_pt - prev_pt
+            ln = np.linalg.norm(vec)
+            if ln <= 1e-9:
+                continue
+            weight = float(hop * hop)
+            accum += (vec / ln) * weight
+            weight_sum += weight
+
+        if weight_sum > 0:
+            tangent = _normalize(accum)
+            if np.linalg.norm(tangent) > 1e-9:
+                return tangent
+
+        return _normalize(points[1] - points[-2])
+
+    def _align_endpoint_handles(curves, start_tangent, end_tangent, closed_loop_tangent=None):
+        """Project first/last cubic handles onto stable endpoint tangents."""
+        if not curves:
+            return curves
+
+        out = [c.copy() for c in curves]
+        chord = np.linalg.norm(out[-1][3] - out[0][0])
+        min_handle = max(0.35, 0.02 * float(chord))
+
+        if closed_loop_tangent is not None and np.linalg.norm(closed_loop_tangent) > 1e-9:
+            seam_tangent = _normalize(closed_loop_tangent)
+
+            first = out[0]
+            first_original = first[1].copy()
+            first_handle_len = max(min_handle, float(np.linalg.norm(first[1] - first[0])))
+            first_aligned = first[0] + seam_tangent * first_handle_len
+            first[1] = (1.0 - tangent_blend) * first_original + tangent_blend * first_aligned
+
+            last = out[-1]
+            last_original = last[2].copy()
+            last_handle_len = max(min_handle, float(np.linalg.norm(last[2] - last[3])))
+            last_aligned = last[3] - seam_tangent * last_handle_len
+            last[2] = (1.0 - tangent_blend) * last_original + tangent_blend * last_aligned
+
+            return out
+
+        if np.linalg.norm(start_tangent) > 1e-9:
+            first = out[0]
+            original = first[1].copy()
+            handle_len = max(min_handle, float(np.linalg.norm(first[1] - first[0])))
+            first_chord_tangent = _normalize(first[3] - first[0])
+            stable_start_tangent = _normalize((0.35 * start_tangent) + (0.65 * first_chord_tangent))
+            aligned = first[0] + stable_start_tangent * handle_len
+            first[1] = (1.0 - tangent_blend) * original + tangent_blend * aligned
+
+        if np.linalg.norm(end_tangent) > 1e-9:
+            last = out[-1]
+            original = last[2].copy()
+            handle_len = max(min_handle, float(np.linalg.norm(last[2] - last[3])))
+            last_chord_tangent = _normalize(last[3] - last[0])
+            stable_end_tangent = _normalize((0.35 * end_tangent) + (0.65 * last_chord_tangent))
+            # For the end handle, project backward from the endpoint so the
+            # handle points back along the incoming path direction.
+            aligned = last[3] - stable_end_tangent * handle_len
+            last[2] = (1.0 - tangent_blend) * original + tangent_blend * aligned
+
+        return out
+
+    def _split_by_corners(points, corner_deg=58.0):
+        if len(points) < 3:
+            return [points]
+        split_indices = [0]
+        for i in range(1, len(points) - 1):
+            v1 = points[i] - points[i - 1]
+            v2 = points[i + 1] - points[i]
+            n1 = np.linalg.norm(v1)
+            n2 = np.linalg.norm(v2)
+            if n1 <= 1e-9 or n2 <= 1e-9:
+                continue
+            cosang = np.clip(float(np.dot(v1, v2) / (n1 * n2)), -1.0, 1.0)
+            angle = np.degrees(np.arccos(cosang))
+            if angle >= corner_deg:
+                split_indices.append(i)
+        split_indices.append(len(points) - 1)
+
+        chunks = []
+        for a, b in zip(split_indices, split_indices[1:]):
+            if b <= a:
+                continue
+            chunk = points[a : b + 1]
+            if len(chunk) >= 2:
+                chunks.append(chunk)
+        return chunks if chunks else [points]
+
+    def _bezier_eval(curve, t):
+        mt = 1.0 - t
+        return (
+            (mt ** 3) * curve[0]
+            + 3.0 * (mt ** 2) * t * curve[1]
+            + 3.0 * mt * (t ** 2) * curve[2]
+            + (t ** 3) * curve[3]
+        )
+
+    def _bezier_first_derivative(curve, t):
+        mt = 1.0 - t
+        return (
+            3.0 * (mt ** 2) * (curve[1] - curve[0])
+            + 6.0 * mt * t * (curve[2] - curve[1])
+            + 3.0 * (t ** 2) * (curve[3] - curve[2])
+        )
+
+    def _bezier_second_derivative(curve, t):
+        mt = 1.0 - t
+        return (
+            6.0 * mt * (curve[2] - 2.0 * curve[1] + curve[0])
+            + 6.0 * t * (curve[3] - 2.0 * curve[2] + curve[1])
+        )
+
+    def _chord_length_parameterize(points):
+        u = [0.0]
+        for i in range(1, len(points)):
+            u.append(u[-1] + float(np.linalg.norm(points[i] - points[i - 1])))
+        total = u[-1]
+        if total <= 1e-9:
+            return np.linspace(0.0, 1.0, len(points))
+        return np.array([v / total for v in u], dtype=float)
+
+    def _generate_bezier(points, u, tan1, tan2):
+        p0 = points[0]
+        p3 = points[-1]
+
+        C = np.zeros((2, 2), dtype=float)
+        X = np.zeros(2, dtype=float)
+
+        for i, ui in enumerate(u):
+            b0 = (1.0 - ui) ** 3
+            b1 = 3.0 * ui * ((1.0 - ui) ** 2)
+            b2 = 3.0 * (ui ** 2) * (1.0 - ui)
+            b3 = ui ** 3
+
+            a1 = tan1 * b1
+            a2 = tan2 * b2
+
+            C[0, 0] += float(np.dot(a1, a1))
+            C[0, 1] += float(np.dot(a1, a2))
+            C[1, 0] += float(np.dot(a1, a2))
+            C[1, 1] += float(np.dot(a2, a2))
+
+            tmp = points[i] - (p0 * (b0 + b1)) - (p3 * (b2 + b3))
+            X[0] += float(np.dot(a1, tmp))
+            X[1] += float(np.dot(a2, tmp))
+
+        det = C[0, 0] * C[1, 1] - C[0, 1] * C[1, 0]
+        seg_len = float(np.linalg.norm(p3 - p0))
+        alpha_min = seg_len * 1e-3
+
+        if abs(det) > 1e-10:
+            alpha1 = (X[0] * C[1, 1] - X[1] * C[0, 1]) / det
+            alpha2 = (C[0, 0] * X[1] - C[1, 0] * X[0]) / det
+        else:
+            alpha1 = alpha2 = seg_len / 3.0
+
+        if alpha1 < alpha_min or alpha2 < alpha_min:
+            alpha1 = alpha2 = seg_len / 3.0
+
+        p1 = p0 + tan1 * alpha1
+        p2 = p3 + tan2 * alpha2
+        return np.array([p0, p1, p2, p3], dtype=float)
+
+    def _reparameterize(points, u, curve):
+        out = []
+        for i, ui in enumerate(u):
+            p = points[i]
+            q = _bezier_eval(curve, ui)
+            q1 = _bezier_first_derivative(curve, ui)
+            q2 = _bezier_second_derivative(curve, ui)
+
+            diff = q - p
+            numerator = float(np.dot(diff, q1))
+            denominator = float(np.dot(q1, q1) + np.dot(diff, q2))
+            if abs(denominator) < 1e-12:
+                out.append(ui)
+            else:
+                t = ui - numerator / denominator
+                out.append(max(0.0, min(1.0, t)))
+        return np.array(out, dtype=float)
+
+    def _max_error(points, curve, u):
+        max_err = -1.0
+        split = len(points) // 2
+        for i in range(1, len(points) - 1):
+            q = _bezier_eval(curve, u[i])
+            v = q - points[i]
+            err = float(np.dot(v, v))
+            if err > max_err:
+                max_err = err
+                split = i
+        return max_err, split
+
+    def _fit_cubic(points, tan1, tan2, error):
+        n = len(points)
+        if n == 2:
+            dist = float(np.linalg.norm(points[1] - points[0])) / 3.0
+            return [
+                np.array(
+                    [
+                        points[0],
+                        points[0] + tan1 * dist,
+                        points[1] + tan2 * dist,
+                        points[1],
+                    ],
+                    dtype=float,
+                )
+            ]
+
+        u = _chord_length_parameterize(points)
+        curve = _generate_bezier(points, u, tan1, tan2)
+        max_err, split_idx = _max_error(points, curve, u)
+
+        if max_err <= error * error:
+            return [curve]
+
+        if max_err <= (error * error) * 4.0:
+            for _ in range(6):
+                u = _reparameterize(points, u, curve)
+                curve = _generate_bezier(points, u, tan1, tan2)
+                max_err, split_idx = _max_error(points, curve, u)
+                if max_err <= error * error:
+                    return [curve]
+
+        v_prev = points[split_idx - 1] - points[split_idx]
+        v_next = points[split_idx] - points[split_idx + 1]
+        tan_center = _normalize(v_prev + v_next)
+        if np.linalg.norm(tan_center) <= 1e-9:
+            tan_center = _normalize(points[split_idx + 1] - points[split_idx - 1])
+        if np.linalg.norm(tan_center) <= 1e-9:
+            tan_center = _normalize(points[-1] - points[0])
+
+        left = _fit_cubic(points[: split_idx + 1], tan1, tan_center, error)
+        right = _fit_cubic(points[split_idx:], -tan_center, tan2, error)
+        return left + right
+
+    def _fit_chunk(points):
+        if len(points) < 2:
+            return []
+
+        is_closed_loop = _is_closed_loop(points)
+
+        if not is_closed_loop:
+            prefix_end = _find_terminal_straight_run(points, at_start=True)
+            if prefix_end is not None:
+                prefix = {
+                    "type": "line",
+                    "start_point": _as_float_pair(points[0]),
+                    "end_point": _as_float_pair(points[prefix_end]),
+                }
+                suffix = _fit_chunk(points[prefix_end:])
+                return [prefix] + suffix if suffix else [prefix]
+
+            suffix_start = _find_terminal_straight_run(points, at_start=False)
+            if suffix_start is not None:
+                head = _fit_chunk(points[: suffix_start + 1])
+                tail = {"type": "line", "end_point": _as_float_pair(points[-1])}
+                return head + [tail] if head else [tail]
+
+        # Enforce line-only output for Manhattan/corner-like traces.
+        if force_orthogonal_as_lines and _axis_step_ratio(points) >= 0.82:
+            return _fit_axis_lines(points)
+
+        max_dev, mean_dev = _line_distance_stats(points)
+        if max_dev <= max(1.0, fit_error * 1.35) and mean_dev <= max(0.5, fit_error * 0.65):
+            return [{"type": "line", "end_point": _as_float_pair(points[-1])}]
+
+        closed_loop_tangent = None
+        if is_closed_loop:
+            closed_loop_tangent = _estimate_closed_loop_tangent(points)
+            tan1 = closed_loop_tangent
+            tan2 = -closed_loop_tangent
+        else:
+            tan1 = _estimate_endpoint_tangent(points, at_start=True)
+            tan2 = _estimate_endpoint_tangent(points, at_start=False)
+        if np.linalg.norm(tan1) <= 1e-9:
+            tan1 = _normalize(points[-1] - points[0])
+        if np.linalg.norm(tan2) <= 1e-9:
+            tan2 = -_normalize(points[-1] - points[0])
+
+        curves = _fit_cubic(points, tan1, tan2, fit_error)
+        curves = _align_endpoint_handles(curves, tan1, tan2, closed_loop_tangent=closed_loop_tangent)
+        out = []
+        for curve in curves:
+            if _curve_is_effectively_line(curve):
+                seg = {
+                    "type": "line",
+                    "end_point": _as_float_pair(curve[3]),
+                }
+            else:
+                seg = {
+                    "type": "cubic",
+                    "control1": _as_float_pair(curve[1]),
+                    "control2": _as_float_pair(curve[2]),
+                    "end_point": _as_float_pair(curve[3]),
+                }
+
+            if out and out[-1].get("type") == "line" and seg.get("type") == "line":
+                out[-1]["end_point"] = seg["end_point"]
+            else:
+                out.append(seg)
+        return out
 
     result = []
     for path in paths:
         if len(path) < 2:
-            # Degenerate path — return a single zero-length line segment
             if len(path) == 1:
-                result.append([
-                    {"type": "line", "end_point": list(path[0])}
-                ])
+                p = _as_point(path[0])
+                result.append([{"type": "line", "end_point": _as_float_pair(p), "start_point": _as_float_pair(p)}])
             else:
                 result.append([])
             continue
 
-        working_path = _orthogonalize_path(path)
-        working_path = _snap_endpoints(working_path)
-        segs = [
-            {"type": "line", "end_point": _as_int_point(pt)}
-            for pt in working_path[1:]
-        ]
-        if segs:
-            segs[0]["start_point"] = _as_int_point(working_path[0])
-        result.append(segs)
+        cleaned = _clean_points(path)
+        if len(cleaned) < 2:
+            p = cleaned[0] if cleaned else np.array([0.0, 0.0], dtype=float)
+            result.append([{"type": "line", "end_point": _as_float_pair(p), "start_point": _as_float_pair(p)}])
+            continue
+
+        chunks = _split_by_corners(cleaned)
+        path_segments = []
+        for chunk in chunks:
+            chunk_segments = _fit_chunk(chunk)
+            if chunk_segments:
+                path_segments.extend(chunk_segments)
+
+        if not path_segments:
+            path_segments = [{"type": "line", "end_point": _as_float_pair(cleaned[-1])}]
+
+        # Use the cleaned first-point as the path start, but only if a chunk
+        # fitter (e.g. _fit_axis_lines) has not already set a snapped start.
+        path_segments[0].setdefault("start_point", _as_float_pair(cleaned[0]))
+        result.append(path_segments)
+
     return result

@@ -1,0 +1,8 @@
+{
+  "approved_at": "2026-03-17",
+  "fixture_id": "curve-gentle-convex",
+  "segment_count": 5,
+  "mean_deviation_px": 0.305,
+  "max_deviation_px": 1.1,
+  "coverage": 1.0
+}

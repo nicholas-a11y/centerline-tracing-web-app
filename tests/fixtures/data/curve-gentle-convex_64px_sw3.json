@@ -1,17 +1,17 @@
 {
   "id": "curve-gentle-convex",
-  "description": "Gentle convex arc \u2014 large radius, ~30\u00b0 span",
+  "description": "Gentle convex curve \u2014 shallow bowed cubic",
   "category": "curve",
   "size": 64,
   "stroke_width": 3,
-  "tolerance_px": 2.0,
+  "tolerance_px": 1.5,
   "expected_segment_types": [
     "cubic"
   ],
   "png_file": "curve-gentle-convex_64px_sw3.png",
   "stats": {
     "total_pixels": 4096,
-    "stroke_pixels": 0,
-    "coverage": 0.0
+    "stroke_pixels": 182,
+    "coverage": 0.0444
   }
 }

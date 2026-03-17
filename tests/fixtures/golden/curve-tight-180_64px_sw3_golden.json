@@ -1,8 +1,8 @@
 {
   "approved_at": "2026-03-17",
   "fixture_id": "curve-tight-180",
-  "segment_count": 55,
-  "mean_deviation_px": 2.861,
-  "max_deviation_px": 6.296,
-  "coverage": 0.65
+  "segment_count": 5,
+  "mean_deviation_px": 0.371,
+  "max_deviation_px": 0.823,
+  "coverage": 1.0
 }

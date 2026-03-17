@@ -11,7 +11,7 @@
   "png_file": "curve-tight-180_64px_sw3.png",
   "stats": {
     "total_pixels": 4096,
-    "stroke_pixels": 198,
-    "coverage": 0.0483
+    "stroke_pixels": 168,
+    "coverage": 0.041
   }
 }

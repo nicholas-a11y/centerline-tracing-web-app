@@ -11,7 +11,7 @@
   "png_file": "curve-half-arc_64px_sw3.png",
   "stats": {
     "total_pixels": 4096,
-    "stroke_pixels": 236,
-    "coverage": 0.0576
+    "stroke_pixels": 224,
+    "coverage": 0.0547
   }
 }

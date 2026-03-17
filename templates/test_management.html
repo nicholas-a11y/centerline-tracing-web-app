@@ -681,6 +681,35 @@
       ctx.restore();
     }
 
+    function drawStartMarker(points, color, alpha, radius = 3.6) {
+      if (!points || !points.length) return;
+      const [x, y] = project(points[0], canvas.width, canvas.height);
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+
+      // Outer white halo keeps marker legible over all layers.
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(x, y, radius + 1.6, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Inner colored dot denotes the path's start point.
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Thin dark ring improves edge definition.
+      ctx.strokeStyle = '#1f1f1f';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(x, y, radius + 0.1, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
     function drawHandles(handles, color, alpha) {
       if (!handles || !handles.length) return;
       ctx.save();
@@ -716,13 +745,18 @@
         drawPoints(layers.golden_pixel_points || [], L.goldenPixels.color, L.goldenPixels.opacity, 1.2);
       }
       if (L.goldenAnalytic.enabled) {
-        drawPolyline(layers.golden_analytic_path || [], L.goldenAnalytic.color, L.goldenAnalytic.opacity, 2.2);
+        const path = layers.golden_analytic_path || [];
+        drawPolyline(path, L.goldenAnalytic.color, L.goldenAnalytic.opacity, 2.2);
+        drawStartMarker(path, L.goldenAnalytic.color, Math.min(1, L.goldenAnalytic.opacity + 0.05));
       }
       if (L.skeleton.enabled) {
         (layers.skeleton_paths || []).forEach(p => drawPolyline(p, L.skeleton.color, L.skeleton.opacity, 1.6));
       }
       if (L.optimized.enabled) {
-        (layers.optimized_sampled_paths || []).forEach(p => drawPolyline(p, L.optimized.color, L.optimized.opacity, 2.2));
+        (layers.optimized_sampled_paths || []).forEach(p => {
+          drawPolyline(p, L.optimized.color, L.optimized.opacity, 2.2);
+          drawStartMarker(p, L.optimized.color, Math.min(1, L.optimized.opacity + 0.05));
+        });
       }
       if (L.vertices.enabled) {
         (layers.optimized_vertices || []).forEach(v => drawPoints(v, L.vertices.color, L.vertices.opacity, 2.4));

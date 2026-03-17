@@ -795,6 +795,17 @@
             display: flex;
             gap: 10px;
             margin-top: 20px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .drag-export-chip {
+            user-select: none;
+            cursor: grab;
+        }
+
+        .drag-export-chip:active {
+            cursor: grabbing;
         }
 
         #resetBtn {
@@ -910,7 +921,7 @@
     <div class="container">
         <div class="header">
             <h1>🎯 Centerline Extraction Tool</h1>
-            <p>Interactive centerline extraction v1.6 Nicholas Leqeta</p>
+            <p>Interactive centerline extraction v1.7 Nicholas Leqeta</p>
         </div>
         
         <div class="main-content">
@@ -1038,6 +1049,23 @@
                             <input type="range" id="scorePreservation" min="70" max="99" step="1" value="80">
                             <small style="color: #666; font-size: 0.8em;">Higher values keep the blue path closer to the magenta path.</small>
                         </div>
+                        <div class="parameter">
+                            <label>Cubic Fit Tolerance (px) <span class="range-value" id="cubicFitToleranceValue">1.0</span></label>
+                            <input type="range" id="cubicFitTolerance" min="0.35" max="4.0" step="0.05" value="1.0">
+                            <small style="color: #666; font-size: 0.8em;">Lower values keep tighter curves; higher values reduce cubic segment count for smaller SVGs.</small>
+                        </div>
+                        <div class="parameter">
+                            <label>Endpoint Tangent Strictness (%) <span class="range-value" id="endpointTangentStrictnessValue">85</span></label>
+                            <input type="range" id="endpointTangentStrictness" min="0" max="100" step="1" value="85">
+                            <small style="color: #666; font-size: 0.8em;">Higher values force start/end cubic handles to follow the extracted path direction more strongly (no golden/fixture data used).</small>
+                        </div>
+                        <div class="parameter">
+                            <label>
+                                <input type="checkbox" id="forceOrthogonalAsLines" checked>
+                                Force Orthogonal Paths As Lines
+                            </label>
+                            <small style="color: #666; font-size: 0.8em;">When enabled, axis-aligned and corner-like paths are always output as straight line segments instead of cubic curves.</small>
+                        </div>
                     </div>
                 </div>
 
@@ -1136,6 +1164,7 @@
 
                 <div class="action-buttons" id="svgActionButtons">
                     <button class="btn btn-secondary" id="downloadBtn" onclick="downloadSVG()" style="display: none;">💾 Download SVG</button>
+                    <a class="btn btn-secondary drag-export-chip" id="dragSvgBtn" style="display: none;" href="#" download draggable="true">🧲 Drag SVG File</a>
                     <button class="btn btn-secondary" id="resetSvgViewBtn" onclick="resetSvgViewport()" style="display: none;">🔍 Reset View</button>
                 </div>
             </div>
@@ -1173,6 +1202,9 @@
             'meanClosenessPx',
             'peakClosenessPx',
             'scorePreservation',
+            'cubicFitTolerance',
+            'endpointTangentStrictness',
+            'forceOrthogonalAsLines',
             'minPathLength',
             'enableOptimization',
             'showPreOptimization',
@@ -1190,7 +1222,11 @@
         let lastAutoTuneSampleMetadata = null;
         let lastLiveOverlayProgressData = null;
         let lastMagentaSkeletonPaths = null;
+        let currentUploadFileName = null;
         let downloadSvgClickLockUntil = 0;
+        let lastRenderedSvgContent = null;
+        let currentSvgObjectUrl = null;
+        let currentSvgExportFilename = 'centerline_export.svg';
         let currentUploadDisplayImages = {
             raw: null,
             normalized: null,
@@ -2810,6 +2846,7 @@
 
         function uploadSelectedFile(file) {
             if (!file) return;
+            currentUploadFileName = file.name || null;
 
             const previousSessionId = currentSessionId;
             const uploadEpoch = invalidateRequestEpoch();
@@ -3892,6 +3929,83 @@
             }
         }
 
+        function sanitizeSvgFilename(name) {
+            const base = String(name || 'centerline_export')
+                .replace(/\.[^.]+$/, '')
+                .replace(/[^a-zA-Z0-9._-]+/g, '_')
+                .replace(/^_+|_+$/g, '');
+            return `${base || 'centerline_export'}_centerline.svg`;
+        }
+
+        function buildSvgExportFilename() {
+            if (currentUploadFileName) {
+                return sanitizeSvgFilename(currentUploadFileName);
+            }
+            if (currentSessionId) {
+                return sanitizeSvgFilename(`centerline_${currentSessionId}`);
+            }
+            return 'centerline_export.svg';
+        }
+
+        function revokeSvgExportUrl() {
+            if (currentSvgObjectUrl) {
+                URL.revokeObjectURL(currentSvgObjectUrl);
+                currentSvgObjectUrl = null;
+            }
+        }
+
+        function updateSvgExportHandle(svgContent = lastRenderedSvgContent) {
+            const dragSvgBtn = document.getElementById('dragSvgBtn');
+            if (!dragSvgBtn) {
+                return;
+            }
+
+            revokeSvgExportUrl();
+
+            if (!svgContent || typeof Blob === 'undefined' || !window.URL || !window.URL.createObjectURL) {
+                dragSvgBtn.style.display = 'none';
+                dragSvgBtn.removeAttribute('href');
+                dragSvgBtn.removeAttribute('download');
+                return;
+            }
+
+            currentSvgExportFilename = buildSvgExportFilename();
+            const svgBlob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
+            currentSvgObjectUrl = URL.createObjectURL(svgBlob);
+
+            dragSvgBtn.href = currentSvgObjectUrl;
+            dragSvgBtn.download = currentSvgExportFilename;
+            dragSvgBtn.title = 'Drag this SVG file into LightBurn or click to download it.';
+            dragSvgBtn.style.display = shouldShowDownloadButton() ? 'inline-flex' : 'none';
+        }
+
+        function handleSvgFileDragStart(event) {
+            if (!currentSvgObjectUrl) {
+                event.preventDefault();
+                return;
+            }
+
+            const transfer = event.dataTransfer;
+            if (!transfer) {
+                return;
+            }
+
+            transfer.effectAllowed = 'copy';
+
+            try {
+                transfer.setData('DownloadURL', `image/svg+xml:${currentSvgExportFilename}:${currentSvgObjectUrl}`);
+            } catch (error) {
+                console.debug('DownloadURL drag payload unavailable:', error);
+            }
+
+            try {
+                transfer.setData('text/uri-list', currentSvgObjectUrl);
+                transfer.setData('text/plain', currentSvgExportFilename);
+            } catch (error) {
+                console.debug('Supplementary drag payload unavailable:', error);
+            }
+        }
+
         function shouldShowDownloadButton() {
             const showPreOptimization = document.getElementById('showPreOptimization');
             const magentaVisible = !showPreOptimization || showPreOptimization.checked;
@@ -3917,6 +4031,9 @@
                 mean_closeness_px: parseFloat(document.getElementById('meanClosenessPx').value),
                 peak_closeness_px: parseFloat(document.getElementById('peakClosenessPx').value),
                 score_preservation: parseFloat(document.getElementById('scorePreservation').value),
+                cubic_fit_tolerance: parseFloat(document.getElementById('cubicFitTolerance').value),
+                endpoint_tangent_strictness: parseFloat(document.getElementById('endpointTangentStrictness').value),
+                force_orthogonal_as_lines: document.getElementById('forceOrthogonalAsLines').checked,
                 min_path_length: parseInt(document.getElementById('minPathLength').value),
                 enable_optimization: document.getElementById('enableOptimization').checked,
                 show_pre_optimization: document.getElementById('showPreOptimization').checked,
@@ -4017,6 +4134,7 @@
                     setDownloadButtonAccent(optimizationReached100);
                     downloadBtn.style.display = shouldShowDownloadButton() ? 'inline-block' : 'none';
                     downloadBtn.disabled = false;
+                    updateSvgExportHandle();
                     const resetSvgViewBtn = document.getElementById('resetSvgViewBtn');
                     if (resetSvgViewBtn) {
                         resetSvgViewBtn.style.display = 'inline-block';
@@ -4044,8 +4162,10 @@
                 console.error('svgDisplay element not found!');
                 return;
             }
+            lastRenderedSvgContent = svgContent;
             svgDisplay.innerHTML = svgContent;
             svgDisplay.style.display = 'block';
+            updateSvgExportHandle(svgContent);
             
             // Auto-fit SVG to container bounds
             autoFitSVG();
@@ -4166,8 +4286,10 @@
             clearMagentaSkeletonOverlay();
             optimizationReached100 = false;
             lastRenderedSvgMode = null;
+            lastRenderedSvgContent = null;
             currentPreprocessingInfo = null;
             renderPreprocessingStatus(null);
+            revokeSvgExportUrl();
 
             // Clear previous SVG display
             const svgDisplay = document.getElementById('svgDisplay');
@@ -4190,6 +4312,12 @@
             setDownloadButtonAccent(false);
             downloadBtn.style.display = 'none';
             downloadBtn.disabled = false;
+            const dragSvgBtn = document.getElementById('dragSvgBtn');
+            if (dragSvgBtn) {
+                dragSvgBtn.style.display = 'none';
+                dragSvgBtn.removeAttribute('href');
+                dragSvgBtn.removeAttribute('download');
+            }
             downloadSvgClickLockUntil = 0;
             const resetSvgViewBtn = document.getElementById('resetSvgViewBtn');
             if (resetSvgViewBtn) {
@@ -4228,6 +4356,15 @@
                 setAutoTuneLoadingProgress(false);
             }
         }
+
+        const dragSvgBtn = document.getElementById('dragSvgBtn');
+        if (dragSvgBtn) {
+            dragSvgBtn.addEventListener('dragstart', handleSvgFileDragStart);
+        }
+
+        window.addEventListener('beforeunload', function() {
+            revokeSvgExportUrl();
+        });
     </script>
 </body>
 </html>
