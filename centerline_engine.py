@@ -638,7 +638,7 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
 
         return float(np.mean(distances)), float(np.percentile(distances, 95))
 
-    requested_tolerance = float(params.get('rdp_tolerance', 2.5))
+    requested_tolerance = float(params.get('rdp_tolerance', 4.0))
     smoothing_factor = float(params.get('smoothing_factor', 0.006))
     simplification_strength = max(0.0, min(100.0, float(params.get('simplification_strength', 50.0))))
     simplification_ratio = simplification_strength / 100.0

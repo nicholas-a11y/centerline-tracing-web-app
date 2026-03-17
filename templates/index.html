@@ -1001,8 +1001,8 @@
                 <div class="parameter-group" id="optimizationParametersGroup">
                     <h3>🎨 Optimisation</h3>
                     <div class="parameter">
-                        <label>Tolerance <span class="range-value" id="rdpToleranceValue">2.5</span></label>
-                        <input type="range" id="rdpTolerance" min="0.5" max="10.0" step="0.5" value="2.5">
+                        <label>Tolerance <span class="range-value" id="rdpToleranceValue">4</span></label>
+                        <input type="range" id="rdpTolerance" min="0.5" max="10.0" step="0.5" value="4">
                         <small style="color: #666; font-size: 0.8em;">Higher values for a closer fit and larger file size.</small>
                     </div>
                     <div style="margin-top: 10px;">
@@ -3303,14 +3303,18 @@
                 </small>
             `;
 
+            const enhancementNote = preprocessing.enhancement_applied
+                ? '<br><small>Faint-line enhancement applied</small>'
+                : '';
+
             if (preprocessing.applied) {
                 statusEl.classList.remove('skipped');
                 statusEl.classList.add('applied');
-                statusEl.innerHTML = `Normalization applied<br><small>${preprocessing.reason || 'Uneven background detected'}</small>${metricLine}`;
+                statusEl.innerHTML = `Normalization applied<br><small>${preprocessing.reason || 'Uneven background detected'}</small>${enhancementNote}${metricLine}`;
             } else {
                 statusEl.classList.remove('applied');
                 statusEl.classList.add('skipped');
-                statusEl.innerHTML = `Normalization skipped<br><small>${preprocessing.reason || 'Background already uniform enough'}</small>${metricLine}`;
+                statusEl.innerHTML = `Normalization skipped<br><small>${preprocessing.reason || 'Background already uniform enough'}</small>${enhancementNote}${metricLine}`;
             }
 
             statusEl.style.display = 'block';

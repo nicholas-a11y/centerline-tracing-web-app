@@ -18,6 +18,63 @@ AUTO_TUNE_RANDOM_TILE_DIM = 144
 AUTO_TUNE_RANDOM_TILE_COUNT = 12
 
 
+def resolve_extraction_profile(preprocessing_info=None):
+    """Return extraction hints derived from upload-time preprocessing metadata."""
+    info = preprocessing_info or {}
+    profile_name = str(info.get('profile_name') or '').strip().lower()
+    faint_line_art = bool(
+        info.get('faint_line_art_detected', False)
+        or info.get('enhancement_applied', False)
+        or profile_name == 'faint_line_art'
+    )
+
+    if faint_line_art:
+        return {
+            'profile_name': 'faint_line_art',
+            'preview_min_object_size': 1,
+            'full_min_object_size': 2,
+            'auto_tune_min_object_size': 1,
+            'max_min_path_length': 2,
+            'force_merge_preview': True,
+        }
+
+    return {
+        'profile_name': 'standard',
+        'preview_min_object_size': 2,
+        'full_min_object_size': 5,
+        'auto_tune_min_object_size': 3,
+        'max_min_path_length': None,
+        'force_merge_preview': False,
+    }
+
+
+def _enhance_faint_line_art(gray_image):
+    """Darken likely ink regions without broadly amplifying paper noise."""
+    from skimage import filters
+
+    gray = np.clip(gray_image.astype(np.float32), 0.0, 1.0)
+    local_background = filters.gaussian(gray, sigma=2.2, preserve_range=True)
+    local_darkness = np.clip(local_background - gray, 0.0, 1.0)
+    local_darkness_scale = max(float(np.percentile(local_darkness, 99.2)), 1e-4)
+    local_darkness = np.clip(local_darkness / local_darkness_scale, 0.0, 1.0)
+
+    edge_strength = np.abs(filters.sobel(gray))
+    edge_scale = max(float(np.percentile(edge_strength, 99.5)), 1e-4)
+    edge_strength = np.clip(edge_strength / edge_scale, 0.0, 1.0)
+
+    darkness_mask = np.clip((0.95 - gray) / 0.28, 0.0, 1.0)
+    stroke_mask = np.clip(0.70 * darkness_mask + 0.20 * local_darkness + 0.10 * edge_strength, 0.0, 1.0)
+    stroke_mask = np.power(stroke_mask, 1.45)
+
+    tone_mapped = np.power(gray, 1.18)
+    local_target = np.clip(gray - 0.12 * local_darkness, 0.0, 1.0)
+    target = np.minimum(tone_mapped, local_target)
+    blend = 0.65 * stroke_mask
+    enhanced = gray * (1.0 - blend) + target * blend
+
+    return np.clip(enhanced.astype(np.float32), 0.0, 1.0)
+
+
 def _build_random_tile_mosaic(gray_image, tile_dim=AUTO_TUNE_RANDOM_TILE_DIM, tile_count=AUTO_TUNE_RANDOM_TILE_COUNT):
     """Create a multi-tile random mosaic for auto-tune scoring on large images."""
     height, width = gray_image.shape
@@ -197,7 +254,7 @@ def _offset_sample_metadata_to_source(sample_metadata, offset_x, offset_y, sourc
     return meta
 
 
-def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None):
+def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None, min_object_size=3, max_gap=25):
     """Automatically detect the best minimum path length by analyzing path distribution."""
     if test_lengths is None:
         test_lengths = [1, 3, 5, 8, 12, 16, 20]
@@ -205,7 +262,7 @@ def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None):
     print(f"Auto-detecting min path length using threshold {dark_threshold:.3f}...")
 
     try:
-        initial_paths = extract_skeleton_paths(gray_image, dark_threshold, min_object_size=3)
+        initial_paths = extract_skeleton_paths(gray_image, dark_threshold, min_object_size=min_object_size)
         if len(initial_paths) == 0:
             return {
                 'best_min_length': 3,
@@ -213,7 +270,7 @@ def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None):
                 'recommendation': 'no paths found - try adjusting threshold first'
             }
 
-        merged_paths = merge_nearby_paths(initial_paths, max_gap=25)
+        merged_paths = merge_nearby_paths(initial_paths, max_gap=max_gap)
     except Exception as e:
         return {
             'best_min_length': 3,
@@ -286,7 +343,8 @@ def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None):
     }
 
 
-def auto_detect_dark_threshold(gray_image, sample_size=1000, threshold_range=(0.05, 0.8), num_thresholds=15):
+def auto_detect_dark_threshold(gray_image, sample_size=1000, threshold_range=(0.05, 0.8), num_thresholds=15,
+                               min_object_size=3, max_gap=25):
     """Automatically detect the best dark threshold by sampling the image."""
     height, width = gray_image.shape
     sample_indices = np.random.choice(height * width, min(sample_size, height * width), replace=False)
@@ -302,12 +360,12 @@ def auto_detect_dark_threshold(gray_image, sample_size=1000, threshold_range=(0.
 
     for threshold in thresholds:
         try:
-            initial_paths = extract_skeleton_paths(gray_image, threshold, min_object_size=3)
+            initial_paths = extract_skeleton_paths(gray_image, threshold, min_object_size=min_object_size)
 
             if len(initial_paths) == 0:
                 score = 0
             else:
-                merged_paths = merge_nearby_paths(initial_paths, max_gap=25)
+                merged_paths = merge_nearby_paths(initial_paths, max_gap=max_gap)
                 valid_paths = [path for path in merged_paths if len(path) >= 3]
 
                 if len(valid_paths) == 0:
@@ -356,7 +414,8 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
                                     should_continue=None,
                                     on_best_result=None,
                                     on_progress=None,
-                                    confidence_target=0.95):
+                                    confidence_target=0.95,
+                                    min_object_size=3):
     """Jointly tune threshold and min path length on a preview image for a strong first extraction."""
     if base_min_lengths is None:
         base_min_lengths = [1, 3, 5, 8, 12, 16, 20]
@@ -543,7 +602,7 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
         try:
             threshold_index = int(len(all_results) + 1)
             _emit_progress(phase='extracting_paths', threshold=threshold, threshold_index=threshold_index, current_min_length=0)
-            initial_paths = extract_skeleton_paths(preview_image, float(threshold), min_object_size=3)
+            initial_paths = extract_skeleton_paths(preview_image, float(threshold), min_object_size=min_object_size)
             if not initial_paths:
                 return ({'threshold': float(threshold), 'best_min_length': 3, 'score': 0.0, 'valid_paths': 0, 'longest_path': 0}, [])
 
@@ -818,6 +877,8 @@ def _normalize_background_if_needed(gray_image, normalization_mode='auto', norma
     ink_candidates = gray[gray <= (paper_level - 0.08)]
     ink_level = float(np.percentile(ink_candidates, 25)) if ink_candidates.size >= 200 else float(np.percentile(gray, 2))
     ink_contrast = max(0.0, paper_level - ink_level)
+    edge_peak = float(np.percentile(edge_strength, 99.5))
+    edge_density = float(np.mean((edge_strength > max(edge_cutoff * 1.15, 0.018)) & (gray < min(0.97, paper_level + 0.06))))
 
     local_trend = filters.gaussian(gray, sigma=1.6, preserve_range=True)
     texture_residual = gray - local_trend
@@ -839,8 +900,31 @@ def _normalize_background_if_needed(gray_image, normalization_mode='auto', norma
     low_contrast_shaded = bool(ink_contrast < 0.24 and (bg_range > 0.040 or illumination_gradient > 0.0060 or background_texture > 0.0060))
     force_normalize = bool(low_contrast_shaded and (decision_score >= 0.28 or bg_range > 0.055 or background_texture > 0.0065))
     faint_sparse_ink = bool(dark_ratio < 0.030 and ink_contrast < 0.40 and bg_range > 0.030 and background_texture > 0.0010)
+    faint_line_art = bool(
+        paper_level > 0.84 and
+        dark_ratio < 0.12 and
+        ink_contrast < 0.34 and
+        background_texture < 0.012 and
+        bg_std < 0.035 and
+        illumination_gradient < 0.014 and
+        (edge_density > 0.0015 or edge_peak > 0.030)
+    )
+    faint_uniform_line_art = bool(
+        paper_level > 0.92 and
+        dark_ratio < 0.025 and
+        ink_contrast < 0.46 and
+        bg_range < 0.040 and
+        bg_std < 0.012 and
+        illumination_gradient < 0.0035 and
+        background_texture < 0.0025 and
+        (edge_density > 0.0005 or edge_peak > 0.014)
+    )
     if faint_sparse_ink:
         force_normalize = True
+        faint_line_art = True
+    if faint_uniform_line_art:
+        force_normalize = True
+        faint_line_art = True
     if force_normalize:
         should_normalize = True
 
@@ -864,7 +948,7 @@ def _normalize_background_if_needed(gray_image, normalization_mode='auto', norma
         background_texture < 0.0050 and
         (decision_score < 0.32 or ink_contrast >= 0.15)
     )
-    if line_art_guard and not force_normalize:
+    if line_art_guard and not force_normalize and not faint_line_art:
         should_normalize = False
 
     if requested_mode == 'off':
@@ -877,7 +961,10 @@ def _normalize_background_if_needed(gray_image, normalization_mode='auto', norma
     elif requested_mode == 'on':
         reason = 'forced by user'
     elif force_normalize:
-        reason = 'faint sparse ink detail' if faint_sparse_ink else 'low-contrast ink with background shading'
+        if faint_uniform_line_art:
+            reason = 'faint line-art on uniform background'
+        else:
+            reason = 'faint sparse ink detail' if faint_sparse_ink else 'low-contrast ink with background shading'
     elif should_normalize and bg_range > bg_range_threshold:
         reason = 'strong background shading range'
     elif should_normalize:
@@ -900,28 +987,43 @@ def _normalize_background_if_needed(gray_image, normalization_mode='auto', norma
         'dark_ratio': round(dark_ratio, 4),
         'ink_contrast': round(ink_contrast, 4),
         'background_texture': round(background_texture, 4),
+        'edge_peak': round(edge_peak, 4),
+        'edge_density': round(edge_density, 5),
+        'faint_line_art_detected': faint_line_art,
+        'profile_name': 'faint_line_art' if faint_line_art else 'standard',
+        'enhancement_applied': False,
         'reason': reason,
         'mode': 'none',
         'requested_mode': requested_mode,
         'requested_sensitivity': requested_sensitivity,
     }
 
-    if not should_normalize:
-        return gray, metadata
+    if should_normalize:
+        safe_background = np.clip(background, 1e-3, 1.0)
+        output_gray = (gray / safe_background) * float(np.mean(safe_background))
+        output_gray = np.clip(output_gray, 0.0, 1.0)
 
-    safe_background = np.clip(background, 1e-3, 1.0)
-    normalized = (gray / safe_background) * float(np.mean(safe_background))
-    normalized = np.clip(normalized, 0.0, 1.0)
+        low, high = np.percentile(output_gray, [2, 98])
+        if high - low > 1e-6:
+            output_gray = exposure.rescale_intensity(output_gray, in_range=(low, high), out_range=(0.0, 1.0))
 
-    low, high = np.percentile(normalized, [2, 98])
-    if high - low > 1e-6:
-        normalized = exposure.rescale_intensity(normalized, in_range=(low, high), out_range=(0.0, 1.0))
+        metadata['mode'] = 'divide_and_rescale'
+        metadata['post_low'] = round(float(low), 4)
+        metadata['post_high'] = round(float(high), 4)
+    else:
+        output_gray = gray
 
-    metadata['mode'] = 'divide_and_rescale'
-    metadata['post_low'] = round(float(low), 4)
-    metadata['post_high'] = round(float(high), 4)
+    enhancement_allowed = requested_mode != 'off'
+    if faint_line_art and enhancement_allowed:
+        enhanced = _enhance_faint_line_art(output_gray)
+        enhancement_delta = float(np.mean(np.abs(enhanced - output_gray)))
+        if enhancement_delta > 1e-4:
+            output_gray = enhanced
+            metadata['enhancement_applied'] = True
+            metadata['enhancement_delta'] = round(enhancement_delta, 5)
+            metadata['mode'] = 'dark_stroke_enhanced' if metadata['mode'] == 'none' else f"{metadata['mode']}_plus_dark_stroke_enhancement"
 
-    return np.clip(normalized.astype(np.float32), 0.0, 1.0), metadata
+    return np.clip(output_gray.astype(np.float32), 0.0, 1.0), metadata
 
 
 def load_and_process_image(image_path, normalization_mode='auto', normalization_sensitivity='medium'):

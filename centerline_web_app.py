@@ -37,6 +37,7 @@ from centerline_core import (
     auto_detect_min_path_length,
     auto_tune_extraction_parameters,
     load_and_process_image,
+    resolve_extraction_profile,
 )
 TEST_UI_ENABLED = False
 TEST_UI_IMPORT_ERROR = None
@@ -113,7 +114,7 @@ class CenterlineSession:
             'dark_threshold': 0.20,
             'merge_gap': 25,  # Endpoint reach-out distance (pixels) for path merging
             'merge_angle_priority': 30.0,  # % weight for angle continuity vs distance
-            'rdp_tolerance': 2.5,      # Balanced simplification for speed and smoothness
+            'rdp_tolerance': 4.0,      # Balanced simplification for speed and smoothness
             'smoothing_factor': 0.006,  # Balanced smoothing that keeps runtime responsive
             'simplification_strength': 50.0,  # Moderate vertex reduction target
             'arc_fit_strength': 72.0,  # Favor curves without over-smoothing
@@ -134,6 +135,18 @@ class CenterlineSession:
         }
 
 
+def _get_session_extraction_profile(session):
+    return resolve_extraction_profile(session.preprocessing_info)
+
+
+def _effective_min_path_length(params, extraction_profile):
+    requested_min_length = max(1, int(params.get('min_path_length', 3)))
+    max_min_path_length = extraction_profile.get('max_min_path_length')
+    if max_min_path_length is None:
+        return requested_min_length
+    return max(1, min(requested_min_length, int(max_min_path_length)))
+
+
 def process_centerlines(session):
     """Process centerlines with current parameters."""
     if session.image is None:
@@ -141,13 +154,19 @@ def process_centerlines(session):
     
     params = session.parameters
     gray = session.image
+    extraction_profile = _get_session_extraction_profile(session)
+    effective_min_path_length = _effective_min_path_length(params, extraction_profile)
     
     # Check if optimization is enabled to determine processing level
     optimization_enabled = params.get('enable_optimization', True)
     
     if optimization_enabled:
         # Full processing mode: use standard extraction
-        initial_paths = extract_skeleton_paths(gray, params['dark_threshold'], min_object_size=5)
+        initial_paths = extract_skeleton_paths(
+            gray,
+            params['dark_threshold'],
+            min_object_size=extraction_profile['full_min_object_size'],
+        )
     else:
         # Fast mode: use the fast extraction function directly
         print("Fast extraction mode for unoptimized processing...")
@@ -157,7 +176,7 @@ def process_centerlines(session):
         
         # Quick binary conversion and skeletonization with minimal filtering
         binary = gray < params['dark_threshold']
-        binary = morphology.remove_small_objects(binary, 2)  # Reduced for speed
+        binary = morphology.remove_small_objects(binary, extraction_profile['preview_min_object_size'])
         skeleton = morphology.skeletonize(binary)
         initial_paths = create_fast_paths(skeleton)
     
@@ -177,7 +196,7 @@ def process_centerlines(session):
         )
         
         # Filter paths by minimum length
-        valid_paths = [path for path in merged_paths if len(path) >= params['min_path_length']]
+        valid_paths = [path for path in merged_paths if len(path) >= effective_min_path_length]
         
         # Remove overlapping paths if enabled
         if params.get('remove_overlaps', True):
@@ -193,7 +212,7 @@ def process_centerlines(session):
         print("Raw skeleton mode: skipping path merging and overlap processing...")
         
         # Filter paths by minimum length only
-        valid_paths = [path for path in initial_paths if len(path) >= params['min_path_length']]
+        valid_paths = [path for path in initial_paths if len(path) >= effective_min_path_length]
         merged_paths_count = len(initial_paths)  # Use initial count since no merging
     
     if len(valid_paths) == 0:
@@ -290,17 +309,26 @@ def auto_detect_min_path_length_route():
     try:
         # Use current dark threshold for detection
         current_threshold = session.parameters.get('dark_threshold', 0.20)
+        extraction_profile = _get_session_extraction_profile(session)
+        effective_max_min_path_length = extraction_profile.get('max_min_path_length')
         
         # Run auto-detection
-        detection_result = auto_detect_min_path_length(session.image, current_threshold)
+        detection_result = auto_detect_min_path_length(
+            session.image,
+            current_threshold,
+            min_object_size=extraction_profile['auto_tune_min_object_size'],
+        )
         
         if detection_result['best_score'] > 0:
             # Update session parameters with detected min path length
-            session.parameters['min_path_length'] = detection_result['best_min_length']
+            detected_min_length = int(detection_result['best_min_length'])
+            if effective_max_min_path_length is not None:
+                detected_min_length = min(detected_min_length, int(effective_max_min_path_length))
+            session.parameters['min_path_length'] = detected_min_length
             
             return jsonify({
                 'success': True,
-                'detected_min_length': detection_result['best_min_length'],
+                'detected_min_length': detected_min_length,
                 'confidence_score': detection_result['best_score'],
                 'recommendation': detection_result['recommendation'],
                 'path_stats': detection_result.get('path_stats', {}),
@@ -332,8 +360,12 @@ def auto_detect_threshold():
         return jsonify({'error': 'No image loaded'})
     
     try:
+        extraction_profile = _get_session_extraction_profile(session)
         # Run auto-detection
-        detection_result = auto_detect_dark_threshold(session.image)
+        detection_result = auto_detect_dark_threshold(
+            session.image,
+            min_object_size=extraction_profile['auto_tune_min_object_size'],
+        )
         
         if detection_result['best_score'] > 0:
             # Update session parameters with detected threshold
@@ -683,11 +715,19 @@ def _run_auto_tune_job(session, auto_tune_generation):
                     'current_tile_total': int(progress_payload.get('current_tile_total', 1)),
                 })
 
+        extraction_profile = _get_session_extraction_profile(session)
+        effective_max_min_path_length = extraction_profile.get('max_min_path_length')
+        base_min_lengths = [1, 3, 5, 8, 12]
+        if effective_max_min_path_length is not None:
+            base_min_lengths = [length for length in base_min_lengths if length <= int(effective_max_min_path_length)]
+            if not base_min_lengths:
+                base_min_lengths = [max(1, int(effective_max_min_path_length))]
+
         tuning_result = auto_tune_extraction_parameters(
             tuning_image,
             threshold_range=(0.05, 0.8),
             num_thresholds=6,
-            base_min_lengths=[1, 3, 5, 8, 12],
+            base_min_lengths=base_min_lengths,
             preview_max_dim=550,
             time_budget_sec=AUTO_TUNE_TIME_BUDGET_SEC,
             sample_metadata=sample_metadata,
@@ -695,6 +735,7 @@ def _run_auto_tune_job(session, auto_tune_generation):
             on_best_result=_record_best_so_far,
             on_progress=_record_progress,
             confidence_target=AUTO_TUNE_CONFIDENCE_TARGET,
+            min_object_size=extraction_profile['auto_tune_min_object_size'],
         )
 
         with session.lock:
@@ -712,7 +753,10 @@ def _run_auto_tune_job(session, auto_tune_generation):
             status_message = 'Failed to detect best settings. Using defaults with optimization turned off.'
         else:
             session.parameters['dark_threshold'] = tuning_result['best_threshold']
-            session.parameters['min_path_length'] = tuning_result['best_min_length']
+            detected_min_length = int(tuning_result['best_min_length'])
+            if effective_max_min_path_length is not None:
+                detected_min_length = min(detected_min_length, int(effective_max_min_path_length))
+            session.parameters['min_path_length'] = detected_min_length
             success = True
             if tuning_result.get('high_confidence_reached'):
                 status_message = 'Reached 95% confidence early.'
@@ -1005,6 +1049,8 @@ def process_immediate():
         # Quick raw path extraction
         params = session.parameters
         gray = session.image
+        extraction_profile = _get_session_extraction_profile(session)
+        effective_min_path_length = _effective_min_path_length(params, extraction_profile)
 
         # Apply optional crop region (fractions 0-1 of image dimensions)
         crop_offset_row = 0
@@ -1028,7 +1074,7 @@ def process_immediate():
         
         # Quick binary conversion and skeletonization
         binary = gray < params['dark_threshold']
-        binary = morphology.remove_small_objects(binary, 2)
+        binary = morphology.remove_small_objects(binary, extraction_profile['preview_min_object_size'])
         skeleton = morphology.skeletonize(binary)
         initial_paths = create_fast_paths(skeleton)
         
@@ -1045,7 +1091,8 @@ def process_immediate():
         merge_applied = False
         angle_priority_changed = abs(merge_angle_priority - 0.30) > 1e-9
         merge_controls_changed = (merge_gap != 25) or angle_priority_changed
-        if params.get('enable_optimization', True) and merge_controls_changed:
+        force_merge_preview = bool(extraction_profile.get('force_merge_preview', False))
+        if params.get('enable_optimization', True) and (merge_controls_changed or force_merge_preview):
             merged_paths = merge_nearby_paths(
                 initial_paths,
                 max_gap=merge_gap,
@@ -1054,7 +1101,7 @@ def process_immediate():
             merge_applied = True
 
         # Filter by minimum length
-        valid_paths = [path for path in merged_paths if len(path) >= params['min_path_length']]
+        valid_paths = [path for path in merged_paths if len(path) >= effective_min_path_length]
         
         if len(valid_paths) == 0:
             return jsonify({'error': 'No valid paths after filtering. Try reducing minimum path length.'})
@@ -1093,6 +1140,7 @@ def process_immediate():
             'initial_paths_count': len(initial_paths),
             'merged_paths_count': len(merged_paths),
             'merge_applied': merge_applied,
+            'extraction_profile': extraction_profile['profile_name'],
             'valid_paths_count': len(valid_paths),
             'paths': json_serializable_paths,  # Use JSON-serializable version
             'optimization_started': False
@@ -1166,7 +1214,7 @@ def background_optimization(session, generation):
             
             # Apply optimization using current UI parameters, including guarded simplification.
             balanced_params = {
-                'rdp_tolerance': params.get('rdp_tolerance', 2.5),
+                'rdp_tolerance': params.get('rdp_tolerance', 4.0),
                 'smoothing_factor': params.get('smoothing_factor', 0.006),
                 'simplification_strength': params.get('simplification_strength', 50.0),
                 'arc_fit_strength': params.get('arc_fit_strength', 72.0),
