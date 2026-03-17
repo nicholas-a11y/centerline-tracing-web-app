@@ -8,6 +8,7 @@ A Flask web application for interactive centerline extraction with real-time par
 
 import threading
 import time
+import logging
 from queue import Queue
 from flask import Flask, render_template, request, jsonify, send_file
 import os
@@ -59,6 +60,26 @@ except Exception as exc:
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+
+IS_RAILWAY_DEPLOYMENT = any(key.startswith('RAILWAY_') for key in os.environ)
+QUIET_HTTP_LOGS = os.environ.get('QUIET_HTTP_LOGS', '1' if IS_RAILWAY_DEPLOYMENT else '0') == '1'
+VERBOSE_SERVER_LOGS = os.environ.get('VERBOSE_SERVER_LOGS', '0') == '1'
+
+
+def _configure_runtime_logging():
+    if not QUIET_HTTP_LOGS:
+        return
+
+    logging.getLogger('werkzeug').setLevel(logging.ERROR)
+    app.logger.setLevel(logging.ERROR)
+
+
+def _log_debug(message):
+    if VERBOSE_SERVER_LOGS:
+        print(message)
+
+
+_configure_runtime_logging()
 
 
 def _test_ui_unavailable_response():
@@ -1447,14 +1468,14 @@ def process():
 @app.route('/test_svg/<session_id>')
 def test_svg(session_id):
     """Test SVG generation route."""
-    print(f"Test SVG route called for session: {session_id}")
+    _log_debug(f"Test SVG route called for session: {session_id}")
     if session_id not in sessions:
         return jsonify({'error': 'Invalid session'})
     
     session = sessions[session_id]
-    print(f"Session found. Has initial_paths: {bool(session.initial_paths)}")
+    _log_debug(f"Session found. Has initial_paths: {bool(session.initial_paths)}")
     if session.initial_paths:
-        print(f"Number of initial paths: {len(session.initial_paths)}")
+        _log_debug(f"Number of initial paths: {len(session.initial_paths)}")
     
     return jsonify({'status': 'test successful', 'has_paths': bool(session.initial_paths)})
 
@@ -1491,7 +1512,7 @@ def generate_svg():
     # Check what data we have available
     if display_mode == 'immediate' and session.initial_paths:
         # Show only magenta paths immediately
-        print(f"Generating immediate SVG with {len(session.initial_paths)} paths")
+        _log_debug(f"Generating immediate SVG with {len(session.initial_paths)} paths")
         paths_to_show = session.initial_paths
         optimized_paths = []
         circle_system = None
@@ -1503,14 +1524,14 @@ def generate_svg():
             # Make a thread-safe copy of the paths to avoid issues during iteration
             optimized_paths = list(session.partial_optimized_paths)
         
-        print(f"Generating progressive SVG with {len(optimized_paths)} optimized paths")
+        _log_debug(f"Generating progressive SVG with {len(optimized_paths)} optimized paths")
         paths_to_show = session.initial_paths
         circle_system = None  # Could add this later
         pre_optimization_paths = paths_to_show if show_pre else []
         
     elif session.results:
         # Show final results
-        print("Generating final SVG from session.results")
+        _log_debug("Generating final SVG from session.results")
         results = session.results
         paths_to_show = results.get('pre_optimization_paths', [])
         optimized_paths = results.get('optimized_paths', [])
@@ -1522,7 +1543,7 @@ def generate_svg():
 
     suppress_paths_in_view = detected_paths_count > SVG_VIEW_PATH_RENDER_LIMIT
     if suppress_paths_in_view and (optimized_paths or pre_optimization_paths):
-        print(
+        _log_debug(
             f"Suppressing SVG preview paths because detected path count "
             f"{detected_paths_count} exceeds limit {SVG_VIEW_PATH_RENDER_LIMIT}"
         )
@@ -1549,7 +1570,7 @@ def generate_svg():
         # Generate SVG based on mode
         if display_mode == 'immediate':
             # Only magenta paths, no blue
-            print("Creating immediate SVG")
+            _log_debug("Creating immediate SVG")
             create_svg_output(
                 background_image,
                 None,  # No circle system
@@ -1562,7 +1583,7 @@ def generate_svg():
             )
         else:
             # Progressive or final - show both magenta and blue
-            print(f"Creating {display_mode} SVG with {len(optimized_paths)} blue paths and {len(pre_optimization_paths)} magenta paths")
+            _log_debug(f"Creating {display_mode} SVG with {len(optimized_paths)} blue paths and {len(pre_optimization_paths)} magenta paths")
             create_svg_output(
                 background_image,
                 circle_system,
@@ -1583,14 +1604,14 @@ def generate_svg():
         if os.path.exists(temp_svg):
             with open(temp_svg, 'r') as f:
                 svg_content = f.read()
-            print(f"SVG file created successfully, size: {len(svg_content)} characters")
+            _log_debug(f"SVG file created successfully, size: {len(svg_content)} characters")
             os.remove(temp_svg)
             return jsonify({
                 'svg': svg_content,
                 'preview_paths_suppressed': suppress_paths_in_view,
             })
         else:
-            print(f"SVG file not found at: {temp_svg}")
+            _log_debug(f"SVG file not found at: {temp_svg}")
             return jsonify({'error': 'SVG generation failed - file not created'})
             
     except Exception as e:
@@ -1645,7 +1666,7 @@ def download_svg(session_id):
         show_pre = session.parameters.get('show_pre_optimization', False)
         if has_progressive_data:
             # Use progressive data
-            print(f"Generating download SVG with progressive data: {len(session.initial_paths)} initial paths, {len(session.partial_optimized_paths)} optimized paths")
+            _log_debug(f"Generating download SVG with progressive data: {len(session.initial_paths)} initial paths, {len(session.partial_optimized_paths)} optimized paths")
             wo.SHOW_PRE_OPTIMIZATION_PATHS = show_pre
             
             create_svg_output(
