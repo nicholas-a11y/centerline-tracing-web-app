@@ -4,7 +4,10 @@ Shared preprocessing and auto-tune helpers for the centerline web app.
 """
 
 import time
+from io import BytesIO
 from pathlib import Path
+import os
+import tempfile
 
 import numpy as np
 from PIL import Image
@@ -1026,12 +1029,22 @@ def _normalize_background_if_needed(gray_image, normalization_mode='auto', norma
     return np.clip(output_gray.astype(np.float32), 0.0, 1.0), metadata
 
 
-def load_and_process_image(image_path, normalization_mode='auto', normalization_sensitivity='medium'):
+def load_and_process_image(image_source, normalization_mode='auto', normalization_sensitivity='medium', source_name=None):
     """Load an image/PDF and return raw+extraction grayscale images in 0-1 range."""
-    from skimage import color, io
+    from skimage import color
     from PIL import Image as PILImage
 
-    extension = Path(image_path).suffix.lower()
+    extension_source = source_name if source_name is not None else image_source
+    extension = Path(str(extension_source)).suffix.lower()
+
+    in_memory_bytes = None
+    if isinstance(image_source, (bytes, bytearray, memoryview)):
+        in_memory_bytes = bytes(image_source)
+
+    def _open_pil_image():
+        if in_memory_bytes is not None:
+            return PILImage.open(BytesIO(in_memory_bytes))
+        return PILImage.open(image_source)
 
     if extension == '.pdf':
         try:
@@ -1039,8 +1052,16 @@ def load_and_process_image(image_path, normalization_mode='auto', normalization_
             pdfium = _il.import_module('pypdfium2')
         except Exception as exc:
             raise ValueError('PDF upload requires pypdfium2. Install dependencies and retry.') from exc
+        pdf_path = None
         try:
-            pdf = pdfium.PdfDocument(image_path)
+            if in_memory_bytes is not None:
+                with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_pdf:
+                    temp_pdf.write(in_memory_bytes)
+                    pdf_path = temp_pdf.name
+            else:
+                pdf_path = image_source
+
+            pdf = pdfium.PdfDocument(pdf_path)
             if len(pdf) == 0:
                 raise ValueError('PDF has no pages')
             page = pdf[0]
@@ -1051,8 +1072,11 @@ def load_and_process_image(image_path, normalization_mode='auto', normalization_
             gray = color.rgb2gray(img)
         except Exception as exc:
             raise ValueError(f'Failed to render PDF: {exc}') from exc
+        finally:
+            if in_memory_bytes is not None and pdf_path and os.path.exists(pdf_path):
+                os.remove(pdf_path)
     elif extension == '.png':
-        with PILImage.open(image_path) as pil_src:
+        with _open_pil_image() as pil_src:
             png_gamma_val = pil_src.info.get('gamma', None)
             print(f"[load] PNG mode={pil_src.mode} size={pil_src.size} gamma={png_gamma_val}")
             pil_rgba = pil_src.convert('RGBA')
@@ -1067,33 +1091,22 @@ def load_and_process_image(image_path, normalization_mode='auto', normalization_
 
         gray = color.rgb2gray(rgb_arr)
     else:
-        img = io.imread(image_path)
-        print(f"[load] skimage dtype={img.dtype} shape={img.shape} min={int(np.min(img))} max={int(np.max(img))}")
+        with _open_pil_image() as pil_src:
+            print(f"[load] PIL mode={pil_src.mode} size={pil_src.size} format={pil_src.format}")
 
-        if len(img.shape) == 3:
-            channels = img.shape[2]
-            if channels == 4:
-                rgb = img[:, :, :3].astype(np.float32)
-                alpha = img[:, :, 3].astype(np.float32)
-                if rgb.max() > 1.0:
-                    rgb /= 255.0
-                if alpha.max() > 1.0:
-                    alpha /= 255.0
-                composited_rgb = rgb * alpha[:, :, None] + (1.0 - alpha[:, :, None])
-                gray = color.rgb2gray(composited_rgb)
-            elif channels == 3:
-                rgb = img.astype(np.float32)
-                if rgb.max() > 1.0:
-                    rgb /= 255.0
-                gray = color.rgb2gray(rgb)
+            if pil_src.mode in ('1', 'L', 'I', 'I;16', 'I;16B', 'I;16L', 'F'):
+                raw_arr = np.asarray(pil_src)
+                gray = raw_arr.astype(np.float32)
+                if np.issubdtype(raw_arr.dtype, np.integer):
+                    gray /= max(float(np.iinfo(raw_arr.dtype).max), 1.0)
+                elif gray.max() > 1.0:
+                    gray /= float(gray.max())
             else:
-                raise ValueError(f'Unsupported image format with {channels} channels')
-        elif len(img.shape) == 2:
-            gray = img.astype(np.float32)
-            if gray.max() > 1.0:
-                gray /= 255.0
-        else:
-            raise ValueError(f'Unsupported image shape: {img.shape}')
+                pil_rgba = pil_src.convert('RGBA')
+                white_bg = PILImage.new('RGBA', pil_rgba.size, (255, 255, 255, 255))
+                white_bg.alpha_composite(pil_rgba)
+                rgb_arr = np.asarray(white_bg.convert('RGB')).astype(np.float32) / 255.0
+                gray = color.rgb2gray(rgb_arr)
 
     raw_gray = np.clip(gray.astype(np.float32), 0.0, 1.0)
     print(f"[load] raw_gray  min={raw_gray.min():.4f} max={raw_gray.max():.4f} mean={raw_gray.mean():.4f} std={raw_gray.std():.4f}")

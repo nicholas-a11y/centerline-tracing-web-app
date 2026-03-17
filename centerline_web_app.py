@@ -1260,29 +1260,31 @@ def upload_file():
     session.original_filename = file.filename
     session.benchmark_enabled = _should_capture_benchmark_metrics(file.filename)
     
-    # Save uploaded file
-    temp_dir = tempfile.gettempdir()
-    temp_path = os.path.join(temp_dir, f"centerline_{session_id}_{file.filename}")
-    file.save(temp_path)
-    session.image_file_size = os.path.getsize(temp_path)
+    upload_bytes = file.read()
+    if not upload_bytes:
+        return jsonify({'error': 'Uploaded file is empty'})
+
+    session.image_file_size = len(upload_bytes)
     _ensure_benchmark_metrics(session)
     
     try:
         load_started_at = time.perf_counter()
         # Load and preprocess image for extraction, while keeping original for display.
         raw_gray, extraction_gray, preprocessing_info = load_and_process_image(
-            temp_path,
+            upload_bytes,
             normalization_mode=requested_mode,
             normalization_sensitivity=requested_sensitivity,
+            source_name=file.filename,
         )
         load_elapsed_ms = (time.perf_counter() - load_started_at) * 1000.0
         session.image = extraction_gray
         session.display_image = raw_gray
         session.preprocessing_info = preprocessing_info
-        session.image_path = temp_path
+        session.image_path = None
         _record_benchmark_stage(session, 'load_and_preprocess', load_elapsed_ms, {
             'raw_shape': list(raw_gray.shape),
             'normalization_applied': bool(preprocessing_info.get('applied', False)),
+            'loaded_from_memory': True,
         })
         metrics = _ensure_benchmark_metrics(session)
         if metrics is not None:
