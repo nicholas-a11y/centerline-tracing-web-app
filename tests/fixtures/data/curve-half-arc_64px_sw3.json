@@ -1,0 +1,17 @@
+{
+  "id": "curve-half-arc",
+  "description": "Semicircle arc, 0\u00b0\u2192180\u00b0 (clockwise in image coords)",
+  "category": "curve",
+  "size": 64,
+  "stroke_width": 3,
+  "tolerance_px": 2.5,
+  "expected_segment_types": [
+    "cubic"
+  ],
+  "png_file": "curve-half-arc_64px_sw3.png",
+  "stats": {
+    "total_pixels": 4096,
+    "stroke_pixels": 236,
+    "coverage": 0.0576
+  }
+}

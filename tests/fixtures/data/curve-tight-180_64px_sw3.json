@@ -1,0 +1,17 @@
+{
+  "id": "curve-tight-180",
+  "description": "Tight 180\u00b0 U-turn \u2014 tests multi-segment cubic fitting",
+  "category": "curve",
+  "size": 64,
+  "stroke_width": 3,
+  "tolerance_px": 3.0,
+  "expected_segment_types": [
+    "cubic"
+  ],
+  "png_file": "curve-tight-180_64px_sw3.png",
+  "stats": {
+    "total_pixels": 4096,
+    "stroke_pixels": 198,
+    "coverage": 0.0483
+  }
+}

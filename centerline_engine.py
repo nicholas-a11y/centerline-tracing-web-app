@@ -2086,3 +2086,262 @@ if __name__ == "__main__":
                 print(f"Error parsing coordinates: {e}")
     else:
         main()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CURVE FITTING API — stub implementation (replace during overhaul)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fit_curve_segments(
+    paths: list,
+    tolerance_px: float = 1.0,
+) -> list:
+    """Fit cubic Bézier segments to a list of skeleton paths.
+
+    Input
+    -----
+    paths : list of paths, each path = [[row, col], ...]
+        Typically the output of extract_skeleton_paths().
+
+    tolerance_px : float
+        Maximum allowed deviation between the fitted curve and the input
+        skeleton pixels.  Smaller → more segments, closer fit.
+
+    Output
+    ------
+    list[list[dict]] — one list of segment dicts per input path.
+
+    Each segment dict has the form:
+        {"type": "line",   "end_point": [row, col]}
+        {"type": "cubic",  "control1": [row, col],
+                           "control2": [row, col],
+                           "end_point": [row, col]}
+
+    The first point of the input path is the implicit start of path's first
+    segment and is NOT included in the output.
+
+    STUB NOTE
+    ---------
+    This implementation converts every path to consecutive line segments.
+    All structural contract tests pass.  Curve-quality contract tests
+    (test_mean_deviation_within_tolerance, test_curve_fixtures_have_cubic_segments)
+    are *expected* to fail against this stub — that is intentional and proves
+    the baseline is genuinely inadequate for true curves.
+
+    Replace this body with a real cubic fitter (e.g. Schneider / Fit-Curves)
+    during the engine overhaul.  The test suite will then verify the improvement.
+    """
+    def _as_int_point(pt):
+        return [int(pt[0]), int(pt[1])]
+
+    def _is_axis_dominant(path_points):
+        if len(path_points) < 3:
+            return False
+
+        total = 0
+        axis_steps = 0
+        diag_steps = 0
+        for i in range(1, len(path_points)):
+            dr = int(path_points[i][0]) - int(path_points[i - 1][0])
+            dc = int(path_points[i][1]) - int(path_points[i - 1][1])
+            if dr == 0 and dc == 0:
+                continue
+            total += 1
+            if dr == 0 or dc == 0:
+                axis_steps += 1
+            else:
+                diag_steps += 1
+
+        if total == 0 or diag_steps == 0:
+            return False
+
+        return (axis_steps / float(total)) >= 0.7
+
+    def _segment_axis(a, b):
+        dr = int(b[0]) - int(a[0])
+        dc = int(b[1]) - int(a[1])
+        if dr == 0 and dc == 0:
+            return None
+        if abs(dc) >= abs(dr):
+            return "h"
+        return "v"
+
+    def _orthogonalize_path(path_points):
+        if not _is_axis_dominant(path_points):
+            return [_as_int_point(p) for p in path_points]
+
+        out = [_as_int_point(path_points[0])]
+        for i in range(1, len(path_points)):
+            prev = out[-1]
+            curr = _as_int_point(path_points[i])
+
+            dr = curr[0] - prev[0]
+            dc = curr[1] - prev[1]
+            if dr == 0 and dc == 0:
+                continue
+
+            # For diagonal steps on mostly axis-aligned paths, split into two
+            # orthogonal legs and prefer continuity with neighboring segments.
+            if dr != 0 and dc != 0:
+                prev_axis = None
+                next_axis = None
+                if i >= 2:
+                    prev_axis = _segment_axis(path_points[i - 2], path_points[i - 1])
+                if i + 1 < len(path_points):
+                    next_axis = _segment_axis(path_points[i], path_points[i + 1])
+
+                preferred = prev_axis or next_axis
+                if preferred == "h":
+                    elbow = [prev[0], curr[1]]
+                elif preferred == "v":
+                    elbow = [curr[0], prev[1]]
+                else:
+                    elbow = [prev[0], curr[1]] if abs(dc) >= abs(dr) else [curr[0], prev[1]]
+
+                if elbow != out[-1] and elbow != curr:
+                    out.append(elbow)
+
+            if curr != out[-1]:
+                out.append(curr)
+
+        # Safety pass: if any diagonal step remains, split it into orthogonal
+        # legs so dominant-angle paths keep square corners and axis endpoints.
+        cleaned = [out[0]]
+        for i in range(1, len(out)):
+            prev = cleaned[-1]
+            curr = out[i]
+            dr = curr[0] - prev[0]
+            dc = curr[1] - prev[1]
+
+            if dr != 0 and dc != 0:
+                prev_axis = None
+                next_axis = None
+                if len(cleaned) >= 2:
+                    prev_axis = _segment_axis(cleaned[-2], cleaned[-1])
+                if i + 1 < len(out):
+                    next_axis = _segment_axis(out[i], out[i + 1])
+
+                preferred = prev_axis or next_axis
+                if preferred == "h":
+                    elbow = [prev[0], curr[1]]
+                elif preferred == "v":
+                    elbow = [curr[0], prev[1]]
+                else:
+                    elbow = [prev[0], curr[1]] if abs(dc) >= abs(dr) else [curr[0], prev[1]]
+
+                if elbow != cleaned[-1] and elbow != curr:
+                    cleaned.append(elbow)
+
+            if curr != cleaned[-1]:
+                cleaned.append(curr)
+
+        return cleaned
+
+    def _snap_endpoints(path_points):
+        """
+        Fix 1-2-pixel off-axis jogs at path endpoints produced by skeleton-
+        thinning artifacts.  After orthogonalization the endpoint pixel can sit
+        one row/column away from the arm's dominant axis, generating a small
+        staircase jog before the path settles.  We detect the dominant H/V
+        direction of the near-endpoint run, project the terminal point onto that
+        axis, and remove the now-redundant intermediate vertices.
+        Only applied when the offset is ≤ 2 pixels and the path is axis-dominant.
+        """
+        if len(path_points) < 5:
+            return path_points
+        # After orthogonalization all steps are axis-aligned. Use a plain
+        # fraction check rather than _is_axis_dominant (which returns False
+        # when diag_steps == 0, i.e. already fully orthogonal paths).
+        total = len(path_points) - 1
+        axis_steps = sum(
+            1 for i in range(1, len(path_points))
+            if path_points[i][0] == path_points[i - 1][0] or
+               path_points[i][1] == path_points[i - 1][1]
+        )
+        if total == 0 or (axis_steps / total) < 0.7:
+            return path_points
+
+        def _near_axis(window):
+            """Return ('r', dominant_row) or ('c', dominant_col) for a list of points."""
+            h_rows, v_cols = [], []
+            for a, b in zip(window, window[1:]):
+                if a == b:
+                    continue
+                if a[0] == b[0]:
+                    h_rows.append(a[0])
+                elif a[1] == b[1]:
+                    v_cols.append(a[1])
+            if len(h_rows) >= len(v_cols) and h_rows:
+                return ('r', max(set(h_rows), key=h_rows.count))
+            if v_cols:
+                return ('c', max(set(v_cols), key=v_cols.count))
+            return None
+
+        pts = list(path_points)
+        win = min(6, len(pts))
+
+        # --- Fix start ---
+        info = _near_axis(pts[1:win])
+        if info:
+            axis, val = info
+            if axis == 'r' and pts[0][0] != val and abs(pts[0][0] - val) <= 2:
+                pts[0] = [val, pts[0][1]]
+                i = 1
+                while i < len(pts) - 1 and pts[i][0] != val:
+                    pts.pop(i)
+                if len(pts) >= 2 and pts[0] == pts[1]:
+                    pts.pop(1)
+            elif axis == 'c' and pts[0][1] != val and abs(pts[0][1] - val) <= 2:
+                pts[0] = [pts[0][0], val]
+                i = 1
+                while i < len(pts) - 1 and pts[i][1] != val:
+                    pts.pop(i)
+                if len(pts) >= 2 and pts[0] == pts[1]:
+                    pts.pop(1)
+
+        # --- Fix end ---
+        win = min(6, len(pts))
+        info = _near_axis(pts[-win:-1])
+        if info:
+            axis, val = info
+            if axis == 'r' and pts[-1][0] != val and abs(pts[-1][0] - val) <= 2:
+                pts[-1] = [val, pts[-1][1]]
+                i = len(pts) - 2
+                while i > 0 and pts[i][0] != val:
+                    pts.pop(i)
+                    i -= 1
+                if len(pts) >= 2 and pts[-1] == pts[-2]:
+                    pts.pop(-1)
+            elif axis == 'c' and pts[-1][1] != val and abs(pts[-1][1] - val) <= 2:
+                pts[-1] = [pts[-1][0], val]
+                i = len(pts) - 2
+                while i > 0 and pts[i][1] != val:
+                    pts.pop(i)
+                    i -= 1
+                if len(pts) >= 2 and pts[-1] == pts[-2]:
+                    pts.pop(-1)
+
+        return pts
+
+    result = []
+    for path in paths:
+        if len(path) < 2:
+            # Degenerate path — return a single zero-length line segment
+            if len(path) == 1:
+                result.append([
+                    {"type": "line", "end_point": list(path[0])}
+                ])
+            else:
+                result.append([])
+            continue
+
+        working_path = _orthogonalize_path(path)
+        working_path = _snap_endpoints(working_path)
+        segs = [
+            {"type": "line", "end_point": _as_int_point(pt)}
+            for pt in working_path[1:]
+        ]
+        if segs:
+            segs[0]["start_point"] = _as_int_point(working_path[0])
+        result.append(segs)
+    return result

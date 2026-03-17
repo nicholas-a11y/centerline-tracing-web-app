@@ -1,0 +1,17 @@
+{
+  "id": "line-diagonal-45",
+  "description": "45\u00b0 diagonal \u2014 classic pixel staircase",
+  "category": "line",
+  "size": 64,
+  "stroke_width": 3,
+  "tolerance_px": 1.5,
+  "expected_segment_types": [
+    "line"
+  ],
+  "png_file": "line-diagonal-45_64px_sw3.png",
+  "stats": {
+    "total_pixels": 4096,
+    "stroke_pixels": 258,
+    "coverage": 0.063
+  }
+}

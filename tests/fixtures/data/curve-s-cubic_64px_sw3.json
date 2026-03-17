@@ -1,0 +1,17 @@
+{
+  "id": "curve-s-cubic",
+  "description": "S-shaped cubic B\u00e9zier \u2014 classic test for C-continuity",
+  "category": "curve",
+  "size": 64,
+  "stroke_width": 3,
+  "tolerance_px": 1.5,
+  "expected_segment_types": [
+    "cubic"
+  ],
+  "png_file": "curve-s-cubic_64px_sw3.png",
+  "stats": {
+    "total_pixels": 4096,
+    "stroke_pixels": 238,
+    "coverage": 0.0581
+  }
+}

@@ -38,6 +38,14 @@ from centerline_core import (
     auto_tune_extraction_parameters,
     load_and_process_image,
 )
+from test_ui_backend import (
+    ALL_FIXTURE_IDS,
+    create_run,
+    get_fixture_detail,
+    get_run_progress,
+    get_run_summary,
+    list_runs,
+)
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
@@ -818,6 +826,61 @@ def auto_tune_progress(session_id):
 def index():
     """Main page with the interface."""
     return render_template('index.html')
+
+
+@app.route('/test-ui')
+def test_ui():
+    """Dedicated UI for pytest run management and fixture-layer inspection."""
+    return render_template('test_management.html', fixture_ids=ALL_FIXTURE_IDS)
+
+
+@app.route('/api/test-runs', methods=['GET'])
+def api_list_test_runs():
+    """Return known persisted and in-memory test runs."""
+    return jsonify({'runs': list_runs()})
+
+
+@app.route('/api/test-runs/execute', methods=['POST'])
+def api_execute_test_run():
+    """Start a new background pytest run with visualization artifacts."""
+    data = request.json or {}
+    update_goldens = bool(data.get('update_goldens', False))
+    fixture_ids = data.get('fixture_ids', None)
+    if fixture_ids is not None and not isinstance(fixture_ids, list):
+        return jsonify({'error': 'fixture_ids must be a list of fixture IDs'}), 400
+
+    try:
+        started = create_run(update_goldens=update_goldens, fixture_ids=fixture_ids)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    return jsonify({'success': True, **started})
+
+
+@app.route('/api/test-runs/<run_id>', methods=['GET'])
+def api_get_test_run(run_id):
+    """Fetch run summary and optional fixture detail payload."""
+    summary = get_run_summary(run_id)
+    if summary is None:
+        return jsonify({'error': 'Unknown run_id'}), 404
+
+    fixture_id = request.args.get('fixture_id', '').strip()
+    if fixture_id:
+        detail = get_fixture_detail(run_id, fixture_id)
+        if detail is None:
+            return jsonify({'error': f'No detail found for fixture {fixture_id!r}'}), 404
+        return jsonify({'summary': summary, 'fixture': detail})
+
+    return jsonify({'summary': summary})
+
+
+@app.route('/api/test-runs/<run_id>/progress', methods=['GET'])
+def api_get_test_run_progress(run_id):
+    """Poll progress/log messages for a specific run."""
+    progress = get_run_progress(run_id)
+    if progress is None:
+        return jsonify({'error': 'Unknown run_id'}), 404
+    return jsonify(progress)
 
 @app.route('/upload', methods=['POST'])
 def upload_file():

@@ -1,0 +1,952 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Centerline Test Manager</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --ink: #21211f;
+      --panel: #fff9ef;
+      --accent: #d9480f;
+      --accent-2: #16697a;
+      --edge: #d9c9ab;
+      --mono: "IBM Plex Mono", "SFMono-Regular", ui-monospace, monospace;
+      --sans: "Avenir Next", "Trebuchet MS", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 10% 10%, rgba(217, 72, 15, 0.13), transparent 48%),
+        radial-gradient(circle at 88% 85%, rgba(22, 105, 122, 0.16), transparent 50%),
+        linear-gradient(180deg, #fdf7ed 0%, var(--bg) 100%);
+      min-height: 100vh;
+    }
+
+    .shell {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 20px;
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--edge);
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 12px 26px rgba(45, 34, 23, 0.08);
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: 1.3rem;
+      letter-spacing: 0.02em;
+    }
+
+    h2 {
+      margin: 0 0 8px;
+      font-size: 0.95rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #5a5248;
+    }
+
+    button {
+      border: 0;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      padding: 9px 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    button.secondary {
+      background: #84735f;
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    select, input[type="range"], input[type="color"] {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid var(--edge);
+      padding: 6px;
+      background: #fffdf8;
+    }
+
+    .row { display: flex; gap: 8px; align-items: center; }
+    .row > * { flex: 1; }
+    .meta {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: #f9f4ea;
+      border: 1px solid var(--edge);
+      border-radius: 8px;
+      padding: 10px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      min-height: 80px;
+      max-height: 220px;
+      overflow: auto;
+    }
+
+    .layout-right {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 12px;
+      min-height: 80vh;
+    }
+
+    .viewer-wrap {
+      position: relative;
+      border-radius: 14px;
+      border: 1px solid var(--edge);
+      background: #fff;
+      min-height: 420px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+    }
+
+    canvas {
+      width: min(100%, 920px);
+      height: auto;
+      aspect-ratio: 1 / 1;
+      border: 1px solid #e9dfcb;
+      border-radius: 10px;
+      background: #fff;
+    }
+
+    .layers {
+      display: grid;
+      gap: 8px;
+      max-height: 300px;
+      overflow: auto;
+    }
+
+    .layer-item {
+      border: 1px solid var(--edge);
+      border-radius: 10px;
+      padding: 8px;
+      background: #fffcf5;
+    }
+
+    .layer-item label {
+      display: block;
+      font-size: 12px;
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+
+    .status-pill {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 3px 10px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      background: #efe2ce;
+      color: #5c4026;
+      margin-left: 6px;
+    }
+
+    .status-pill.failed { background: #f5d7d3; color: #8c2f23; }
+    .status-pill.completed { background: #d8efdc; color: #1a6d2c; }
+    .status-pill.running { background: #fff1c7; color: #866300; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    th, td {
+      border-bottom: 1px solid #e8ddc8;
+      text-align: left;
+      padding: 6px;
+    }
+
+    textarea {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid var(--edge);
+      padding: 8px;
+      background: #fffdf8;
+      font-family: var(--sans);
+      font-size: 13px;
+      resize: vertical;
+    }
+
+    .segment-row {
+      cursor: pointer;
+    }
+
+    .segment-row:hover {
+      background: #f6efe2;
+    }
+
+    .segment-row.selected {
+      background: #ffe4d6;
+    }
+
+    .small-note {
+      font-size: 12px;
+      color: #6e6458;
+      margin-top: 6px;
+    }
+
+    @media (max-width: 980px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+      .layout-right {
+        min-height: unset;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="panel">
+      <h1>Test Manager</h1>
+      <div class="row" style="margin-bottom: 8px;">
+        <button id="runBtn">Run Pytest</button>
+        <button id="runGoldenBtn" class="secondary">Run + Update Goldens</button>
+      </div>
+
+      <h2>Run Fixture Queue</h2>
+      <div class="row" style="margin-bottom: 8px;">
+        <button id="queueAllBtn" class="secondary">All</button>
+        <button id="queueNoneBtn" class="secondary">None</button>
+        <button id="queueCurrentBtn" class="secondary">Use Current</button>
+      </div>
+      <select id="queueFixtureSelect" size="8" multiple style="height: 190px;">
+        {% for fid in fixture_ids %}
+          <option value="{{ fid }}" selected>{{ fid }}</option>
+        {% endfor %}
+      </select>
+      <div class="small-note" id="queueSummary">All fixtures queued.</div>
+
+      <h2>Runs</h2>
+      <select id="runSelect" size="8" style="height: 180px;"></select>
+      <div class="row" style="margin-top: 8px;">
+        <button id="refreshRuns" class="secondary">Refresh</button>
+        <span id="runStatus" class="status-pill">idle</span>
+      </div>
+      <div id="runProgressMeta" class="small-note">No run in progress.</div>
+
+      <h2 style="margin-top: 14px;">Fixture Stepper</h2>
+      <div class="row" style="margin-bottom: 8px;">
+        <button id="prevFixture" class="secondary">Prev</button>
+        <button id="nextFixture" class="secondary">Next</button>
+      </div>
+      <select id="fixtureSelect" size="10" style="height: 220px;">
+        {% for fid in fixture_ids %}
+          <option value="{{ fid }}">{{ fid }}</option>
+        {% endfor %}
+      </select>
+
+      <h2 style="margin-top: 14px;">Run Log</h2>
+      <div id="runLog" class="meta">No run started.</div>
+    </section>
+
+    <section class="layout-right">
+      <section class="panel">
+        <h2>Layer Controls</h2>
+        <div id="layerControls" class="layers"></div>
+      </section>
+
+      <section class="viewer-wrap panel">
+        <canvas id="scene" width="960" height="960"></canvas>
+      </section>
+
+      <section class="panel">
+        <h2>Structure + Metrics</h2>
+        <div id="metrics" class="meta"></div>
+        <div class="row" style="margin: 10px 0 8px 0;">
+          <button id="copySegmentsBtn">Copy Selection For AI</button>
+          <button id="clearSegmentsBtn" class="secondary">Clear</button>
+          <span id="selectedSegmentsCount" class="status-pill">0 selected</span>
+        </div>
+        <textarea id="segmentComment" rows="2" placeholder="Optional note to include with copied payload (for example: 'These selected segments should keep a 90 degree corner')."></textarea>
+        <div class="small-note">Select one or more rows below, then copy and paste the payload into chat with your next instruction.</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Pick</th>
+              <th>Path</th>
+              <th>Seg</th>
+              <th>Type</th>
+              <th>End</th>
+              <th>C1</th>
+              <th>C2</th>
+            </tr>
+          </thead>
+          <tbody id="segmentRows"></tbody>
+        </table>
+      </section>
+    </section>
+  </div>
+
+  <script>
+    const state = {
+      currentRunId: null,
+      currentFixtureId: null,
+      activeRunFixtureIds: [],
+      runsById: new Map(),
+      runPollTimer: null,
+      detail: null,
+      selectedSegments: new Map(),
+      layers: {
+        goldenAnalytic: { label: 'Golden analytic path', color: '#ff7f0e', opacity: 0.95, enabled: true },
+        goldenPixels: { label: 'Golden pixel raster', color: '#4d4d4d', opacity: 0.35, enabled: true },
+        skeleton: { label: 'Skeleton paths', color: '#c000c0', opacity: 0.85, enabled: true },
+        optimized: { label: 'Optimized sampled path', color: '#0066cc', opacity: 0.95, enabled: true },
+        vertices: { label: 'Vertices', color: '#008b5d', opacity: 0.9, enabled: true },
+        handles: { label: 'Bezier handles', color: '#c81d25', opacity: 0.95, enabled: true },
+      },
+    };
+
+    const fixtureIds = Array.from(document.querySelectorAll('#fixtureSelect option')).map(o => o.value);
+    if (fixtureIds.length) {
+      document.getElementById('fixtureSelect').value = fixtureIds[0];
+      state.currentFixtureId = fixtureIds[0];
+    }
+
+    const runSelect = document.getElementById('runSelect');
+    const fixtureSelect = document.getElementById('fixtureSelect');
+    const queueFixtureSelect = document.getElementById('queueFixtureSelect');
+    const queueSummary = document.getElementById('queueSummary');
+    const runStatus = document.getElementById('runStatus');
+    const runProgressMeta = document.getElementById('runProgressMeta');
+    const runLog = document.getElementById('runLog');
+    const metrics = document.getElementById('metrics');
+    const segmentRows = document.getElementById('segmentRows');
+    const selectedSegmentsCount = document.getElementById('selectedSegmentsCount');
+    const segmentComment = document.getElementById('segmentComment');
+    const canvas = document.getElementById('scene');
+    const ctx = canvas.getContext('2d');
+
+    function updateSelectedCountPill() {
+      selectedSegmentsCount.textContent = `${state.selectedSegments.size} selected`;
+    }
+
+    function getQueuedFixtureIds() {
+      return Array.from(queueFixtureSelect.selectedOptions).map(o => o.value);
+    }
+
+    function updateQueueSummary() {
+      const queued = getQueuedFixtureIds();
+      if (!queued.length) {
+        queueSummary.textContent = 'No fixtures queued.';
+      } else if (queued.length === fixtureIds.length) {
+        queueSummary.textContent = `All fixtures queued (${queued.length}).`;
+      } else {
+        queueSummary.textContent = `${queued.length} fixture(s) queued.`;
+      }
+    }
+
+    function setQueuedFixtures(ids) {
+      const wanted = new Set(ids || []);
+      Array.from(queueFixtureSelect.options).forEach(opt => {
+        opt.selected = wanted.has(opt.value);
+      });
+      updateQueueSummary();
+    }
+
+    function updateRunProgressMeta(progress) {
+      const total = Number(progress?.fixture_count || 0);
+      const done = Number(progress?.completed_fixtures || 0);
+      const current = progress?.current_fixture || null;
+      if (!total) {
+        runProgressMeta.textContent = 'No run in progress.';
+        return;
+      }
+      if (current) {
+        const at = Math.min(done + 1, total);
+        runProgressMeta.textContent = `Fixture ${at}/${total}: ${current}`;
+      } else {
+        runProgressMeta.textContent = `Fixture progress: ${done}/${total}`;
+      }
+    }
+
+    function updateFixtureStepper(runFixtureIds, completedCount, fixtureResults) {
+      const currentVal = fixtureSelect.value;
+      fixtureSelect.innerHTML = '';
+      for (let i = 0; i < completedCount; i++) {
+        const fid = runFixtureIds[i];
+        const opt = document.createElement('option');
+        opt.value = fid;
+        const result = fixtureResults?.[fid];
+        const icon = result === 'passed' ? ' ✓' : (result === 'failed' || result === 'error') ? ' ✗' : '';
+        opt.textContent = fid + icon;
+        fixtureSelect.appendChild(opt);
+      }
+      const stillPresent = Array.from(fixtureSelect.options).some(o => o.value === currentVal);
+      if (stillPresent) {
+        fixtureSelect.value = currentVal;
+        state.currentFixtureId = currentVal;
+      } else if (fixtureSelect.options.length) {
+        const lastOpt = fixtureSelect.options[fixtureSelect.options.length - 1];
+        fixtureSelect.value = lastOpt.value;
+        state.currentFixtureId = lastOpt.value;
+      }
+    }
+
+    function updateRunOptionStatus(runId, status) {
+      const opt = Array.from(runSelect.options).find(o => o.value === runId);
+      if (!opt) return;
+      const run = state.runsById.get(runId);
+      if (!run) return;
+      run.status = status;
+      const fixtureCount = Number(run.fixture_count || 0);
+      const fixtureText = fixtureCount ? ` | fixtures:${fixtureCount}` : '';
+      const line = `${runId} | ${status}`;
+      opt.textContent = run.pytest_summary ? `${line}${fixtureText} | ${run.pytest_summary}` : `${line}${fixtureText}`;
+    }
+
+    function syncFixtureSelectionToRunFixtures() {
+      if (!state.activeRunFixtureIds.length) return;
+      if (state.activeRunFixtureIds.includes(state.currentFixtureId)) return;
+      state.currentFixtureId = state.activeRunFixtureIds[0];
+      fixtureSelect.value = state.currentFixtureId;
+      appendLog(`Selected fixture '${state.currentFixtureId}' because it exists in this run.`);
+    }
+
+    function clearSegmentSelection() {
+      state.selectedSegments.clear();
+      segmentRows.querySelectorAll('.segment-row.selected').forEach(row => row.classList.remove('selected'));
+      updateSelectedCountPill();
+      renderScene();
+    }
+
+    function segmentKey(pathIndex, segIndex) {
+      return `${pathIndex}:${segIndex}`;
+    }
+
+    function toggleSegmentSelection(rowEl, info) {
+      const key = segmentKey(info.path_index, info.segment_index);
+      if (state.selectedSegments.has(key)) {
+        state.selectedSegments.delete(key);
+        rowEl.classList.remove('selected');
+      } else {
+        state.selectedSegments.set(key, info);
+        rowEl.classList.add('selected');
+      }
+      updateSelectedCountPill();
+      renderScene();
+    }
+
+    async function copyTextToClipboard(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+
+      const temp = document.createElement('textarea');
+      temp.value = text;
+      temp.style.position = 'fixed';
+      temp.style.left = '-9999px';
+      document.body.appendChild(temp);
+      temp.focus();
+      temp.select();
+      document.execCommand('copy');
+      document.body.removeChild(temp);
+    }
+
+    async function copySelectedSegmentsForAI() {
+      if (!state.currentRunId || !state.currentFixtureId) {
+        appendLog('No run/fixture selected.');
+        return;
+      }
+
+      if (state.selectedSegments.size === 0) {
+        appendLog('No segments selected to copy.');
+        return;
+      }
+
+      const selected = Array.from(state.selectedSegments.values()).sort((a, b) => {
+        if (a.path_index !== b.path_index) return a.path_index - b.path_index;
+        return a.segment_index - b.segment_index;
+      });
+
+      const payload = {
+        source: 'test-ui-segment-selection',
+        run_id: state.currentRunId,
+        fixture_id: state.currentFixtureId,
+        user_comment: (segmentComment.value || '').trim(),
+        selected_segments: selected,
+      };
+
+      await copyTextToClipboard(JSON.stringify(payload, null, 2));
+      appendLog(`Copied ${selected.length} selected segment(s) to clipboard.`);
+    }
+
+    function appendLog(msg) {
+      const now = new Date().toLocaleTimeString();
+      runLog.textContent += `\n[${now}] ${msg}`;
+      runLog.scrollTop = runLog.scrollHeight;
+    }
+
+    function resetLog(msg) {
+      runLog.textContent = msg;
+    }
+
+    function updateStatus(status) {
+      runStatus.textContent = status;
+      runStatus.className = `status-pill ${status}`;
+    }
+
+    async function fetchJson(url, options) {
+      const res = await fetch(url, options);
+      const text = await res.text();
+      let payload = null;
+      if (text) {
+        try {
+          payload = JSON.parse(text);
+        } catch (err) {
+          const preview = text.slice(0, 260).replace(/\s+/g, ' ');
+          throw new Error(`Invalid JSON from ${url}: ${err.message}. Response: ${preview}`);
+        }
+      }
+      if (!res.ok) {
+        const message = payload?.error || payload?.message || text || `${res.status}`;
+        const error = new Error(message);
+        error.status = res.status;
+        throw error;
+      }
+      return payload || {};
+    }
+
+    function renderRunList(runs) {
+      runSelect.innerHTML = '';
+      state.runsById = new Map();
+      runs.forEach(run => {
+        state.runsById.set(run.run_id, run);
+        const opt = document.createElement('option');
+        opt.value = run.run_id;
+        const line = `${run.run_id} | ${run.status}`;
+        const fixtureCount = Number(run.fixture_count || 0);
+        const fixtureText = fixtureCount ? ` | fixtures:${fixtureCount}` : '';
+        opt.textContent = run.pytest_summary ? `${line}${fixtureText} | ${run.pytest_summary}` : `${line}${fixtureText}`;
+        runSelect.appendChild(opt);
+      });
+      if (state.currentRunId) {
+        runSelect.value = state.currentRunId;
+      } else if (runs.length) {
+        state.currentRunId = runs[0].run_id;
+        runSelect.value = state.currentRunId;
+        state.activeRunFixtureIds = runs[0].fixture_ids || [];
+      }
+    }
+
+    async function refreshRuns() {
+      const data = await fetchJson('/api/test-runs');
+      renderRunList(data.runs || []);
+      if (state.currentRunId) {
+        const run = state.runsById.get(state.currentRunId);
+        state.activeRunFixtureIds = run?.fixture_ids || [];
+        const completed = Number(run?.completed_fixtures || 0);
+        const isDone = run?.status === 'completed' || run?.status === 'failed';
+        updateRunProgressMeta({
+          fixture_count: run?.fixture_count || 0,
+          completed_fixtures: isDone ? (run?.fixture_count || 0) : completed,
+          current_fixture: null,
+        });
+        if (isDone || completed > 0) {
+          await loadFixtureDetail();
+        }
+      }
+    }
+
+    function fixtureStep(delta) {
+      const ids = Array.from(fixtureSelect.options).map(o => o.value);
+      if (!ids.length) return;
+      let idx = ids.indexOf(state.currentFixtureId);
+      if (idx < 0) idx = 0;
+      idx = (idx + delta + ids.length) % ids.length;
+      state.currentFixtureId = ids[idx];
+      fixtureSelect.value = state.currentFixtureId;
+      loadFixtureDetail().catch(err => appendLog(`Load error: ${err.message}`));
+    }
+
+    async function startRun(updateGoldens) {
+      const queuedFixtures = getQueuedFixtureIds();
+      if (!queuedFixtures.length) {
+        appendLog('Select at least one fixture in Run Fixture Queue before starting.');
+        return;
+      }
+
+      resetLog('Starting run...');
+      const payload = await fetchJson('/api/test-runs/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ update_goldens: !!updateGoldens, fixture_ids: queuedFixtures }),
+      });
+      state.currentRunId = payload.run_id;
+      state.activeRunFixtureIds = payload.fixture_ids || queuedFixtures;
+      updateFixtureStepper(state.activeRunFixtureIds, 0, {});
+      state.currentFixtureId = state.activeRunFixtureIds[0] || state.currentFixtureId;
+      updateStatus(payload.status || 'queued');
+      updateRunProgressMeta({ fixture_count: payload.fixture_count || state.activeRunFixtureIds.length, completed_fixtures: 0, current_fixture: null });
+      appendLog(`Run started: ${payload.run_id} (${state.activeRunFixtureIds.length} fixture(s))`);
+      await refreshRuns();
+      pollRun();
+    }
+
+    async function pollRun() {
+      clearInterval(state.runPollTimer);
+      state.runPollTimer = setInterval(async () => {
+        if (!state.currentRunId) return;
+        try {
+          const p = await fetchJson(`/api/test-runs/${state.currentRunId}/progress`);
+          state.activeRunFixtureIds = p.fixture_ids || state.activeRunFixtureIds;
+          const total = Number(p.fixture_count || 0);
+          const done = Number(p.completed_fixtures || 0);
+          const reachedEnd = total > 0 && done >= total && !p.current_fixture;
+          const inferredStatus = reachedEnd && (p.status === 'running' || !p.status)
+            ? 'completed'
+            : (p.status || 'unknown');
+          updateStatus(inferredStatus);
+          updateRunProgressMeta(p);
+          updateRunOptionStatus(state.currentRunId, inferredStatus);
+          const isDone = inferredStatus === 'completed' || inferredStatus === 'failed';
+          const completed = Number(p.completed_fixtures || 0);
+          const fixtureResults = p.fixture_results || {};
+          updateFixtureStepper(
+            state.activeRunFixtureIds,
+            isDone ? state.activeRunFixtureIds.length : completed,
+            fixtureResults
+          );
+          (p.messages || []).forEach(appendLog);
+          if (isDone) {
+            clearInterval(state.runPollTimer);
+            await refreshRuns();
+            await loadFixtureDetail();
+          }
+        } catch (err) {
+          appendLog(`Progress error: ${err.message}`);
+          clearInterval(state.runPollTimer);
+        }
+      }, 1200);
+    }
+
+    function project(pt, width, height) {
+      const x = (pt[1] / 63) * width;
+      const y = (pt[0] / 63) * height;
+      return [x, y];
+    }
+
+    function drawPolyline(points, color, alpha, lineWidth = 2) {
+      if (!points || points.length < 2) return;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.beginPath();
+      const [sx, sy] = project(points[0], canvas.width, canvas.height);
+      ctx.moveTo(sx, sy);
+      for (let i = 1; i < points.length; i++) {
+        const [x, y] = project(points[i], canvas.width, canvas.height);
+        ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawPoints(points, color, alpha, radius = 2) {
+      if (!points || !points.length) return;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = color;
+      for (const pt of points) {
+        const [x, y] = project(pt, canvas.width, canvas.height);
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    function drawHandles(handles, color, alpha) {
+      if (!handles || !handles.length) return;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = 1.5;
+      handles.forEach(h => {
+        const s = project(h.start_point, canvas.width, canvas.height);
+        const c1 = project(h.control1, canvas.width, canvas.height);
+        const c2 = project(h.control2, canvas.width, canvas.height);
+        const e = project(h.end_point, canvas.width, canvas.height);
+        ctx.beginPath(); ctx.moveTo(s[0], s[1]); ctx.lineTo(c1[0], c1[1]); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(e[0], e[1]); ctx.lineTo(c2[0], c2[1]); ctx.stroke();
+        [c1, c2].forEach(p => {
+          ctx.beginPath(); ctx.arc(p[0], p[1], 3, 0, Math.PI * 2); ctx.fill();
+        });
+      });
+      ctx.restore();
+    }
+
+    function renderScene() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const d = state.detail;
+      if (!d || !d.layers) return;
+      const layers = d.layers;
+
+      const L = state.layers;
+      if (L.goldenPixels.enabled) {
+        drawPoints(layers.golden_pixel_points || [], L.goldenPixels.color, L.goldenPixels.opacity, 1.2);
+      }
+      if (L.goldenAnalytic.enabled) {
+        drawPolyline(layers.golden_analytic_path || [], L.goldenAnalytic.color, L.goldenAnalytic.opacity, 2.2);
+      }
+      if (L.skeleton.enabled) {
+        (layers.skeleton_paths || []).forEach(p => drawPolyline(p, L.skeleton.color, L.skeleton.opacity, 1.6));
+      }
+      if (L.optimized.enabled) {
+        (layers.optimized_sampled_paths || []).forEach(p => drawPolyline(p, L.optimized.color, L.optimized.opacity, 2.2));
+      }
+      if (L.vertices.enabled) {
+        (layers.optimized_vertices || []).forEach(v => drawPoints(v, L.vertices.color, L.vertices.opacity, 2.4));
+      }
+      if (L.handles.enabled) {
+        drawHandles(layers.cubic_handles || [], L.handles.color, L.handles.opacity);
+      }
+
+      drawSelectedSegmentsOverlay();
+    }
+
+    function darkenColor(hex, factor) {
+      const c = parseInt(hex.replace('#', ''), 16);
+      const r = Math.round(((c >> 16) & 0xff) * factor);
+      const g = Math.round(((c >> 8) & 0xff) * factor);
+      const b = Math.round((c & 0xff) * factor);
+      return `rgb(${r},${g},${b})`;
+    }
+
+    function drawSelectedSegmentsOverlay() {
+      if (!state.selectedSegments.size) return;
+      const d = state.detail;
+      if (!d || !d.layers) return;
+
+      const allSegs = d.layers.optimized_segments || [];
+      const allVerts = d.layers.optimized_vertices || [];
+      const highlightColor = darkenColor(state.layers.optimized.color, 0.6);
+      const highlightWidth = (state.layers.optimized.enabled ? 2.2 : 2) * 2.2;
+
+      ctx.save();
+      ctx.strokeStyle = highlightColor;
+      ctx.lineWidth = highlightWidth;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.globalAlpha = 1.0;
+
+      for (const info of state.selectedSegments.values()) {
+        const { path_index, segment_index, segment_type } = info;
+        const pathVerts = allVerts[path_index];
+        if (!pathVerts || segment_index + 1 >= pathVerts.length) continue;
+
+        const [sx, sy] = project(pathVerts[segment_index], canvas.width, canvas.height);
+        const [ex, ey] = project(pathVerts[segment_index + 1], canvas.width, canvas.height);
+
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+
+        if (segment_type === 'cubic') {
+          const seg = (allSegs[path_index] || [])[segment_index] || {};
+          if (seg.control1 && seg.control2) {
+            const [c1x, c1y] = project(seg.control1, canvas.width, canvas.height);
+            const [c2x, c2y] = project(seg.control2, canvas.width, canvas.height);
+            ctx.bezierCurveTo(c1x, c1y, c2x, c2y, ex, ey);
+          } else {
+            ctx.lineTo(ex, ey);
+          }
+        } else {
+          ctx.lineTo(ex, ey);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function setStructurePanel(detail) {
+      clearSegmentSelection();
+
+      const dev = detail.deviation || {};
+      const flags = detail.contract_flags || {};
+      metrics.textContent = [
+        `fixture: ${detail.fixture_id} (${detail.category})`,
+        `description: ${detail.description}`,
+        `raw paths: ${detail.raw_path_count}, non-empty: ${detail.non_empty_path_count}`,
+        `segment count: ${detail.segment_count}, segment types: ${(detail.segment_types || []).join(', ')}`,
+        `mean dev: ${(dev.mean_deviation_px || 0).toFixed(3)} px`,
+        `max dev: ${(dev.max_deviation_px || 0).toFixed(3)} px`,
+        `coverage: ${(dev.coverage || 0).toFixed(3)}`,
+        `contract flags: ${JSON.stringify(flags)}`,
+      ].join('\n');
+
+      segmentRows.innerHTML = '';
+      (detail.layers?.optimized_segments || []).forEach((pathSegs, pathIndex) => {
+        pathSegs.forEach((seg, segIndex) => {
+          const tr = document.createElement('tr');
+          tr.className = 'segment-row';
+
+          const info = {
+            path_index: pathIndex,
+            segment_index: segIndex,
+            segment_type: seg.type || '',
+            end_point: seg.end_point || null,
+            control1: seg.control1 || null,
+            control2: seg.control2 || null,
+          };
+
+          tr.innerHTML = `
+            <td>[ ]</td>
+            <td>${pathIndex}</td>
+            <td>${segIndex}</td>
+            <td>${seg.type || ''}</td>
+            <td>${JSON.stringify(seg.end_point || '')}</td>
+            <td>${JSON.stringify(seg.control1 || '')}</td>
+            <td>${JSON.stringify(seg.control2 || '')}</td>
+          `;
+
+          tr.addEventListener('click', () => toggleSegmentSelection(tr, info));
+          segmentRows.appendChild(tr);
+        });
+      });
+
+      updateSelectedCountPill();
+    }
+
+    function renderLayerControls() {
+      const host = document.getElementById('layerControls');
+      host.innerHTML = '';
+      Object.entries(state.layers).forEach(([key, layer]) => {
+        const item = document.createElement('div');
+        item.className = 'layer-item';
+        item.innerHTML = `
+          <label><input type="checkbox" ${layer.enabled ? 'checked' : ''} data-k="${key}" data-f="enabled" /> ${layer.label}</label>
+          <div class="row">
+            <input type="color" value="${layer.color}" data-k="${key}" data-f="color" />
+            <input type="range" min="0" max="1" step="0.05" value="${layer.opacity}" data-k="${key}" data-f="opacity" />
+          </div>
+        `;
+        host.appendChild(item);
+      });
+
+      host.querySelectorAll('input').forEach(input => {
+        input.addEventListener('input', ev => {
+          const k = ev.target.getAttribute('data-k');
+          const f = ev.target.getAttribute('data-f');
+          if (!k || !f) return;
+          if (f === 'enabled') state.layers[k][f] = !!ev.target.checked;
+          else if (f === 'opacity') state.layers[k][f] = Number(ev.target.value);
+          else state.layers[k][f] = ev.target.value;
+          renderScene();
+        });
+      });
+    }
+
+    async function loadFixtureDetail() {
+      if (!state.currentRunId || !state.currentFixtureId) return;
+
+      syncFixtureSelectionToRunFixtures();
+
+      let payload;
+      try {
+        payload = await fetchJson(`/api/test-runs/${state.currentRunId}?fixture_id=${encodeURIComponent(state.currentFixtureId)}`);
+      } catch (err) {
+        if ((err.status === 404 || String(err.message).includes('No detail found for fixture')) && state.activeRunFixtureIds.length) {
+          state.currentFixtureId = state.activeRunFixtureIds[0];
+          fixtureSelect.value = state.currentFixtureId;
+          appendLog(`Fixture detail missing in run; switched to '${state.currentFixtureId}'.`);
+          payload = await fetchJson(`/api/test-runs/${state.currentRunId}?fixture_id=${encodeURIComponent(state.currentFixtureId)}`);
+        } else {
+          throw err;
+        }
+      }
+
+      state.detail = payload.fixture;
+      state.activeRunFixtureIds = payload.summary?.fixture_ids || state.activeRunFixtureIds;
+      const summaryStatus = payload.summary?.status || 'unknown';
+      updateStatus(summaryStatus);
+      const summaryIsDone = summaryStatus === 'completed' || summaryStatus === 'failed';
+      updateRunProgressMeta({
+        fixture_count: payload.summary?.fixture_count || state.activeRunFixtureIds.length,
+        completed_fixtures: summaryIsDone
+          ? (payload.summary?.fixture_count || state.activeRunFixtureIds.length)
+          : 0,
+        current_fixture: null,
+      });
+      if (summaryIsDone) {
+        updateFixtureStepper(
+          state.activeRunFixtureIds,
+          state.activeRunFixtureIds.length,
+          payload.summary?.fixture_results || {}
+        );
+      }
+      setStructurePanel(payload.fixture);
+      renderScene();
+    }
+
+    document.getElementById('runBtn').addEventListener('click', () => startRun(false).catch(err => appendLog(err.message)));
+    document.getElementById('runGoldenBtn').addEventListener('click', () => startRun(true).catch(err => appendLog(err.message)));
+    document.getElementById('refreshRuns').addEventListener('click', () => refreshRuns().catch(err => appendLog(err.message)));
+    document.getElementById('queueAllBtn').addEventListener('click', () => setQueuedFixtures(fixtureIds));
+    document.getElementById('queueNoneBtn').addEventListener('click', () => setQueuedFixtures([]));
+    document.getElementById('queueCurrentBtn').addEventListener('click', () => {
+      if (!state.currentFixtureId) return;
+      setQueuedFixtures([state.currentFixtureId]);
+    });
+    document.getElementById('copySegmentsBtn').addEventListener('click', () => copySelectedSegmentsForAI().catch(err => appendLog(`Copy failed: ${err.message}`)));
+    document.getElementById('clearSegmentsBtn').addEventListener('click', () => clearSegmentSelection());
+    document.getElementById('prevFixture').addEventListener('click', () => fixtureStep(-1));
+    document.getElementById('nextFixture').addEventListener('click', () => fixtureStep(1));
+    queueFixtureSelect.addEventListener('change', () => updateQueueSummary());
+
+    runSelect.addEventListener('change', async ev => {
+      state.currentRunId = ev.target.value;
+      const run = state.runsById.get(state.currentRunId);
+      state.activeRunFixtureIds = run?.fixture_ids || [];
+      if (state.activeRunFixtureIds.length) {
+        const allDone = run?.status === 'completed' || run?.status === 'failed';
+        updateFixtureStepper(
+          state.activeRunFixtureIds,
+          allDone ? state.activeRunFixtureIds.length : Number(run?.completed_fixtures || 0),
+          run?.fixture_results || {}
+        );
+      }
+      await loadFixtureDetail();
+      pollRun();
+    });
+
+    fixtureSelect.addEventListener('change', async ev => {
+      state.currentFixtureId = ev.target.value;
+      await loadFixtureDetail();
+    });
+
+    renderLayerControls();
+    updateSelectedCountPill();
+    updateQueueSummary();
+    refreshRuns().catch(err => appendLog(err.message));
+  </script>
+</body>
+</html>
