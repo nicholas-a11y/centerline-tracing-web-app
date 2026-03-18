@@ -1209,17 +1209,17 @@
                             </label>
                             <small style="color: #666; font-size: 0.8em;">Off by default so straight-line output can be tuned first. Enable to emit fitted cubic segments.</small>
                         </div>
-                        <div class="parameter">
+                        <div class="parameter" id="cubicFitToleranceWrap">
                             <label>Cubic Fit Tolerance (px) <span class="range-value" id="cubicFitToleranceValue">1.0</span></label>
                             <input type="range" id="cubicFitTolerance" min="0.35" max="4.0" step="0.05" value="1.0">
                             <small style="color: #666; font-size: 0.8em;">Lower values keep tighter curves; higher values reduce cubic segment count for smaller SVGs.</small>
                         </div>
-                        <div class="parameter">
+                        <div class="parameter" id="endpointTangentStrictnessWrap">
                             <label>Endpoint Tangent Strictness (%) <span class="range-value" id="endpointTangentStrictnessValue">85</span></label>
                             <input type="range" id="endpointTangentStrictness" min="0" max="100" step="1" value="85">
                             <small style="color: #666; font-size: 0.8em;">Higher values force start/end cubic handles to follow the extracted path direction more strongly (no golden/fixture data used).</small>
                         </div>
-                        <div class="parameter">
+                        <div class="parameter" id="forceOrthogonalAsLinesWrap">
                             <label>
                                 <input type="checkbox" id="forceOrthogonalAsLines">
                                 Force Orthogonal Paths As Lines
@@ -3840,6 +3840,10 @@
                         }
                     }
 
+                    if (this.id === 'enableCurveFitting') {
+                        handleCurveFittingToggle();
+                    }
+
                     // These toggles only affect SVG visibility/layers, not optimization results.
                     if (isDisplayOnlyToggle(this.id)) {
                         refreshSvgForDisplayToggles();
@@ -3906,6 +3910,41 @@
                     overlapSection.style.display = 'block';
                 }
             }
+
+            handleCurveFittingToggle();
+        }
+
+        function handleCurveFittingToggle() {
+            const enableOptimization = document.getElementById('enableOptimization');
+            const enableCurveFitting = document.getElementById('enableCurveFitting');
+            const curveControlConfigs = [
+                {
+                    input: document.getElementById('cubicFitTolerance'),
+                    wrap: document.getElementById('cubicFitToleranceWrap')
+                },
+                {
+                    input: document.getElementById('endpointTangentStrictness'),
+                    wrap: document.getElementById('endpointTangentStrictnessWrap')
+                },
+                {
+                    input: document.getElementById('forceOrthogonalAsLines'),
+                    wrap: document.getElementById('forceOrthogonalAsLinesWrap')
+                }
+            ];
+
+            const curveControlsEnabled = Boolean(
+                enableOptimization && enableOptimization.checked &&
+                enableCurveFitting && enableCurveFitting.checked
+            );
+
+            curveControlConfigs.forEach(({ input, wrap }) => {
+                if (!input || !wrap) {
+                    return;
+                }
+
+                input.disabled = !curveControlsEnabled;
+                wrap.style.opacity = curveControlsEnabled ? '1' : '0.55';
+            });
         }
 
         function isOptimizationRunning() {
