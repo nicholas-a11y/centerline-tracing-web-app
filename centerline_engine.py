@@ -1001,6 +1001,12 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
     seg_lengths = np.linalg.norm(diffs, axis=1) if len(diffs) else np.array([0.0])
     total_length = float(seg_lengths.sum())
     mean_angle, sharp_ratio = _curvature_profile(even_path)
+    chord_length = 0.0
+    if len(even_path) >= 2:
+        start_point = np.asarray(even_path[0], dtype=float)
+        end_point = np.asarray(even_path[-1], dtype=float)
+        chord_length = float(np.linalg.norm(end_point - start_point))
+    detour_ratio = total_length / max(chord_length, 1e-6) if chord_length > 0.0 else 1.0
 
     base_tolerance = requested_tolerance * (0.7 + min(total_length / 220.0, 0.7) + 0.35 * line_fit_ratio)
     if sharp_ratio > 0.25 or mean_angle > 25.0:
@@ -1103,46 +1109,53 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
             min_path_length,
             int(round(len(current_path) * (1.0 - 0.78 * effective_simplification_ratio))),
         )
+        curve_like_path = (
+            mean_angle >= 7.0
+            or sharp_ratio >= 0.04
+            or detour_ratio >= 1.06
+        )
+        meaningful_curve_reduction = target_count <= max(min_path_length, len(current_path) - 2)
 
-        try:
-            arc_fit_started_at = time.perf_counter()
-            curve_seed = smooth_path_spline(
-                current_path,
-                smoothing_factor * (1.0 + 4.2 * effective_simplification_ratio + 2.2 * arc_fit_ratio),
-            )
-            curve_fit_candidate = _reduce_vertices_evenly(curve_seed, target_count)
-            _consider_candidate(curve_fit_candidate, "Arc-fit simplification")
-        except Exception as e:
-            print(f"      Arc-fit simplification failed: {e}")
-        finally:
-            _record_phase_elapsed('arc_fit_simplification', arc_fit_started_at)
+        if curve_like_path and meaningful_curve_reduction:
+            try:
+                arc_fit_started_at = time.perf_counter()
+                curve_seed = smooth_path_spline(
+                    current_path,
+                    smoothing_factor * (1.0 + 4.2 * effective_simplification_ratio + 2.2 * arc_fit_ratio),
+                )
+                curve_fit_candidate = _reduce_vertices_evenly(curve_seed, target_count)
+                _consider_candidate(curve_fit_candidate, "Arc-fit simplification")
+            except Exception as e:
+                print(f"      Arc-fit simplification failed: {e}")
+            finally:
+                _record_phase_elapsed('arc_fit_simplification', arc_fit_started_at)
 
-        try:
-            spline_arc_started_at = time.perf_counter()
-            spline_curve_candidate = fit_curve_to_path(current_path, 'spline')
-            spline_curve_candidate = _reduce_vertices_evenly(spline_curve_candidate, target_count)
-            _consider_candidate(spline_curve_candidate, "Spline arc fit")
-        except Exception as e:
-            print(f"      Spline arc fit failed: {e}")
-        finally:
-            _record_phase_elapsed('spline_arc_fit', spline_arc_started_at)
+            try:
+                spline_arc_started_at = time.perf_counter()
+                spline_curve_candidate = fit_curve_to_path(current_path, 'spline')
+                spline_curve_candidate = _reduce_vertices_evenly(spline_curve_candidate, target_count)
+                _consider_candidate(spline_curve_candidate, "Spline arc fit")
+            except Exception as e:
+                print(f"      Spline arc fit failed: {e}")
+            finally:
+                _record_phase_elapsed('spline_arc_fit', spline_arc_started_at)
 
-        try:
-            hybrid_started_at = time.perf_counter()
-            hybrid_seed = smooth_path_spline(
-                current_path,
-                smoothing_factor * (1.0 + 2.2 * effective_simplification_ratio + 1.3 * arc_fit_ratio),
-            )
-            hybrid_candidate = rdp_simplify(
-                hybrid_seed,
-                max(0.85, adaptive_tolerance * (0.6 + 0.6 * effective_simplification_ratio + 0.45 * line_fit_ratio)),
-            )
-            hybrid_candidate = _reduce_vertices_evenly(hybrid_candidate, target_count)
-            _consider_candidate(hybrid_candidate, "Arc-first hybrid fit")
-        except Exception as e:
-            print(f"      Arc-first hybrid fit failed: {e}")
-        finally:
-            _record_phase_elapsed('arc_first_hybrid', hybrid_started_at)
+            try:
+                hybrid_started_at = time.perf_counter()
+                hybrid_seed = smooth_path_spline(
+                    current_path,
+                    smoothing_factor * (1.0 + 2.2 * effective_simplification_ratio + 1.3 * arc_fit_ratio),
+                )
+                hybrid_candidate = rdp_simplify(
+                    hybrid_seed,
+                    max(0.85, adaptive_tolerance * (0.6 + 0.6 * effective_simplification_ratio + 0.45 * line_fit_ratio)),
+                )
+                hybrid_candidate = _reduce_vertices_evenly(hybrid_candidate, target_count)
+                _consider_candidate(hybrid_candidate, "Arc-first hybrid fit")
+            except Exception as e:
+                print(f"      Arc-first hybrid fit failed: {e}")
+            finally:
+                _record_phase_elapsed('arc_first_hybrid', hybrid_started_at)
 
         if line_fit_ratio > 0.05:
             try:
