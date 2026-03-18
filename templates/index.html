@@ -34,6 +34,12 @@
             text-align: center;
         }
 
+        .header-inner {
+            position: relative;
+            max-width: 980px;
+            margin: 0 auto;
+        }
+
         .header h1 {
             font-size: 2.5em;
             margin-bottom: 10px;
@@ -43,6 +49,29 @@
         .header p {
             font-size: 1.1em;
             opacity: 0.9;
+        }
+
+        .header-help-btn {
+            position: absolute;
+            top: 50%;
+            right: 0;
+            transform: translateY(-50%);
+            padding: 10px 18px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.45);
+            background: rgba(255, 255, 255, 0.14);
+            color: white;
+            cursor: pointer;
+            font-size: 0.92em;
+            font-weight: 600;
+            transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+            backdrop-filter: blur(6px);
+        }
+
+        .header-help-btn:hover {
+            background: rgba(255, 255, 255, 0.24);
+            border-color: rgba(255, 255, 255, 0.72);
+            transform: translateY(calc(-50% - 1px));
         }
 
         .main-content {
@@ -844,6 +873,123 @@
             cursor: help;
         }
 
+        .help-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 1500;
+            align-items: center;
+            justify-content: center;
+            padding: 28px;
+            background: rgba(12, 28, 44, 0.48);
+            backdrop-filter: blur(4px);
+        }
+
+        .help-modal.open {
+            display: flex;
+        }
+
+        .help-modal-dialog {
+            width: min(900px, 100%);
+            max-height: min(86vh, 980px);
+            overflow: hidden;
+            border-radius: 18px;
+            background: #ffffff;
+            box-shadow: 0 28px 60px rgba(0, 0, 0, 0.22);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .help-modal-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 22px 24px 16px;
+            border-bottom: 1px solid #e8eef5;
+            background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+        }
+
+        .help-modal-title {
+            margin: 0;
+            font-size: 1.45em;
+            color: #1e3550;
+        }
+
+        .help-modal-subtitle {
+            margin: 6px 0 0;
+            color: #5d6f82;
+            font-size: 0.94em;
+            line-height: 1.45;
+        }
+
+        .help-modal-close {
+            flex-shrink: 0;
+            width: 38px;
+            height: 38px;
+            border: none;
+            border-radius: 999px;
+            background: #eef4fb;
+            color: #47617c;
+            font-size: 24px;
+            line-height: 1;
+            cursor: pointer;
+            transition: background 0.2s ease, color 0.2s ease;
+        }
+
+        .help-modal-close:hover {
+            background: #dce9f7;
+            color: #1e3550;
+        }
+
+        .help-modal-body {
+            padding: 22px 24px 26px;
+            overflow-y: auto;
+        }
+
+        .help-section {
+            margin-bottom: 22px;
+        }
+
+        .help-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .help-section-title {
+            margin: 0 0 12px;
+            color: #2c5f95;
+            font-size: 1.02em;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+        }
+
+        .help-control-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .help-control-item {
+            padding: 12px 14px;
+            border: 1px solid #e6edf5;
+            border-radius: 12px;
+            background: #fbfdff;
+        }
+
+        .help-control-name {
+            margin: 0 0 5px;
+            color: #22384e;
+            font-size: 0.96em;
+            font-weight: 700;
+        }
+
+        .help-control-desc {
+            margin: 0;
+            color: #5b6a7a;
+            font-size: 0.9em;
+            line-height: 1.5;
+        }
+
         @media (max-width: 768px) {
             .main-content {
                 grid-template-columns: 1fr;
@@ -870,6 +1016,30 @@
             .image-modal-content {
                 max-width: 98%;
                 max-height: 98%;
+            }
+
+            .header-inner {
+                padding-right: 0;
+            }
+
+            .header-help-btn {
+                position: static;
+                transform: none;
+                margin-top: 14px;
+            }
+
+            .help-modal {
+                padding: 14px;
+            }
+
+            .help-modal-dialog {
+                max-height: 92vh;
+            }
+
+            .help-modal-header,
+            .help-modal-body {
+                padding-left: 18px;
+                padding-right: 18px;
             }
 
             #resetBtn {
@@ -920,8 +1090,11 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🎯 Centerline Extraction Tool</h1>
-            <p>Interactive centerline extraction v1.8 Nicholas Leqeta</p>
+            <div class="header-inner">
+                <h1>🎯 Centerline Extraction Tool</h1>
+                <p>Interactive centerline extraction v1.81 Nicholas Leqeta</p>
+                <button type="button" class="header-help-btn" id="helpBtn">? Help</button>
+            </div>
         </div>
         
         <div class="main-content">
@@ -1164,6 +1337,175 @@
         <div class="drag-overlay-subtext">Release to upload</div>
     </div>
 
+    <div class="help-modal" id="helpModal" aria-hidden="true">
+        <div class="help-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle">
+            <div class="help-modal-header">
+                <div>
+                    <h2 class="help-modal-title" id="helpModalTitle">Control Reference</h2>
+                    <p class="help-modal-subtitle">Detailed guidance for the main controls, grouped the same way they appear in the sidebar.</p>
+                </div>
+                <button type="button" class="help-modal-close" id="helpModalClose" aria-label="Close help">&times;</button>
+            </div>
+            <div class="help-modal-body">
+                <section class="help-section">
+                    <h3 class="help-section-title">Image Upload</h3>
+                    <div class="help-control-list">
+                        <div class="help-control-item">
+                            <p class="help-control-name">Choose File</p>
+                            <p class="help-control-desc">Upload the source image or PDF you want to trace. Drag-and-drop onto the upload area works the same as using the file picker.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Show Raw Image</p>
+                            <p class="help-control-desc">Switches the preview between the untouched upload and the normalized image used for detection. Use it to compare whether preprocessing is helping or harming the trace.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Image Opacity</p>
+                            <p class="help-control-desc">Fades the background image without changing the traced paths. Lower values make the magenta and blue overlays easier to inspect.</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="help-section">
+                    <h3 class="help-section-title">Detection Parameters</h3>
+                    <div class="help-control-list">
+                        <div class="help-control-item">
+                            <p class="help-control-name">Dark Threshold</p>
+                            <p class="help-control-desc">Controls how dark a pixel must be before it is treated as part of a line. Raise it to ignore faint background texture; lower it to recover lighter strokes.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Auto-Detect Threshold</p>
+                            <p class="help-control-desc">Asks the app to estimate a useful threshold from the uploaded image. It is a starting point, not a final answer, so fine tuning may still be needed.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Normalization Mode</p>
+                            <p class="help-control-desc">Controls whether upload preprocessing evens out lighting and contrast before detection. Use Auto for most images, Force On for uneven scans, and Force Off when the source is already clean.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Normalization Sensitivity</p>
+                            <p class="help-control-desc">Sets how aggressively Auto mode decides to normalize. Higher sensitivity normalizes more images, which helps difficult scans but can flatten already-good artwork.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Merge Gap</p>
+                            <p class="help-control-desc">Maximum endpoint distance for bridging broken skeleton paths. Increase it when lines have small interruptions; decrease it if unrelated features begin joining together.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Angle Priority</p>
+                            <p class="help-control-desc">Biases merging toward endpoints that continue in a similar direction. Higher values prefer smoother continuation over pure nearest-gap bridging.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Min Path Length</p>
+                            <p class="help-control-desc">Filters out short detected paths before optimization. Raise it to drop dots and tiny fragments; lower it only when genuine short strokes are being lost.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Auto-Detect Min Path Length</p>
+                            <p class="help-control-desc">Lets the app suggest a minimum path length based on the current image. Useful when noise level changes a lot between jobs.</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="help-section">
+                    <h3 class="help-section-title">Optimisation</h3>
+                    <div class="help-control-list">
+                        <div class="help-control-item">
+                            <p class="help-control-name">Tolerance</p>
+                            <p class="help-control-desc">Sets the overall simplification looseness. Higher values allow bigger geometric shortcuts and usually produce fewer segments.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Simplification Strength</p>
+                            <p class="help-control-desc">Controls how hard the optimizer tries to reduce vertices overall. It affects how aggressively the blue output departs from the raw magenta path.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Line Fit Strength</p>
+                            <p class="help-control-desc">Controls how strongly the optimizer prefers long straight segments. Raise it when staircase-like lines should collapse to cleaner segments.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Short Path Protection</p>
+                            <p class="help-control-desc">Preserves detail on short or jagged paths that would otherwise collapse too hard. Higher values keep more vertices on small features.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Score Preservation</p>
+                            <p class="help-control-desc">Minimum retained path score for accepting a simplification. Higher values make the optimizer more conservative and less willing to reshape the path.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Enable Curve Fitting</p>
+                            <p class="help-control-desc">Turns cubic fitting back on for SVG output. Leave it off while tuning line quality, then enable it if you want smoother bezier-style export.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Cubic Fit Tolerance</p>
+                            <p class="help-control-desc">Controls how tightly cubic segments must follow the optimized path. Lower values preserve more shape detail, while higher values reduce cubic count.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Endpoint Tangent Strictness</p>
+                            <p class="help-control-desc">Controls how strongly fitted cubic handles follow the local direction of the extracted path at the start and end. Higher values keep endpoints aligned more literally.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Force Orthogonal Paths As Lines</p>
+                            <p class="help-control-desc">Keeps axis-aligned and corner-like paths as line segments instead of curves. Useful for technical drawings, grids, and anything that should stay crisp and geometric.</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="help-section">
+                    <h3 class="help-section-title">Output Options</h3>
+                    <div class="help-control-list">
+                        <div class="help-control-item">
+                            <p class="help-control-name">Enable Path Optimisation</p>
+                            <p class="help-control-desc">Toggles the blue-path optimization stage. When disabled, the app keeps the raw detected paths and forces the unoptimized layer to stay visible.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Include Unoptimised Paths</p>
+                            <p class="help-control-desc">Adds the magenta pre-optimization paths to the SVG. It is mainly a debugging and comparison aid when checking what the optimizer changed.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Include Original Image</p>
+                            <p class="help-control-desc">Embeds the source bitmap in the SVG export. Leave it on for review documents; turn it off for cleaner production vector output.</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="help-section">
+                    <h3 class="help-section-title">Actions</h3>
+                    <div class="help-control-list">
+                        <div class="help-control-item">
+                            <p class="help-control-name">Process</p>
+                            <p class="help-control-desc">Runs detection and starts optimization using the current settings. Use this when Auto is off or when you want a deliberate rerun after several changes.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Auto</p>
+                            <p class="help-control-desc">Automatically reprocesses after parameter changes. Keep it on for quick iteration and turn it off when you want to batch several adjustments first.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Reset</p>
+                            <p class="help-control-desc">Returns the session UI to its baseline state. Use it to clear the current job and undo exploratory tuning without reloading the page.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Stop Optimization</p>
+                            <p class="help-control-desc">Stops a running optimization pass and keeps whatever progressive result is available. Useful when a job is taking too long or the intermediate result is already good enough.</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="help-section">
+                    <h3 class="help-section-title">SVG View And Export</h3>
+                    <div class="help-control-list">
+                        <div class="help-control-item">
+                            <p class="help-control-name">Download SVG</p>
+                            <p class="help-control-desc">Downloads the current SVG render to disk using the current output settings. This is the reliable export path on every browser the app supports.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Drag SVG File</p>
+                            <p class="help-control-desc">Lets you drag the generated SVG out of the browser, but only on Chromium-family browsers where that drag payload is supported. On other browsers, download the SVG first and drag the saved file from your file manager.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Reset View</p>
+                            <p class="help-control-desc">Resets pan and zoom in the SVG preview window. Use it after inspecting details closely so the whole result is framed again.</p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </div>
+
     <script>
         let currentSessionId = null;
         let autoProcessEnabled = true;
@@ -1212,6 +1554,21 @@
         let lastRenderedSvgContent = null;
         let currentSvgObjectUrl = null;
         let currentSvgExportFilename = 'centerline_export.svg';
+        const svgDragExportSupported = (() => {
+            const uaData = navigator.userAgentData;
+            if (uaData && Array.isArray(uaData.brands)) {
+                const brands = uaData.brands.map(item => String(item.brand || '').toLowerCase());
+                if (brands.some(brand => brand.includes('chromium') || brand.includes('chrome') || brand.includes('edge') || brand.includes('opera') || brand.includes('brave'))) {
+                    return true;
+                }
+            }
+
+            const ua = String(navigator.userAgent || '');
+            const isIOS = /iPad|iPhone|iPod/.test(ua);
+            const isFirefox = /Firefox|FxiOS/.test(ua);
+            const isChromiumFamily = /Chrome|Chromium|CriOS|Edg|OPR|Brave/.test(ua);
+            return !isIOS && !isFirefox && isChromiumFamily;
+        })();
         let currentUploadDisplayImages = {
             raw: null,
             normalized: null,
@@ -3332,13 +3689,42 @@
             clearModalLivePathsOverlay();
         }
 
+        function openHelpModal() {
+            const helpModal = document.getElementById('helpModal');
+            if (!helpModal) {
+                return;
+            }
+            helpModal.classList.add('open');
+            helpModal.setAttribute('aria-hidden', 'false');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeHelpModal() {
+            const helpModal = document.getElementById('helpModal');
+            if (!helpModal) {
+                return;
+            }
+            helpModal.classList.remove('open');
+            helpModal.setAttribute('aria-hidden', 'true');
+            document.body.style.overflow = '';
+        }
+
         // Modal event handlers
         document.addEventListener('DOMContentLoaded', function() {
             const modal = document.getElementById('imageModal');
             const closeBtn = document.getElementById('modalClose');
+            const helpModal = document.getElementById('helpModal');
+            const helpBtn = document.getElementById('helpBtn');
+            const helpModalClose = document.getElementById('helpModalClose');
             
             // Close modal when clicking the X
             closeBtn.onclick = closeImageModal;
+            if (helpBtn) {
+                helpBtn.onclick = openHelpModal;
+            }
+            if (helpModalClose) {
+                helpModalClose.onclick = closeHelpModal;
+            }
             
             // Close modal when clicking outside the image
             modal.onclick = function(event) {
@@ -3346,10 +3732,21 @@
                     closeImageModal();
                 }
             };
+            if (helpModal) {
+                helpModal.onclick = function(event) {
+                    if (event.target === helpModal) {
+                        closeHelpModal();
+                    }
+                };
+            }
             
             // Close modal with Escape key
             document.addEventListener('keydown', function(event) {
                 if (event.key === 'Escape') {
+                    if (helpModal && helpModal.classList.contains('open')) {
+                        closeHelpModal();
+                        return;
+                    }
                     closeImageModal();
                 }
             });
@@ -3965,7 +4362,7 @@
 
             revokeSvgExportUrl();
 
-            if (!svgContent || typeof Blob === 'undefined' || !window.URL || !window.URL.createObjectURL) {
+            if (!svgDragExportSupported || !svgContent || typeof Blob === 'undefined' || !window.URL || !window.URL.createObjectURL) {
                 dragSvgBtn.style.display = 'none';
                 dragSvgBtn.removeAttribute('href');
                 dragSvgBtn.removeAttribute('download');
@@ -3983,7 +4380,7 @@
         }
 
         function handleSvgFileDragStart(event) {
-            if (!currentSvgObjectUrl) {
+            if (!svgDragExportSupported || !currentSvgObjectUrl) {
                 event.preventDefault();
                 return;
             }
@@ -4368,7 +4765,12 @@
 
         const dragSvgBtn = document.getElementById('dragSvgBtn');
         if (dragSvgBtn) {
-            dragSvgBtn.addEventListener('dragstart', handleSvgFileDragStart);
+            if (svgDragExportSupported) {
+                dragSvgBtn.addEventListener('dragstart', handleSvgFileDragStart);
+            } else {
+                dragSvgBtn.style.display = 'none';
+                dragSvgBtn.removeAttribute('draggable');
+            }
         }
 
         window.addEventListener('beforeunload', function() {
