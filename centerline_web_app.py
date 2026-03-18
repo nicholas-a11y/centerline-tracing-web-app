@@ -27,7 +27,6 @@ from centerline_engine import (
 )
 from centerline_core import (
     AUTO_TUNE_CONFIDENCE_TARGET,
-    AUTO_TUNE_RANDOM_TILE_COUNT,
     AUTO_TUNE_RANDOM_TILE_DIM,
     AUTO_TUNE_TIME_BUDGET_SEC,
     _build_random_tile_mosaic,
@@ -38,6 +37,7 @@ from centerline_core import (
     auto_detect_min_path_length,
     auto_tune_extraction_parameters,
     load_and_process_image,
+    resolve_parameter_scale,
     resolve_extraction_profile,
 )
 TEST_UI_ENABLED = False
@@ -169,12 +169,34 @@ def _get_session_extraction_profile(session):
     return resolve_extraction_profile(session.preprocessing_info)
 
 
-def _effective_min_path_length(params, extraction_profile):
+def _effective_min_path_length(params, extraction_profile, image_shape=None):
     requested_min_length = max(1, int(params.get('min_path_length', 3)))
     max_min_path_length = extraction_profile.get('max_min_path_length')
     if max_min_path_length is None:
-        return requested_min_length
-    return max(1, min(requested_min_length, int(max_min_path_length)))
+        logical_min_length = requested_min_length
+    else:
+        logical_min_length = max(1, min(requested_min_length, int(max_min_path_length)))
+    parameter_scale = resolve_parameter_scale(image_shape)
+    return max(1, int(round(logical_min_length * parameter_scale)))
+
+
+def _effective_merge_gap(params, image_shape=None):
+    logical_merge_gap = max(1, int(params.get('merge_gap', 25)))
+    parameter_scale = resolve_parameter_scale(image_shape)
+    return max(1, int(round(logical_merge_gap * parameter_scale)))
+
+
+def _augment_sample_metadata(sample_metadata, image_shape, logical_min_path_length=None, logical_merge_gap=None):
+    metadata = dict(sample_metadata or {})
+    parameter_scale = resolve_parameter_scale(image_shape)
+    metadata['parameter_scale'] = float(parameter_scale)
+    if logical_min_path_length is not None:
+        metadata['logical_min_path_length'] = int(max(1, logical_min_path_length))
+        metadata['effective_min_path_length'] = int(max(1, round(float(logical_min_path_length) * parameter_scale)))
+    if logical_merge_gap is not None:
+        metadata['logical_merge_gap'] = int(max(1, logical_merge_gap))
+        metadata['effective_merge_gap'] = int(max(1, round(float(logical_merge_gap) * parameter_scale)))
+    return metadata
 
 
 def _should_capture_benchmark_metrics(filename):
@@ -457,7 +479,7 @@ def process_centerlines(session):
     params = session.parameters
     gray = session.image
     extraction_profile = _get_session_extraction_profile(session)
-    effective_min_path_length = _effective_min_path_length(params, extraction_profile)
+    effective_min_path_length = _effective_min_path_length(params, extraction_profile, image_shape=gray.shape)
     
     # Check if optimization is enabled to determine processing level
     optimization_enabled = params.get('enable_optimization', True)
@@ -468,6 +490,7 @@ def process_centerlines(session):
             gray,
             params['dark_threshold'],
             min_object_size=extraction_profile['full_min_object_size'],
+            min_path_length=max(1, min(8, int(round(effective_min_path_length * 0.5)))),
         )
     else:
         # Fast mode: use the fast extraction function directly
@@ -480,14 +503,14 @@ def process_centerlines(session):
         binary = gray < params['dark_threshold']
         binary = morphology.remove_small_objects(binary, extraction_profile['preview_min_object_size'])
         skeleton = morphology.skeletonize(binary)
-        initial_paths = create_fast_paths(skeleton)
+        initial_paths = create_fast_paths(skeleton, min_path_length=effective_min_path_length)
     
     if len(initial_paths) == 0:
         return {'error': 'No skeleton paths found. Try adjusting the dark threshold.'}
     
     if optimization_enabled:
         # Full processing mode: merge paths and handle overlaps
-        merge_gap = max(1, int(params.get('merge_gap', 25)))
+        merge_gap = _effective_merge_gap(params, image_shape=gray.shape)
         merge_angle_priority = float(params.get('merge_angle_priority', 30.0)) / 100.0
 
         # Merge nearby paths
@@ -613,12 +636,14 @@ def auto_detect_min_path_length_route():
         current_threshold = session.parameters.get('dark_threshold', 0.20)
         extraction_profile = _get_session_extraction_profile(session)
         effective_max_min_path_length = extraction_profile.get('max_min_path_length')
+        parameter_scale = resolve_parameter_scale(session.image.shape)
         
         # Run auto-detection
         detection_result = auto_detect_min_path_length(
             session.image,
             current_threshold,
             min_object_size=extraction_profile['auto_tune_min_object_size'],
+            parameter_scale=parameter_scale,
         )
         
         if detection_result['best_score'] > 0:
@@ -663,10 +688,12 @@ def auto_detect_threshold():
     
     try:
         extraction_profile = _get_session_extraction_profile(session)
+        parameter_scale = resolve_parameter_scale(session.image.shape)
         # Run auto-detection
         detection_result = auto_detect_dark_threshold(
             session.image,
             min_object_size=extraction_profile['auto_tune_min_object_size'],
+            parameter_scale=parameter_scale,
         )
         
         if detection_result['best_score'] > 0:
@@ -732,9 +759,15 @@ def auto_tune_extraction():
             'overlay_supported': True,
         }
         image_height, image_width = session.image.shape
+        parameter_scale = resolve_parameter_scale(session.image.shape)
         if max(image_height, image_width) > AUTO_TUNE_RANDOM_TILE_DIM:
-            _tile_count = 6 if session.image_file_size > 300 * 1024 else AUTO_TUNE_RANDOM_TILE_COUNT
-            tuning_image, sample_metadata = _build_random_tile_mosaic(session.image, tile_count=_tile_count)
+            tuning_image, sample_metadata = _build_random_tile_mosaic(session.image)
+        sample_metadata = _augment_sample_metadata(
+            sample_metadata,
+            session.image.shape,
+            logical_min_path_length=int(session.parameters.get('min_path_length', 3)),
+            logical_merge_gap=int(session.parameters.get('merge_gap', 25)),
+        )
 
         tuning_result = auto_tune_extraction_parameters(
             tuning_image,
@@ -746,6 +779,7 @@ def auto_tune_extraction():
             sample_metadata=sample_metadata,
             should_continue=_should_continue_auto_tune,
             on_best_result=_record_best_so_far,
+            parameter_scale=parameter_scale,
         )
 
         with session.lock:
@@ -844,14 +878,19 @@ def auto_tune_sample_region():
 
     image_height, image_width = sample_source.shape
     if max(image_height, image_width) > AUTO_TUNE_RANDOM_TILE_DIM:
-        _tile_count = 6 if session.image_file_size > 300 * 1024 else AUTO_TUNE_RANDOM_TILE_COUNT
-        _, sample_metadata = _build_random_tile_mosaic(sample_source, tile_count=_tile_count)
+        _, sample_metadata = _build_random_tile_mosaic(sample_source)
         sample_metadata = _offset_sample_metadata_to_source(
             sample_metadata,
             offset_x=offset_x,
             offset_y=offset_y,
             source_shape=session.image.shape,
         )
+    sample_metadata = _augment_sample_metadata(
+        sample_metadata,
+        session.image.shape,
+        logical_min_path_length=int(session.parameters.get('min_path_length', 3)),
+        logical_merge_gap=int(session.parameters.get('merge_gap', 25)),
+    )
 
     return jsonify({
         'success': True,
@@ -871,12 +910,15 @@ def auto_tune_tile_preview():
     session = sessions[session_id]
     if session.image is None:
         return jsonify({'error': 'No image loaded'})
+    extraction_profile = _get_session_extraction_profile(session)
 
     try:
         dark_threshold = float(data.get('dark_threshold', session.parameters.get('dark_threshold', 0.20)))
         min_path_length = int(data.get('min_path_length', session.parameters.get('min_path_length', 3)))
     except Exception:
         return jsonify({'error': 'Invalid threshold or min path length'})
+
+    effective_merge_gap = _effective_merge_gap(session.parameters, image_shape=session.image.shape)
 
     sample_metadata = data.get('sample_metadata')
     if not isinstance(sample_metadata, dict):
@@ -911,14 +953,25 @@ def auto_tune_tile_preview():
                 'tile_shape': list(session.image.shape),
                 'tile_origins': [[0, 0]],
             }
+    sample_metadata = _augment_sample_metadata(
+        sample_metadata,
+        session.image.shape,
+        logical_min_path_length=min_path_length,
+        logical_merge_gap=int(session.parameters.get('merge_gap', 25)),
+    )
 
     preview_started_at = time.perf_counter()
     full_image_preview = bool(data.get('full_image_preview', False))
+    effective_min_path_length = _effective_min_path_length(
+        {'min_path_length': min_path_length},
+        extraction_profile,
+        image_shape=session.image.shape,
+    )
     tile_data, stats = _extract_tile_preview_paths(
         session.image,
         sample_metadata,
         dark_threshold=dark_threshold,
-        min_path_length=min_path_length,
+        min_path_length=effective_min_path_length,
         full_resolution=full_image_preview,
     )
     preview_runtime_ms = int(round((time.perf_counter() - preview_started_at) * 1000.0))
@@ -933,6 +986,8 @@ def auto_tune_tile_preview():
         'source_shape': list(session.image.shape),
         'dark_threshold': float(dark_threshold),
         'min_path_length': int(min_path_length),
+        'effective_min_path_length': int(effective_min_path_length),
+        'effective_merge_gap': int(effective_merge_gap),
     })
 
 
@@ -940,6 +995,7 @@ def _run_auto_tune_job(session, auto_tune_generation):
     """Background auto-tune job that continuously updates session.auto_tune_progress."""
     try:
         source_image = session.image
+        parameter_scale = resolve_parameter_scale(source_image.shape)
         crop_bounds = _resolve_crop_bounds(source_image.shape, session.auto_tune_crop_region)
         tuning_image = source_image
         offset_x = 0
@@ -959,14 +1015,19 @@ def _run_auto_tune_job(session, auto_tune_generation):
         }
         image_height, image_width = tuning_image.shape
         if max(image_height, image_width) > AUTO_TUNE_RANDOM_TILE_DIM:
-            _tile_count = 6 if session.image_file_size > 300 * 1024 else AUTO_TUNE_RANDOM_TILE_COUNT
-            tuning_image, sample_metadata = _build_random_tile_mosaic(tuning_image, tile_count=_tile_count)
+            tuning_image, sample_metadata = _build_random_tile_mosaic(tuning_image)
             sample_metadata = _offset_sample_metadata_to_source(
                 sample_metadata,
                 offset_x=offset_x,
                 offset_y=offset_y,
                 source_shape=source_image.shape,
             )
+        sample_metadata = _augment_sample_metadata(
+            sample_metadata,
+            source_image.shape,
+            logical_min_path_length=int(session.parameters.get('min_path_length', 3)),
+            logical_merge_gap=int(session.parameters.get('merge_gap', 25)),
+        )
 
         def _should_continue_auto_tune():
             with session.lock:
@@ -1038,6 +1099,7 @@ def _run_auto_tune_job(session, auto_tune_generation):
             on_progress=_record_progress,
             confidence_target=AUTO_TUNE_CONFIDENCE_TARGET,
             min_object_size=extraction_profile['auto_tune_min_object_size'],
+            parameter_scale=parameter_scale,
         )
 
         with session.lock:
@@ -1394,7 +1456,7 @@ def process_immediate():
         params = session.parameters
         gray = session.image
         extraction_profile = _get_session_extraction_profile(session)
-        effective_min_path_length = _effective_min_path_length(params, extraction_profile)
+        effective_min_path_length = _effective_min_path_length(params, extraction_profile, image_shape=session.image.shape)
 
         # Apply optional crop region (fractions 0-1 of image dimensions)
         crop_offset_row = 0
@@ -1420,12 +1482,15 @@ def process_immediate():
         binary = gray < params['dark_threshold']
         binary = morphology.remove_small_objects(binary, extraction_profile['preview_min_object_size'])
         skeleton = morphology.skeletonize(binary)
-        initial_paths = create_fast_paths(skeleton)
+        initial_paths = create_fast_paths(
+            skeleton,
+            min_path_length=max(1, min(8, int(round(effective_min_path_length * 0.5)))),
+        )
         
         if len(initial_paths) == 0:
             return jsonify({'error': 'No skeleton paths found. Try adjusting the dark threshold.'})
         
-        merge_gap = max(1, int(params.get('merge_gap', 25)))
+        merge_gap = _effective_merge_gap(params, image_shape=session.image.shape)
         merge_angle_priority = float(params.get('merge_angle_priority', 30.0)) / 100.0
 
         # Preserve legacy default behavior in progressive mode unless users
@@ -1526,6 +1591,8 @@ def background_optimization(session, generation):
 
         params = session.parameters
         valid_paths = session.initial_paths
+        extraction_profile = _get_session_extraction_profile(session)
+        effective_min_path_length = _effective_min_path_length(params, extraction_profile, image_shape=session.image.shape)
         original_total_segments = sum(max(len(path) - 1, 0) for path in valid_paths)
         optimized_total_segments = 0
         benchmark_enabled = bool(session.benchmark_enabled)
@@ -1588,7 +1655,7 @@ def background_optimization(session, generation):
                 'score_preservation': params.get('score_preservation', 80.0),
                 'path_length': len(path),
                 'max_path_length': max_path_length,
-                'min_path_length': params.get('min_path_length', 3)
+                'min_path_length': effective_min_path_length
             }
             
             optimization_started_at = time.perf_counter()

@@ -516,6 +516,44 @@
             margin-bottom: 10px;
         }
 
+        .tile-tune-readonly {
+            margin-bottom: 10px;
+            padding: 9px 10px;
+            border-radius: 8px;
+            border: 1px solid #f0c79c;
+            background: rgba(255, 255, 255, 0.78);
+        }
+
+        .tile-tune-readonly-title {
+            font-size: 0.78em;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: #9a5d1a;
+            margin-bottom: 6px;
+        }
+
+        .tile-tune-readonly-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 14px;
+        }
+
+        .tile-tune-readonly-item {
+            font-size: 0.82em;
+            color: #69401a;
+        }
+
+        .tile-tune-readonly-item strong {
+            color: #8a4100;
+        }
+
+        .tile-tune-readonly-note {
+            margin-top: 6px;
+            font-size: 0.79em;
+            color: #8f602a;
+        }
+
         .tile-tune-actions {
             display: flex;
             flex-wrap: wrap;
@@ -1300,7 +1338,8 @@
                 </div>
 
                 <div class="tile-tune-panel" id="tileTunePanel">
-                    <div class="tile-tune-title">Auto Detection Tuning Review (Zoom in and check results, tweak detection parameters if needed</div>
+                    <div class="tile-tune-title">Auto Detection Tuning Review</div>
+                    <div class="tile-tune-readonly" id="tileTuneReadonlyInfo"></div>
                     <div class="tile-tune-details" id="tileTuneDetails">
                         Adjust threshold and min path length. Preview updates inside sampled tiles only.
                     </div>
@@ -2107,7 +2146,8 @@
             if (!shuffleBtn) return;
 
             const samplingMode = String((tileTuneReviewState.sampleMetadata && tileTuneReviewState.sampleMetadata.sampling_mode) || 'full_image');
-            const showShuffle = !tileTuneReviewState.fullImagePreviewMode && samplingMode === 'random_tiles_mosaic';
+            const strategy = String((tileTuneReviewState.sampleMetadata && tileTuneReviewState.sampleMetadata.tile_strategy) || '');
+            const showShuffle = !tileTuneReviewState.fullImagePreviewMode && samplingMode === 'random_tiles_mosaic' && strategy !== 'coverage_hotspot_v2';
             shuffleBtn.style.display = showShuffle ? '' : 'none';
         }
 
@@ -2116,6 +2156,88 @@
             if (details && html != null) {
                 details.innerHTML = html;
             }
+        }
+
+        function setTileTuneReadonlyInfo(html) {
+            const info = document.getElementById('tileTuneReadonlyInfo');
+            if (info && html != null) {
+                info.innerHTML = html;
+            }
+        }
+
+        function formatPercentValue(value, digits = 1) {
+            const numeric = Number(value || 0);
+            return `${(numeric * 100).toFixed(digits)}%`;
+        }
+
+        function formatIntegerValue(value) {
+            const numeric = Number(value || 0);
+            return Number.isFinite(numeric) ? Math.round(numeric).toLocaleString() : '0';
+        }
+
+        function buildTileTuneReadonlyInfo(sampleMetadata, previewData = null) {
+            const metadata = sampleMetadata || {};
+            const preview = previewData || {};
+            const sourceShape = Array.isArray(metadata.source_shape) ? metadata.source_shape : [];
+            const sourceHeight = Number(sourceShape[0] || 0);
+            const sourceWidth = Number(sourceShape[1] || 0);
+            const tileShape = Array.isArray(metadata.tile_shape) ? metadata.tile_shape : [];
+            const tileHeight = Number(tileShape[0] || 0);
+            const tileWidth = Number(tileShape[1] || 0);
+            const tileCount = Number(metadata.tile_count || 0);
+            const parameterScale = Number(metadata.parameter_scale || 1.0);
+            const logicalMinLength = Number(preview.min_path_length || metadata.logical_min_path_length || 0);
+            const effectiveMinLength = Number(preview.effective_min_path_length || metadata.effective_min_path_length || 0);
+            const logicalMergeGap = Number(metadata.logical_merge_gap || 0);
+            const effectiveMergeGap = Number(preview.effective_merge_gap || metadata.effective_merge_gap || 0);
+            const selectedHotspots = Number(metadata.selected_hotspot_tiles || 0);
+            const selectedCoverage = Number(metadata.selected_coverage_tiles || 0);
+            const selectedFallback = Number(metadata.selected_fallback_tiles || 0);
+            const requestedHotspots = Number(metadata.requested_hotspot_tiles || 0);
+            const requestedCoverage = Number(metadata.requested_coverage_tiles || 0);
+            const strategy = String(metadata.tile_strategy || metadata.sampling_mode || 'full_image');
+            const reviewScope = tileTuneReviewState.fullImagePreviewMode ? 'Full-image review overlay' : 'Tile-only review overlay';
+            const targetCoverage = Number(metadata.target_coverage_ratio || 0);
+            const targetSampleArea = Number(metadata.target_sample_area || 0);
+            const sourceArea = Number(metadata.source_area || (sourceHeight > 0 && sourceWidth > 0 ? sourceHeight * sourceWidth : 0));
+            const achievedArea = tileWidth > 0 && tileHeight > 0 && tileCount > 0 ? tileWidth * tileHeight * tileCount : 0;
+            const achievedCoverage = sourceArea > 0 ? achievedArea / sourceArea : 0;
+
+            const items = [];
+            if (sourceWidth > 0 && sourceHeight > 0) {
+                items.push(`<span class="tile-tune-readonly-item">Image <strong>${formatIntegerValue(sourceWidth)} × ${formatIntegerValue(sourceHeight)}</strong></span>`);
+            }
+            items.push(`<span class="tile-tune-readonly-item">Review scope <strong>${reviewScope}</strong></span>`);
+            items.push(`<span class="tile-tune-readonly-item">Scale factor <strong>${parameterScale.toFixed(2)}×</strong></span>`);
+            if (tileWidth > 0 && tileHeight > 0 && tileCount > 0) {
+                items.push(`<span class="tile-tune-readonly-item">Tile plan <strong>${formatIntegerValue(tileCount)}</strong> tiles at <strong>${formatIntegerValue(tileWidth)} × ${formatIntegerValue(tileHeight)}</strong></span>`);
+            }
+            if (strategy && strategy !== 'full_image') {
+                items.push(`<span class="tile-tune-readonly-item">Strategy <strong>${strategy.replace(/_/g, ' ')}</strong></span>`);
+            }
+            if (logicalMinLength > 0 || effectiveMinLength > 0) {
+                items.push(`<span class="tile-tune-readonly-item">Min path length <strong>${formatIntegerValue(logicalMinLength)}</strong> logical, <strong>${formatIntegerValue(effectiveMinLength || logicalMinLength)}</strong> effective</span>`);
+            }
+            if (logicalMergeGap > 0 || effectiveMergeGap > 0) {
+                items.push(`<span class="tile-tune-readonly-item">Merge gap <strong>${formatIntegerValue(logicalMergeGap)}</strong> logical, <strong>${formatIntegerValue(effectiveMergeGap || logicalMergeGap)}</strong> effective</span>`);
+            }
+            if (tileCount > 0) {
+                items.push(`<span class="tile-tune-readonly-item">Distribution <strong>${selectedHotspots}</strong> hotspot, <strong>${selectedCoverage}</strong> coverage, <strong>${selectedFallback}</strong> fallback</span>`);
+            }
+
+            const notes = [];
+            if (tileCount > 0 && targetCoverage > 0) {
+                notes.push(`Target sampled area ${formatPercentValue(targetCoverage)} of the source, achieved ${formatPercentValue(achievedCoverage)} with ${formatIntegerValue(targetSampleArea)} target pixels.`);
+            }
+            if (requestedHotspots > 0 || requestedCoverage > 0) {
+                notes.push(`Plan budget: ${formatIntegerValue(requestedHotspots)} hotspot-focused tiles plus ${formatIntegerValue(requestedCoverage)} broad-coverage tiles.`);
+            }
+            if (metadata.activity_peak != null || metadata.activity_mean != null) {
+                notes.push(`Hotspot scoring uses darkness and edge activity (peak ${Number(metadata.activity_peak || 0).toFixed(3)}, mean ${Number(metadata.activity_mean || 0).toFixed(3)}).`);
+            }
+
+            return `<div class="tile-tune-readonly-grid">${items.join('')}</div>` +
+                `<div class="tile-tune-readonly-note">${notes.join(' ')}</div>`;
         }
 
         function tileTuneLog(msg, type) {
@@ -2137,6 +2259,7 @@
             if (!box) return;
             box.innerHTML = '';
             box.style.display = 'none';
+            setTileTuneReadonlyInfo('');
         }
 
         function renderTilePreviewOverlay(tileData, sourceShape) {
@@ -2275,6 +2398,7 @@
             const tileCount = Number((sampleMetadata && sampleMetadata.tile_count) || 0);
             tileTuneLog('Tuning review started' + (tileCount > 0 ? ' — ' + tileCount + ' tiles sampled.' : ' (full image).'), 'start');
             tileTuneReviewState.pendingAutoSkipDecision = samplingMode === 'random_tiles_mosaic' && tileCount > 0;
+            setTileTuneReadonlyInfo(buildTileTuneReadonlyInfo(sampleMetadata));
             if (samplingMode === 'random_tiles_mosaic' && tileCount > 0) {
                 setTileTuneDetails(`Adjust sliders to tune threshold/min length. Preview updates inside ${tileCount} sampled tiles only.`);
             } else {
@@ -2328,6 +2452,7 @@
                     tileTuneReviewState.lastTileData = data.tile_data || [];
                     tileTuneReviewState.lastSourceShape = data.source_shape || [];
                     tileTuneReviewState.lastPreviewRuntimeMs = Number(data.preview_runtime_ms || 0);
+                    setTileTuneReadonlyInfo(buildTileTuneReadonlyInfo(tileTuneReviewState.sampleMetadata, data));
 
                     const shouldSwitchToFullImagePreview = tileTuneReviewState.pendingAutoSkipDecision &&
                         tileTuneReviewState.lastPreviewRuntimeMs > 0 &&
@@ -2450,6 +2575,7 @@
                 tileTuneReviewState.fullImagePreviewMode = false;
                 const newTileCount = Number((tileTuneReviewState.sampleMetadata && tileTuneReviewState.sampleMetadata.tile_count) || 0);
                 tileTuneLog('✅ Resampled — ' + (newTileCount > 0 ? newTileCount + ' tiles selected.' : 'region updated.'), 'success');
+                setTileTuneReadonlyInfo(buildTileTuneReadonlyInfo(tileTuneReviewState.sampleMetadata));
                 renderSampleBoundingBox(tileTuneReviewState.sampleMetadata, 0);
                 requestTileOnlyPreview();
             })
@@ -3208,7 +3334,7 @@
             formData.append('normalization_sensitivity', document.getElementById('normalizationSensitivity').value);
 
             showMessage('Uploading file...', 'info');
-            showLoading(true);
+            showLoading(true, 'Loading source image...', 'Reading the upload, normalizing contrast if needed, and preparing the first preview.');
 
             trackedFetch('/upload', {
                 method: 'POST',
@@ -3401,7 +3527,8 @@
                             const tileIndex = Number(progressData.current_tile_index || 0);
                             const tileTotal = Number(progressData.current_tile_total || 1);
                             const elapsedNumeric = Number(progressData.elapsed_sec || 0);
-                            const elapsedSec = elapsedNumeric.toFixed(1);
+                            const displayedElapsedSec = Math.min(elapsedNumeric, 90.0);
+                            const elapsedSec = displayedElapsedSec.toFixed(1);
                             const tunePct = Math.min(100, (elapsedNumeric / 90.0) * 100.0);
                             setAutoTuneLoadingProgress(true, tunePct, `${elapsedSec} / 90.0s`);
                             const loadingDetails = document.getElementById('loadingDetails');
@@ -3416,12 +3543,10 @@
                                         : `, all ${tileTotal} tiles`;
                                 }
                                 const phaseLabel = currentPhase.replace(/_/g, ' ');
-                                loadingDetails.textContent = `Live tuning: best ${Number(progressData.best_threshold || 0.20).toFixed(3)} / min ${Math.round(progressData.best_min_length || 3)}, confidence ${confidencePct}% — ${iterDone}/${iterTotal} thresholds (working ${currentThresholdIndex}/${iterTotal}${checkingText}${tileText}, ${phaseLabel}, t=${elapsedSec}s)`;
-                            }
-
-                            if (progressData.running && elapsedNumeric >= 90.0) {
-                                skipAutoTune();
-                                return;
+                                const waitingForFinalStateText = progressData.running && elapsedNumeric >= 90.0
+                                    ? ', waiting for server finalization'
+                                    : '';
+                                loadingDetails.textContent = `Live tuning: best ${Number(progressData.best_threshold || 0.20).toFixed(3)} / min ${Math.round(progressData.best_min_length || 3)}, confidence ${confidencePct}% — ${iterDone}/${iterTotal} thresholds (working ${currentThresholdIndex}/${iterTotal}${checkingText}${tileText}, ${phaseLabel}, t=${elapsedSec}s${waitingForFinalStateText})`;
                             }
 
                             if (!progressData.finished) {
@@ -4116,7 +4241,7 @@
             
             // Always use progressive mode for better user experience
             console.log('Starting progressive processing mode...');
-            showLoading(true, 'Extracting initial paths...', 'Getting immediate skeleton paths');
+            showLoading(true, 'Detecting centerline candidates...', 'Thresholding the image, skeletonizing the strokes, and preparing the first overlay.');
             showProgressMessage('Starting progressive processing...', 'info');
             
             trackedFetch('/process_immediate', {
@@ -4253,6 +4378,7 @@
                     console.log('Progress data:', data);
                     if (data.messages && data.messages.length > 0) {
                         const messagesDiv = document.getElementById('progress-messages');
+                        const latestMessage = data.messages[data.messages.length - 1] || '';
                         if (messagesDiv) {
                             data.messages.forEach(message => {
                                 const msgDiv = document.createElement('div');
@@ -4262,6 +4388,10 @@
                             messagesDiv.scrollTop = messagesDiv.scrollHeight;
                         } else {
                             console.error('Progress messages div not found!');
+                        }
+                        const statusEl = document.getElementById('optimization-status');
+                        if (statusEl && latestMessage) {
+                            statusEl.textContent = latestMessage;
                         }
                     }
                     
@@ -4795,7 +4925,7 @@
                 if (details) loadingDetails.textContent = details;
             } else {
                 loadingArea.classList.remove('show');
-                loadingText.textContent = 'Processing centerlines...';
+                loadingText.textContent = 'Refreshing preview...';
                 loadingDetails.textContent = '';
                 setLoadingActionButton(false);
                 setAutoTuneLoadingProgress(false);

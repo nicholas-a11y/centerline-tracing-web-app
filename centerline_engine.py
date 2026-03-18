@@ -231,7 +231,7 @@ class CircleEvaluationSystem:
         """Expose minimal metadata for downstream consumers."""
         return {"mode": "intensity_field"}
 
-def extract_skeleton_paths(image, dark_threshold=0.5, min_object_size=10):
+def extract_skeleton_paths(image, dark_threshold=0.5, min_object_size=10, min_path_length=MIN_PATH_LENGTH):
     """Fast skeleton extraction optimized for speed."""
     print("Extracting skeleton paths...")
     
@@ -246,7 +246,7 @@ def extract_skeleton_paths(image, dark_threshold=0.5, min_object_size=10):
     skeleton = morphology.skeletonize(binary)
     
     # Use fast path extraction
-    paths = create_fast_paths(skeleton)
+    paths = create_fast_paths(skeleton, min_path_length=min_path_length)
     
     print(f"Extracted {len(paths)} skeleton paths")
     return paths
@@ -1638,7 +1638,7 @@ def create_svg_output(
     dwg.save()
     print(f"SVG saved to: {OUTPUT_PATH}")
 
-def create_fast_paths(skeleton):
+def create_fast_paths(skeleton, min_path_length=MIN_PATH_LENGTH):
     """Extract branch-aware paths from a skeleton while preserving open segments."""
     ys, xs = np.nonzero(skeleton)
     if len(ys) == 0:
@@ -1708,7 +1708,7 @@ def create_fast_paths(skeleton):
             if key in visited_edges:
                 continue
             path = trace_edge(node, neighbor)
-            if len(path) >= MIN_PATH_LENGTH:
+            if len(path) >= int(min_path_length):
                 paths.append(path)
 
     # Handle pure loops (all points degree==2), which have no explicit nodes.
@@ -1744,10 +1744,10 @@ def create_fast_paths(skeleton):
                 if current == point:
                     break
 
-            if len(loop_path) >= MIN_PATH_LENGTH:
+            if len(loop_path) >= int(min_path_length):
                 paths.append(loop_path)
 
-    print(f"  Fast path extraction complete: {len(paths)} paths kept (min length: {MIN_PATH_LENGTH})")
+    print(f"  Fast path extraction complete: {len(paths)} paths kept (min length: {int(min_path_length)})")
     return paths
 
 def create_super_long_paths(skeleton):

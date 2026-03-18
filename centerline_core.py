@@ -19,6 +19,233 @@ AUTO_TUNE_TIME_BUDGET_SEC = 90.0
 AUTO_TUNE_CONFIDENCE_TARGET = 0.95
 AUTO_TUNE_RANDOM_TILE_DIM = 144
 AUTO_TUNE_RANDOM_TILE_COUNT = 12
+AUTO_TUNE_MIN_TILE_COUNT = 4
+AUTO_TUNE_RANDOM_TILE_DIM_MAX = 320
+AUTO_TUNE_TARGET_COVERAGE_RATIO = 0.06
+AUTO_TUNE_TARGET_COVERAGE_RATIO_MIN = 0.03
+AUTO_TUNE_HOTSPOT_TILE_RATIO = 0.40
+RESOLUTION_SCALE_REFERENCE_LONG_SIDE_PX = 1600.0
+RESOLUTION_SCALE_MAX = 4.0
+
+
+def resolve_parameter_scale(image_shape, reference_long_side=RESOLUTION_SCALE_REFERENCE_LONG_SIDE_PX,
+                            max_scale=RESOLUTION_SCALE_MAX):
+    """Return a conservative resolution scale for pixel-based extraction settings."""
+    if image_shape is None or len(image_shape) < 2:
+        return 1.0
+
+    try:
+        height = max(1, int(image_shape[0]))
+        width = max(1, int(image_shape[1]))
+    except Exception:
+        return 1.0
+
+    long_side = float(max(height, width))
+    if long_side <= float(reference_long_side):
+        return 1.0
+
+    return max(1.0, min(float(max_scale), long_side / float(reference_long_side)))
+
+
+def scale_length_parameter(value, image_shape=None, parameter_scale=None, minimum=1):
+    """Scale a pixel-length parameter for very large images while keeping defaults stable."""
+    scale = float(parameter_scale) if parameter_scale is not None else resolve_parameter_scale(image_shape)
+    scale = max(1.0, scale)
+    return max(int(minimum), int(round(float(value) * scale)))
+
+
+def _resolve_auto_tune_tile_dim(image_shape, base_tile_dim=AUTO_TUNE_RANDOM_TILE_DIM,
+                                max_tile_dim=AUTO_TUNE_RANDOM_TILE_DIM_MAX):
+    """Increase autotune tile size moderately on very large images."""
+    scale = max(1.0, resolve_parameter_scale(image_shape))
+    adaptive_dim = int(round(float(base_tile_dim) * np.sqrt(scale)))
+    return max(
+        int(base_tile_dim),
+        min(
+            int(max_tile_dim),
+            int(max(1, image_shape[0])),
+            int(max(1, image_shape[1])),
+            adaptive_dim,
+        ),
+    )
+
+
+def resolve_auto_tune_sampling_plan(image_shape, base_tile_dim=AUTO_TUNE_RANDOM_TILE_DIM,
+                                    min_tile_count=AUTO_TUNE_MIN_TILE_COUNT,
+                                    max_tile_count=AUTO_TUNE_RANDOM_TILE_COUNT):
+    """Return a deterministic autotune sampling plan for large images."""
+    if image_shape is None or len(image_shape) < 2:
+        return {
+            'tile_dim': int(base_tile_dim),
+            'tile_count': int(min_tile_count),
+            'hotspot_tile_target': max(1, int(round(min_tile_count * AUTO_TUNE_HOTSPOT_TILE_RATIO))),
+            'coverage_tile_target': max(1, int(min_tile_count) - max(1, int(round(min_tile_count * AUTO_TUNE_HOTSPOT_TILE_RATIO)))),
+            'parameter_scale': 1.0,
+            'target_coverage_ratio': float(AUTO_TUNE_TARGET_COVERAGE_RATIO),
+            'target_sample_area': int(base_tile_dim * base_tile_dim * min_tile_count),
+            'plan_version': 'coverage_hotspot_v2',
+        }
+
+    height = max(1, int(image_shape[0]))
+    width = max(1, int(image_shape[1]))
+    image_area = max(1, height * width)
+    tile_dim = _resolve_auto_tune_tile_dim(image_shape, base_tile_dim=base_tile_dim)
+    tile_area = max(1, int(tile_dim) * int(tile_dim))
+    parameter_scale = max(1.0, resolve_parameter_scale(image_shape))
+
+    target_coverage_ratio = float(np.clip(
+        AUTO_TUNE_TARGET_COVERAGE_RATIO / np.sqrt(parameter_scale),
+        AUTO_TUNE_TARGET_COVERAGE_RATIO_MIN,
+        AUTO_TUNE_TARGET_COVERAGE_RATIO,
+    ))
+    target_sample_area = max(tile_area, int(round(image_area * target_coverage_ratio)))
+    coverage_count_from_area = int(np.ceil(target_sample_area / float(tile_area)))
+
+    aspect_ratio = float(width) / float(height)
+    spatial_cols = int(np.ceil(np.sqrt(max(1.0, aspect_ratio) * 2.0)))
+    spatial_rows = int(np.ceil(np.sqrt(max(1.0, 1.0 / max(aspect_ratio, 1e-6))) * 2.0))
+    spatial_goal = max(2, spatial_cols + spatial_rows)
+
+    tile_count = max(int(min_tile_count), coverage_count_from_area, spatial_goal)
+    tile_count = min(int(max_tile_count), tile_count)
+
+    hotspot_tile_target = min(
+        max(1, int(round(tile_count * AUTO_TUNE_HOTSPOT_TILE_RATIO))),
+        max(1, tile_count - 1),
+    )
+    coverage_tile_target = max(1, tile_count - hotspot_tile_target)
+
+    return {
+        'tile_dim': int(tile_dim),
+        'tile_count': int(tile_count),
+        'hotspot_tile_target': int(hotspot_tile_target),
+        'coverage_tile_target': int(coverage_tile_target),
+        'parameter_scale': float(parameter_scale),
+        'target_coverage_ratio': float(target_coverage_ratio),
+        'target_sample_area': int(target_sample_area),
+        'source_area': int(image_area),
+        'plan_version': 'coverage_hotspot_v2',
+    }
+
+
+def _generate_coverage_tile_origins(image_shape, tile_w, tile_h, target_count):
+    """Generate deterministic, scattered coverage origins using jittered spatial cells."""
+    height = max(1, int(image_shape[0]))
+    width = max(1, int(image_shape[1]))
+    max_y = max(0, height - int(tile_h))
+    max_x = max(0, width - int(tile_w))
+    if target_count <= 0:
+        return []
+
+    aspect_ratio = float(width) / float(height)
+    cols = max(1, int(np.ceil(np.sqrt(float(target_count) * max(aspect_ratio, 1e-6)))))
+    rows = max(1, int(np.ceil(float(target_count) / float(cols))))
+
+    rng_seed = int((height << 16) ^ (width << 2) ^ (int(tile_w) << 9) ^ int(tile_h) ^ (int(target_count) << 5)) & 0xFFFFFFFF
+    rng = np.random.default_rng(rng_seed)
+
+    x_edges = np.linspace(0, max_x, num=cols + 1)
+    y_edges = np.linspace(0, max_y, num=rows + 1)
+    cell_indices = [(row_index, col_index) for row_index in range(rows) for col_index in range(cols)]
+    rng.shuffle(cell_indices)
+
+    origins = []
+    for row_index, col_index in cell_indices:
+        if len(origins) >= int(target_count):
+            break
+
+        x0 = int(round(x_edges[col_index]))
+        x1 = int(round(x_edges[col_index + 1]))
+        y0 = int(round(y_edges[row_index]))
+        y1 = int(round(y_edges[row_index + 1]))
+
+        cell_w = max(1, x1 - x0)
+        cell_h = max(1, y1 - y0)
+        x_margin = min(max(0, cell_w // 6), max(0, (x1 - x0) // 2))
+        y_margin = min(max(0, cell_h // 6), max(0, (y1 - y0) // 2))
+
+        x_min = min(max_x, x0 + x_margin)
+        x_max = min(max_x, max(x_min, x1 - x_margin))
+        y_min = min(max_y, y0 + y_margin)
+        y_max = min(max_y, max(y_min, y1 - y_margin))
+
+        x = int(rng.integers(x_min, x_max + 1)) if x_max > x_min else int(x_min)
+        y = int(rng.integers(y_min, y_max + 1)) if y_max > y_min else int(y_min)
+        origins.append((x, y))
+
+    return origins
+
+
+def _window_sum(integral_image, x, y, width, height):
+    x1 = int(x)
+    y1 = int(y)
+    x2 = int(x + width)
+    y2 = int(y + height)
+    return float(
+        integral_image[y2, x2]
+        - integral_image[y1, x2]
+        - integral_image[y2, x1]
+        + integral_image[y1, x1]
+    )
+
+
+def _compute_hotspot_tile_candidates(gray_image, tile_w, tile_h, max_candidates=96):
+    """Rank coarse tile origins by likely line activity."""
+    gray = np.clip(gray_image.astype(np.float32), 0.0, 1.0)
+    darkness = np.clip(0.92 - gray, 0.0, 1.0)
+    grad_y, grad_x = np.gradient(gray)
+    edge_strength = np.sqrt(grad_x * grad_x + grad_y * grad_y)
+    edge_scale = max(float(np.percentile(edge_strength, 99.5)), 1e-4)
+    edge_strength = np.clip(edge_strength / edge_scale, 0.0, 1.0)
+
+    activity = np.clip(0.72 * darkness + 0.28 * edge_strength, 0.0, 1.0)
+    activity_peak = float(activity.max()) if activity.size else 0.0
+    activity_mean = float(activity.mean()) if activity.size else 0.0
+    if activity_peak < 0.035:
+        return [], {
+            'activity_peak': activity_peak,
+            'activity_mean': activity_mean,
+        }
+
+    padded_integral = np.pad(activity, ((1, 0), (1, 0)), mode='constant').cumsum(axis=0).cumsum(axis=1)
+    image_h, image_w = gray.shape
+    max_y = max(0, int(image_h - tile_h))
+    max_x = max(0, int(image_w - tile_w))
+    step_y = max(1, int(tile_h // 2))
+    step_x = max(1, int(tile_w // 2))
+
+    y_candidates = list(range(0, max_y + 1, step_y))
+    x_candidates = list(range(0, max_x + 1, step_x))
+    if y_candidates[-1] != max_y:
+        y_candidates.append(max_y)
+    if x_candidates[-1] != max_x:
+        x_candidates.append(max_x)
+
+    candidates = []
+    tile_area = float(max(1, tile_h * tile_w))
+    for y in y_candidates:
+        for x in x_candidates:
+            score = _window_sum(padded_integral, x, y, tile_w, tile_h) / tile_area
+            candidates.append((float(score), int(x), int(y)))
+
+    if not candidates:
+        return [], {
+            'activity_peak': activity_peak,
+            'activity_mean': activity_mean,
+        }
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    best_score = float(candidates[0][0])
+    if best_score < max(0.040, activity_mean * 1.35):
+        return [], {
+            'activity_peak': activity_peak,
+            'activity_mean': activity_mean,
+        }
+
+    return candidates[:max(1, int(max_candidates))], {
+        'activity_peak': activity_peak,
+        'activity_mean': activity_mean,
+    }
 
 
 def resolve_extraction_profile(preprocessing_info=None):
@@ -78,11 +305,15 @@ def _enhance_faint_line_art(gray_image):
     return np.clip(enhanced.astype(np.float32), 0.0, 1.0)
 
 
-def _build_random_tile_mosaic(gray_image, tile_dim=AUTO_TUNE_RANDOM_TILE_DIM, tile_count=AUTO_TUNE_RANDOM_TILE_COUNT):
-    """Create a multi-tile random mosaic for auto-tune scoring on large images."""
+def _build_random_tile_mosaic(gray_image, tile_dim=AUTO_TUNE_RANDOM_TILE_DIM, tile_count=None):
+    """Create a multi-tile mosaic for auto-tune scoring on large images."""
     height, width = gray_image.shape
-    tile_h = min(int(tile_dim), int(height))
-    tile_w = min(int(tile_dim), int(width))
+    plan = resolve_auto_tune_sampling_plan(gray_image.shape, base_tile_dim=tile_dim)
+    requested_count = int(tile_count) if tile_count is not None else int(plan['tile_count'])
+    requested_count = max(2, requested_count)
+    resolved_tile_dim = int(plan['tile_dim'])
+    tile_h = min(int(resolved_tile_dim), int(height))
+    tile_w = min(int(resolved_tile_dim), int(width))
 
     if tile_h >= height and tile_w >= width:
         return gray_image, {
@@ -96,42 +327,50 @@ def _build_random_tile_mosaic(gray_image, tile_dim=AUTO_TUNE_RANDOM_TILE_DIM, ti
 
     max_y = max(0, height - tile_h)
     max_x = max(0, width - tile_w)
-    requested_count = max(2, int(tile_count))
-
-    rng_seed = int((time.perf_counter_ns() ^ (height << 11) ^ (width << 3)) & 0xFFFFFFFF)
-    rng = np.random.default_rng(rng_seed)
-
     tiles = []
     tile_origins = []
+    tile_selection_modes = []
     used_origins = set()
 
-    def _overlaps_existing(x, y):
+    def _overlaps_existing(x, y, allowed_overlap_ratio=0.0):
         for ox, oy in used_origins:
-            separated = (
-                (x + tile_w) <= ox or
-                (ox + tile_w) <= x or
-                (y + tile_h) <= oy or
-                (oy + tile_h) <= y
-            )
-            if not separated:
+            overlap_w = max(0, min(x + tile_w, ox + tile_w) - max(x, ox))
+            overlap_h = max(0, min(y + tile_h, oy + tile_h) - max(y, oy))
+            overlap_area = overlap_w * overlap_h
+            if overlap_area > int(round(tile_w * tile_h * float(allowed_overlap_ratio))):
                 return True
         return False
 
-    attempts = max(24, requested_count * 10)
-    for _ in range(attempts):
-        if len(tiles) >= requested_count:
-            break
-        y = int(rng.integers(0, max_y + 1)) if max_y > 0 else 0
-        x = int(rng.integers(0, max_x + 1)) if max_x > 0 else 0
-        key = (x, y)
-        if key in used_origins or _overlaps_existing(x, y):
-            continue
-        tile = gray_image[y:y + tile_h, x:x + tile_w]
+    def _append_tile(x, y, mode, allowed_overlap_ratio=0.0):
+        key = (int(x), int(y))
+        if key in used_origins or _overlaps_existing(int(x), int(y), allowed_overlap_ratio=allowed_overlap_ratio):
+            return False
+        tile = gray_image[int(y):int(y) + tile_h, int(x):int(x) + tile_w]
         if tile.shape[0] != tile_h or tile.shape[1] != tile_w:
-            continue
+            return False
         used_origins.add(key)
         tiles.append(tile)
         tile_origins.append([int(x), int(y)])
+        tile_selection_modes.append(str(mode))
+        return True
+
+    hotspot_candidates, activity_summary = _compute_hotspot_tile_candidates(gray_image, tile_w, tile_h)
+    hotspot_target = 0
+    if hotspot_candidates:
+        hotspot_target = min(int(plan['hotspot_tile_target']), max(1, requested_count - 1))
+
+    hotspot_selected = 0
+    for _, x, y in hotspot_candidates:
+        if hotspot_selected >= hotspot_target or len(tiles) >= requested_count:
+            break
+        if _append_tile(x, y, mode='hotspot', allowed_overlap_ratio=0.18):
+            hotspot_selected += 1
+
+    coverage_target = max(0, min(int(plan['coverage_tile_target']), requested_count - len(tiles)))
+    for x, y in _generate_coverage_tile_origins(gray_image.shape, tile_w, tile_h, coverage_target):
+        if len(tiles) >= requested_count:
+            break
+        _append_tile(x, y, mode='coverage', allowed_overlap_ratio=0.10)
 
     fallback_origins = [
         (0, 0),
@@ -143,15 +382,7 @@ def _build_random_tile_mosaic(gray_image, tile_dim=AUTO_TUNE_RANDOM_TILE_DIM, ti
     for x, y in fallback_origins:
         if len(tiles) >= requested_count:
             break
-        key = (int(x), int(y))
-        if key in used_origins or _overlaps_existing(int(x), int(y)):
-            continue
-        tile = gray_image[int(y):int(y) + tile_h, int(x):int(x) + tile_w]
-        if tile.shape[0] != tile_h or tile.shape[1] != tile_w:
-            continue
-        used_origins.add(key)
-        tiles.append(tile)
-        tile_origins.append([int(x), int(y)])
+        _append_tile(int(x), int(y), mode='fallback')
 
     if not tiles:
         return gray_image, {
@@ -184,6 +415,21 @@ def _build_random_tile_mosaic(gray_image, tile_dim=AUTO_TUNE_RANDOM_TILE_DIM, ti
         'tile_count': int(count),
         'tile_shape': [int(tile_h), int(tile_w)],
         'tile_origins': tile_origins,
+        'tile_selection_modes': tile_selection_modes,
+        'selected_hotspot_tiles': int(sum(1 for mode in tile_selection_modes if mode == 'hotspot')),
+        'selected_coverage_tiles': int(sum(1 for mode in tile_selection_modes if mode == 'coverage')),
+        'selected_random_tiles': 0,
+        'selected_fallback_tiles': int(sum(1 for mode in tile_selection_modes if mode == 'fallback')),
+        'requested_hotspot_tiles': int(hotspot_target),
+        'requested_coverage_tiles': int(coverage_target),
+        'adaptive_tile_dim': int(resolved_tile_dim),
+        'tile_strategy': str(plan['plan_version']),
+        'parameter_scale': float(plan['parameter_scale']),
+        'target_coverage_ratio': round(float(plan['target_coverage_ratio']), 5),
+        'target_sample_area': int(plan['target_sample_area']),
+        'source_area': int(plan['source_area']),
+        'activity_peak': round(float(activity_summary.get('activity_peak', 0.0)), 5),
+        'activity_mean': round(float(activity_summary.get('activity_mean', 0.0)), 5),
         'overlay_supported': False,
     }
 
@@ -257,10 +503,23 @@ def _offset_sample_metadata_to_source(sample_metadata, offset_x, offset_y, sourc
     return meta
 
 
-def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None, min_object_size=3, max_gap=25):
+def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None, min_object_size=3, max_gap=25,
+                                parameter_scale=1.0):
     """Automatically detect the best minimum path length by analyzing path distribution."""
     if test_lengths is None:
         test_lengths = [1, 3, 5, 8, 12, 16, 20]
+
+    scaled_test_lengths = []
+    seen_scaled_lengths = set()
+    for logical_length in test_lengths:
+        effective_length = scale_length_parameter(logical_length, parameter_scale=parameter_scale)
+        if effective_length in seen_scaled_lengths:
+            continue
+        seen_scaled_lengths.add(effective_length)
+        scaled_test_lengths.append((int(logical_length), int(effective_length)))
+
+    fallback_logical_length = int(test_lengths[0]) if test_lengths else 3
+    fallback_effective_length = scale_length_parameter(fallback_logical_length, parameter_scale=parameter_scale)
 
     print(f"Auto-detecting min path length using threshold {dark_threshold:.3f}...")
 
@@ -268,7 +527,8 @@ def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None, m
         initial_paths = extract_skeleton_paths(gray_image, dark_threshold, min_object_size=min_object_size)
         if len(initial_paths) == 0:
             return {
-                'best_min_length': 3,
+                'best_min_length': fallback_logical_length,
+                'effective_best_min_length': fallback_effective_length,
                 'best_score': 0,
                 'recommendation': 'no paths found - try adjusting threshold first'
             }
@@ -276,7 +536,8 @@ def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None, m
         merged_paths = merge_nearby_paths(initial_paths, max_gap=max_gap)
     except Exception as e:
         return {
-            'best_min_length': 3,
+            'best_min_length': fallback_logical_length,
+            'effective_best_min_length': fallback_effective_length,
             'best_score': 0,
             'recommendation': f'error in path extraction: {str(e)}'
         }
@@ -286,7 +547,8 @@ def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None, m
 
     if len(path_lengths) == 0:
         return {
-            'best_min_length': 3,
+            'best_min_length': fallback_logical_length,
+            'effective_best_min_length': fallback_effective_length,
             'best_score': 0,
             'recommendation': 'no merged paths found'
         }
@@ -296,12 +558,13 @@ def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None, m
 
     print(f"  Found {total_paths} merged paths, lengths: {min(path_lengths)}-{max(path_lengths)}, median: {median_length}")
 
-    best_min_length = test_lengths[0]
+    best_min_length = fallback_logical_length
+    best_effective_min_length = fallback_effective_length
     best_score = 0
     length_results = []
 
-    for min_length in test_lengths:
-        valid_paths = [path for path in merged_paths if len(path) >= min_length]
+    for logical_min_length, effective_min_length in scaled_test_lengths:
+        valid_paths = [path for path in merged_paths if len(path) >= effective_min_length]
 
         if len(valid_paths) == 0:
             score = 0
@@ -318,16 +581,21 @@ def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None, m
             score = (count_score * 0.4 + length_score * 0.3 + coverage_score * 0.3) * penalty
 
         length_results.append({
-            'min_length': min_length,
+            'min_length': logical_min_length,
+            'effective_min_length': effective_min_length,
             'valid_paths': len(valid_paths) if 'valid_paths' in locals() else 0,
             'score': score
         })
 
         if score > best_score:
             best_score = score
-            best_min_length = min_length
+            best_min_length = logical_min_length
+            best_effective_min_length = effective_min_length
 
-        print(f"    Min length {min_length}: {len(valid_paths) if 'valid_paths' in locals() else 0} paths, score: {score:.3f}")
+        print(
+            f"    Min length {logical_min_length} (effective {effective_min_length}): "
+            f"{len(valid_paths) if 'valid_paths' in locals() else 0} paths, score: {score:.3f}"
+        )
 
     recommendation = 'auto-detected' if best_score > 0.3 else ('low confidence - consider manual adjustment' if best_score > 0.1 else 'manual adjustment recommended')
 
@@ -335,6 +603,7 @@ def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None, m
 
     return {
         'best_min_length': best_min_length,
+        'effective_best_min_length': best_effective_min_length,
         'best_score': best_score,
         'all_results': length_results,
         'recommendation': recommendation,
@@ -347,7 +616,7 @@ def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None, m
 
 
 def auto_detect_dark_threshold(gray_image, sample_size=1000, threshold_range=(0.05, 0.8), num_thresholds=15,
-                               min_object_size=3, max_gap=25):
+                               min_object_size=3, max_gap=25, parameter_scale=1.0):
     """Automatically detect the best dark threshold by sampling the image."""
     height, width = gray_image.shape
     sample_indices = np.random.choice(height * width, min(sample_size, height * width), replace=False)
@@ -358,6 +627,7 @@ def auto_detect_dark_threshold(gray_image, sample_size=1000, threshold_range=(0.
     best_threshold = threshold_range[0]
     best_score = 0
     threshold_results = []
+    effective_min_path_length = scale_length_parameter(3, parameter_scale=parameter_scale)
 
     print(f"Auto-detecting dark threshold from {len(sample_values)} sample pixels...")
 
@@ -369,7 +639,7 @@ def auto_detect_dark_threshold(gray_image, sample_size=1000, threshold_range=(0.
                 score = 0
             else:
                 merged_paths = merge_nearby_paths(initial_paths, max_gap=max_gap)
-                valid_paths = [path for path in merged_paths if len(path) >= 3]
+                valid_paths = [path for path in merged_paths if len(path) >= effective_min_path_length]
 
                 if len(valid_paths) == 0:
                     score = 0
@@ -406,6 +676,7 @@ def auto_detect_dark_threshold(gray_image, sample_size=1000, threshold_range=(0.
         'best_threshold': best_threshold,
         'best_score': best_score,
         'all_results': threshold_results,
+        'effective_min_path_length': effective_min_path_length,
         'recommendation': 'auto-detected' if best_score > 0 else 'manual adjustment needed'
     }
 
@@ -418,7 +689,8 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
                                     on_best_result=None,
                                     on_progress=None,
                                     confidence_target=0.95,
-                                    min_object_size=3):
+                                    min_object_size=3,
+                                    parameter_scale=1.0):
     """Jointly tune threshold and min path length on a preview image for a strong first extraction."""
     if base_min_lengths is None:
         base_min_lengths = [1, 3, 5, 8, 12, 16, 20]
@@ -456,18 +728,20 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
     ))
 
     candidate_lengths = []
-    seen_preview_lengths = set()
-    for full_length in base_min_lengths:
-        preview_length = max(1, int(round(full_length * scale)))
-        if preview_length in seen_preview_lengths:
+    seen_candidate_keys = set()
+    for logical_length in base_min_lengths:
+        effective_full_length = scale_length_parameter(logical_length, parameter_scale=parameter_scale)
+        preview_length = max(1, int(round(effective_full_length * scale)))
+        candidate_key = (int(effective_full_length), int(preview_length))
+        if candidate_key in seen_candidate_keys:
             continue
-        seen_preview_lengths.add(preview_length)
-        candidate_lengths.append((int(full_length), preview_length))
+        seen_candidate_keys.add(candidate_key)
+        candidate_lengths.append((int(logical_length), int(effective_full_length), int(preview_length)))
 
     threshold_min = float(min(threshold_range[0], threshold_range[1]))
     threshold_max = float(max(threshold_range[0], threshold_range[1]))
     max_threshold_evals = max(2, int(num_thresholds))
-    merge_gap = max(6, int(round(25 * scale)))
+    merge_gap = max(6, int(round(25 * max(1.0, float(parameter_scale)) * scale)))
 
     best_result = None
     second_best_score = 0.0
@@ -516,6 +790,7 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
             'high_confidence_reached': False,
             'best_threshold': float(best_result['threshold']) if best_result is not None else 0.20,
             'best_min_length': int(best_result['best_min_length']) if best_result is not None else 3,
+            'effective_min_path_length': int(best_result['effective_min_path_length']) if best_result is not None else scale_length_parameter(3, parameter_scale=parameter_scale),
             'quality_score': float(best_result['score']) if best_result is not None else 0.0,
             'confidence_score': float(current_confidence),
             'sample_metadata': sample_metadata or {'sampled': False},
@@ -607,14 +882,21 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
             _emit_progress(phase='extracting_paths', threshold=threshold, threshold_index=threshold_index, current_min_length=0)
             initial_paths = extract_skeleton_paths(preview_image, float(threshold), min_object_size=min_object_size)
             if not initial_paths:
-                return ({'threshold': float(threshold), 'best_min_length': 3, 'score': 0.0, 'valid_paths': 0, 'longest_path': 0}, [])
+                return ({
+                    'threshold': float(threshold),
+                    'best_min_length': 3,
+                    'effective_min_path_length': scale_length_parameter(3, parameter_scale=parameter_scale),
+                    'score': 0.0,
+                    'valid_paths': 0,
+                    'longest_path': 0,
+                }, [])
 
             _emit_progress(phase='merging_paths', threshold=threshold, threshold_index=threshold_index, current_min_length=0)
             merged_paths = merge_nearby_paths(initial_paths, max_gap=merge_gap, verbose=False, should_continue=should_continue)
             threshold_best = None
 
-            for full_min_length, preview_min_length in candidate_lengths:
-                _emit_progress(phase='scoring_min_length', threshold=threshold, threshold_index=threshold_index, current_min_length=int(full_min_length), threshold_best=threshold_best)
+            for logical_min_length, effective_full_length, preview_min_length in candidate_lengths:
+                _emit_progress(phase='scoring_min_length', threshold=threshold, threshold_index=threshold_index, current_min_length=int(logical_min_length), threshold_best=threshold_best)
                 if not should_continue():
                     cancelled = True
                     print('Auto-tune cancelled while evaluating candidates')
@@ -629,7 +911,8 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
                 if not valid_paths:
                     candidate = {
                         'threshold': float(threshold),
-                        'best_min_length': int(full_min_length),
+                        'best_min_length': int(logical_min_length),
+                        'effective_min_path_length': int(effective_full_length),
                         'preview_min_length': int(preview_min_length),
                         'score': 0.0,
                         'valid_paths': 0,
@@ -658,7 +941,8 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
 
                     candidate = {
                         'threshold': float(threshold),
-                        'best_min_length': int(full_min_length),
+                        'best_min_length': int(logical_min_length),
+                        'effective_min_path_length': int(effective_full_length),
                         'preview_min_length': int(preview_min_length),
                         'score': float(score),
                         'threshold_bias': float(threshold_bias),
@@ -684,6 +968,7 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
                 return ({
                     'threshold': float(threshold),
                     'best_min_length': 3,
+                    'effective_min_path_length': scale_length_parameter(3, parameter_scale=parameter_scale),
                     'preview_min_length': 3,
                     'score': 0.0,
                     'valid_paths': 0,
@@ -755,6 +1040,7 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
                 on_best_result({
                     'best_threshold': float(best_result['threshold']),
                     'best_min_length': int(best_result['best_min_length']),
+                    'effective_min_path_length': int(best_result['effective_min_path_length']),
                     'quality_score': float(best_result['score']),
                     'confidence_score': float(max(0.0, min(1.0, (best_result['score'] - second_best_score) / max(best_result['score'], 1e-6)))),
                     'recommendation': 'partial best-so-far',
@@ -801,6 +1087,7 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
         return {
             'best_threshold': 0.20,
             'best_min_length': 3,
+            'effective_min_path_length': scale_length_parameter(3, parameter_scale=parameter_scale),
             'quality_score': 0.0,
             'confidence_score': 0.0,
             'recommendation': 'failed to detect best settings',
@@ -827,6 +1114,7 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
     return {
         'best_threshold': float(best_result['threshold']),
         'best_min_length': int(best_result['best_min_length']),
+        'effective_min_path_length': int(best_result['effective_min_path_length']),
         'quality_score': float(best_result['score']),
         'confidence_score': float(confidence_score),
         'recommendation': recommendation,
@@ -838,6 +1126,7 @@ def auto_tune_extraction_parameters(gray_image, threshold_range=(0.05, 0.8), num
         'timed_out': timed_out,
         'cancelled': cancelled,
         'high_confidence_reached': high_confidence_reached,
+        'parameter_scale': float(max(1.0, parameter_scale)),
         'elapsed_sec': float(time.perf_counter() - started_at),
         'sample_metadata': sample_metadata or {'sampled': False}
     }
