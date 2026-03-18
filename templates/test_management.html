@@ -208,6 +208,37 @@
       margin-top: 6px;
     }
 
+    .control-stack {
+      display: grid;
+      gap: 8px;
+    }
+
+    .control-card {
+      border: 1px solid var(--edge);
+      border-radius: 10px;
+      padding: 8px;
+      background: #fffcf5;
+    }
+
+    .control-card label {
+      display: block;
+      font-size: 12px;
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+
+    .checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 0;
+    }
+
+    .inline-value {
+      font-family: var(--mono);
+      color: #6d3a16;
+    }
+
     @media (max-width: 980px) {
       .shell {
         grid-template-columns: 1fr;
@@ -226,6 +257,29 @@
         <button id="runBtn">Run Pytest</button>
         <button id="runGoldenBtn" class="secondary">Run + Update Goldens</button>
       </div>
+
+      <h2>Fitting Controls</h2>
+      <div class="control-stack" style="margin-bottom: 12px;">
+        <div class="control-card">
+          <label class="checkbox-label"><input type="checkbox" id="enableCurveFitting"> Enable Curve Fitting</label>
+          <div class="small-note">Applies to both pytest fixture fitting and the stored inspection artifacts for this run.</div>
+        </div>
+        <div class="control-card">
+          <label for="cubicFitTolerance">Cubic Fit Tolerance <span class="inline-value" id="cubicFitToleranceValue">1.00 px</span></label>
+          <input type="range" id="cubicFitTolerance" min="0.35" max="4.0" step="0.05" value="1.0">
+          <div class="small-note">Lower values hold tighter to the extracted path. Higher values reduce cubic count.</div>
+        </div>
+        <div class="control-card">
+          <label for="endpointTangentStrictness">Endpoint Tangent Strictness <span class="inline-value" id="endpointTangentStrictnessValue">85%</span></label>
+          <input type="range" id="endpointTangentStrictness" min="0" max="100" step="1" value="85">
+          <div class="small-note">Controls how strongly the fitted cubic handles follow the extracted path direction.</div>
+        </div>
+        <div class="control-card">
+          <label class="checkbox-label"><input type="checkbox" id="forceOrthogonalAsLines"> Force Orthogonal Paths As Lines</label>
+          <div class="small-note">Keeps axis-aligned and corner-like paths as straight segments even when curve fitting is enabled.</div>
+        </div>
+      </div>
+      <div class="small-note" id="fittingSummary"></div>
 
       <h2>Run Fixture Queue</h2>
       <div class="row" style="margin-bottom: 8px;">
@@ -301,7 +355,10 @@
     </section>
   </div>
 
+  <script id="fittingDefaultsData" type="application/json">{{ fitting_defaults|tojson }}</script>
+
   <script>
+    const fittingDefaults = JSON.parse(document.getElementById('fittingDefaultsData').textContent);
     const state = {
       currentRunId: null,
       currentFixtureId: null,
@@ -337,11 +394,57 @@
     const segmentRows = document.getElementById('segmentRows');
     const selectedSegmentsCount = document.getElementById('selectedSegmentsCount');
     const segmentComment = document.getElementById('segmentComment');
+    const fittingSummary = document.getElementById('fittingSummary');
     const canvas = document.getElementById('scene');
     const ctx = canvas.getContext('2d');
+    const fittingInputs = {
+      enable_curve_fitting: document.getElementById('enableCurveFitting'),
+      cubic_fit_tolerance: document.getElementById('cubicFitTolerance'),
+      endpoint_tangent_strictness: document.getElementById('endpointTangentStrictness'),
+      force_orthogonal_as_lines: document.getElementById('forceOrthogonalAsLines'),
+    };
+    const cubicFitToleranceValue = document.getElementById('cubicFitToleranceValue');
+    const endpointTangentStrictnessValue = document.getElementById('endpointTangentStrictnessValue');
 
     function updateSelectedCountPill() {
       selectedSegmentsCount.textContent = `${state.selectedSegments.size} selected`;
+    }
+
+    function getFittingParameters() {
+      return {
+        enable_curve_fitting: !!fittingInputs.enable_curve_fitting.checked,
+        cubic_fit_tolerance: Number(fittingInputs.cubic_fit_tolerance.value),
+        endpoint_tangent_strictness: Number(fittingInputs.endpoint_tangent_strictness.value),
+        force_orthogonal_as_lines: !!fittingInputs.force_orthogonal_as_lines.checked,
+      };
+    }
+
+    function updateFittingLabels() {
+      cubicFitToleranceValue.textContent = `${Number(fittingInputs.cubic_fit_tolerance.value).toFixed(2)} px`;
+      endpointTangentStrictnessValue.textContent = `${Math.round(Number(fittingInputs.endpoint_tangent_strictness.value))}%`;
+    }
+
+    function renderFittingSummary(params) {
+      if (!params) {
+        fittingSummary.textContent = '';
+        return;
+      }
+      const curveMode = params.enable_curve_fitting ? 'curves enabled' : 'line-only output';
+      const orthMode = params.force_orthogonal_as_lines ? 'orthogonal paths forced to lines' : 'orthogonal paths may curve';
+      fittingSummary.textContent = `${curveMode} | tolerance ${Number(params.cubic_fit_tolerance).toFixed(2)} px | tangents ${Math.round(Number(params.endpoint_tangent_strictness))}% | ${orthMode}`;
+    }
+
+    function applyFittingParameters(params) {
+      const next = {
+        ...fittingDefaults,
+        ...(params || {}),
+      };
+      fittingInputs.enable_curve_fitting.checked = !!next.enable_curve_fitting;
+      fittingInputs.cubic_fit_tolerance.value = Number(next.cubic_fit_tolerance);
+      fittingInputs.endpoint_tangent_strictness.value = Number(next.endpoint_tangent_strictness);
+      fittingInputs.force_orthogonal_as_lines.checked = !!next.force_orthogonal_as_lines;
+      updateFittingLabels();
+      renderFittingSummary(getFittingParameters());
     }
 
     function getQueuedFixtureIds() {
@@ -550,6 +653,7 @@
         state.currentRunId = runs[0].run_id;
         runSelect.value = state.currentRunId;
         state.activeRunFixtureIds = runs[0].fixture_ids || [];
+        applyFittingParameters(runs[0].fitting_parameters || fittingDefaults);
       }
     }
 
@@ -559,6 +663,7 @@
       if (state.currentRunId) {
         const run = state.runsById.get(state.currentRunId);
         state.activeRunFixtureIds = run?.fixture_ids || [];
+        applyFittingParameters(run?.fitting_parameters || fittingDefaults);
         const completed = Number(run?.completed_fixtures || 0);
         const isDone = run?.status === 'completed' || run?.status === 'failed';
         updateRunProgressMeta({
@@ -591,13 +696,19 @@
       }
 
       resetLog('Starting run...');
+      const fittingParameters = getFittingParameters();
       const payload = await fetchJson('/api/test-runs/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ update_goldens: !!updateGoldens, fixture_ids: queuedFixtures }),
+        body: JSON.stringify({
+          update_goldens: !!updateGoldens,
+          fixture_ids: queuedFixtures,
+          fitting_parameters: fittingParameters,
+        }),
       });
       state.currentRunId = payload.run_id;
       state.activeRunFixtureIds = payload.fixture_ids || queuedFixtures;
+      applyFittingParameters(payload.fitting_parameters || fittingParameters);
       updateFixtureStepper(state.activeRunFixtureIds, 0, {});
       state.currentFixtureId = state.activeRunFixtureIds[0] || state.currentFixtureId;
       updateStatus(payload.status || 'queued');
@@ -626,6 +737,7 @@
           const isDone = inferredStatus === 'completed' || inferredStatus === 'failed';
           const completed = Number(p.completed_fixtures || 0);
           const fixtureResults = p.fixture_results || {};
+          applyFittingParameters(p.fitting_parameters || fittingDefaults);
           updateFixtureStepper(
             state.activeRunFixtureIds,
             isDone ? state.activeRunFixtureIds.length : completed,
@@ -826,11 +938,13 @@
 
       const dev = detail.deviation || {};
       const flags = detail.contract_flags || {};
+      const fitting = detail.fitting_parameters || fittingDefaults;
       metrics.textContent = [
         `fixture: ${detail.fixture_id} (${detail.category})`,
         `description: ${detail.description}`,
         `raw paths: ${detail.raw_path_count}, non-empty: ${detail.non_empty_path_count}`,
         `segment count: ${detail.segment_count}, segment types: ${(detail.segment_types || []).join(', ')}`,
+        `fitting: curves ${fitting.enable_curve_fitting ? 'on' : 'off'}, tolerance ${Number(fitting.cubic_fit_tolerance || 0).toFixed(2)} px, tangents ${Math.round(Number(fitting.endpoint_tangent_strictness || 0))}%, orth-lines ${fitting.force_orthogonal_as_lines ? 'on' : 'off'}`,
         `mean dev: ${(dev.mean_deviation_px || 0).toFixed(3)} px`,
         `max dev: ${(dev.max_deviation_px || 0).toFixed(3)} px`,
         `coverage: ${(dev.coverage || 0).toFixed(3)}`,
@@ -920,6 +1034,7 @@
 
       state.detail = payload.fixture;
       state.activeRunFixtureIds = payload.summary?.fixture_ids || state.activeRunFixtureIds;
+      applyFittingParameters(payload.summary?.fitting_parameters || payload.fixture?.fitting_parameters || fittingDefaults);
       const summaryStatus = payload.summary?.status || 'unknown';
       updateStatus(summaryStatus);
       const summaryIsDone = summaryStatus === 'completed' || summaryStatus === 'failed';
@@ -955,6 +1070,16 @@
     document.getElementById('prevFixture').addEventListener('click', () => fixtureStep(-1));
     document.getElementById('nextFixture').addEventListener('click', () => fixtureStep(1));
     queueFixtureSelect.addEventListener('change', () => updateQueueSummary());
+    fittingInputs.enable_curve_fitting.addEventListener('input', () => renderFittingSummary(getFittingParameters()));
+    fittingInputs.cubic_fit_tolerance.addEventListener('input', () => {
+      updateFittingLabels();
+      renderFittingSummary(getFittingParameters());
+    });
+    fittingInputs.endpoint_tangent_strictness.addEventListener('input', () => {
+      updateFittingLabels();
+      renderFittingSummary(getFittingParameters());
+    });
+    fittingInputs.force_orthogonal_as_lines.addEventListener('input', () => renderFittingSummary(getFittingParameters()));
 
     runSelect.addEventListener('change', async ev => {
       state.currentRunId = ev.target.value;
@@ -978,6 +1103,7 @@
     });
 
     renderLayerControls();
+    applyFittingParameters(fittingDefaults);
     updateSelectedCountPill();
     updateQueueSummary();
     refreshRuns().catch(err => appendLog(err.message));

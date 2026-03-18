@@ -35,6 +35,12 @@ FIXTURE_SIZE = 64
 FIXTURE_SW = 3
 DARK_THRESHOLD = 0.5
 IDEAL_SAMPLE_N = 400
+DEFAULT_FITTING_PARAMETERS = {
+    "enable_curve_fitting": False,
+    "cubic_fit_tolerance": 1.0,
+    "endpoint_tangent_strictness": 85.0,
+    "force_orthogonal_as_lines": False,
+}
 
 
 @dataclass
@@ -54,6 +60,7 @@ class TestRunState:
     current_fixture: str | None = None
     pytest_exit_code: int | None = None
     fixture_results: dict[str, str] = field(default_factory=dict)
+    fitting_parameters: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_FITTING_PARAMETERS))
 
 
 _RUNS: dict[str, TestRunState] = {}
@@ -87,6 +94,59 @@ def _normalize_fixture_selection(fixture_ids: list[str] | None) -> list[str]:
     return selected
 
 
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def _coerce_float(value: Any, default: float, minimum: float, maximum: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, number))
+
+
+def _normalize_fitting_parameters(fitting_parameters: dict[str, Any] | None) -> dict[str, Any]:
+    if fitting_parameters is None:
+        return dict(DEFAULT_FITTING_PARAMETERS)
+    if not isinstance(fitting_parameters, dict):
+        raise ValueError("fitting_parameters must be an object")
+
+    defaults = DEFAULT_FITTING_PARAMETERS
+    return {
+        "enable_curve_fitting": _coerce_bool(
+            fitting_parameters.get("enable_curve_fitting"),
+            defaults["enable_curve_fitting"],
+        ),
+        "cubic_fit_tolerance": _coerce_float(
+            fitting_parameters.get("cubic_fit_tolerance"),
+            defaults["cubic_fit_tolerance"],
+            0.35,
+            4.0,
+        ),
+        "endpoint_tangent_strictness": _coerce_float(
+            fitting_parameters.get("endpoint_tangent_strictness"),
+            defaults["endpoint_tangent_strictness"],
+            0.0,
+            100.0,
+        ),
+        "force_orthogonal_as_lines": _coerce_bool(
+            fitting_parameters.get("force_orthogonal_as_lines"),
+            defaults["force_orthogonal_as_lines"],
+        ),
+    }
+
+
 def _fixture_pass_fail_from_results(
     fixture_ids: list[str], node_results: dict[str, str]
 ) -> dict[str, str]:
@@ -103,7 +163,11 @@ def _fixture_pass_fail_from_results(
     return results
 
 
-def _run_pytest(update_goldens: bool, fixture_ids: list[str]) -> dict[str, Any]:
+def _run_pytest(
+    update_goldens: bool,
+    fixture_ids: list[str],
+    fitting_parameters: dict[str, Any],
+) -> dict[str, Any]:
     cmd = [".venv/bin/python", "-m", "pytest", "tests/test_fit_curves.py", "-v", "--tb=short"]
     if update_goldens:
         cmd.append("--update-goldens")
@@ -111,6 +175,10 @@ def _run_pytest(update_goldens: bool, fixture_ids: list[str]) -> dict[str, Any]:
     env = os.environ.copy()
     if fixture_ids:
         env["TEST_UI_FIXTURE_IDS"] = ",".join(fixture_ids)
+    env["TEST_UI_ENABLE_CURVE_FITTING"] = "1" if fitting_parameters["enable_curve_fitting"] else "0"
+    env["TEST_UI_CUBIC_FIT_TOLERANCE"] = str(fitting_parameters["cubic_fit_tolerance"])
+    env["TEST_UI_ENDPOINT_TANGENT_STRICTNESS"] = str(fitting_parameters["endpoint_tangent_strictness"])
+    env["TEST_UI_FORCE_ORTHOGONAL_AS_LINES"] = "1" if fitting_parameters["force_orthogonal_as_lines"] else "0"
 
     proc = subprocess.run(
         cmd,
@@ -266,11 +334,17 @@ def _collect_cubic_handles(raw_path: list[list[int]], segments: list[dict[str, A
     return handles
 
 
-def _fixture_analysis(fixture_id: str) -> dict[str, Any]:
+def _fixture_analysis(fixture_id: str, fitting_parameters: dict[str, Any]) -> dict[str, Any]:
     fx = load_fixture(fixture_id, size=FIXTURE_SIZE, stroke_width=FIXTURE_SW)
     raw_paths = extract_skeleton_paths(fx.gray, DARK_THRESHOLD, min_object_size=3)
     non_empty = [p for p in raw_paths if len(p) >= 2]
-    fitted_paths = fit_curve_segments(non_empty, tolerance_px=1.0)
+    fitted_paths = fit_curve_segments(
+        non_empty,
+        tolerance_px=fitting_parameters["cubic_fit_tolerance"],
+        endpoint_tangent_strictness=fitting_parameters["endpoint_tangent_strictness"],
+        force_orthogonal_as_lines=fitting_parameters["force_orthogonal_as_lines"],
+        enable_curve_fitting=fitting_parameters["enable_curve_fitting"],
+    )
     fitted_paths = [_normalize_segments(path_segments) for path_segments in fitted_paths]
 
     sampled_paths: list[list[list[float]]] = []
@@ -329,6 +403,7 @@ def _fixture_analysis(fixture_id: str) -> dict[str, Any]:
         "category": fx.category,
         "tolerance_px": float(fx.tolerance_px),
         "dark_threshold": DARK_THRESHOLD,
+        "fitting_parameters": dict(fitting_parameters),
         "raw_path_count": len(raw_paths),
         "non_empty_path_count": len(non_empty),
         "segment_count": segment_count,
@@ -356,13 +431,19 @@ def _write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2))
 
 
-def _worker(run_state: TestRunState, update_goldens: bool, fixture_ids: list[str]) -> None:
+def _worker(
+    run_state: TestRunState,
+    update_goldens: bool,
+    fixture_ids: list[str],
+    fitting_parameters: dict[str, Any],
+) -> None:
     run_state.status = "running"
     run_state.started_at = _utc_now_iso()
     run_state.fixture_ids = list(fixture_ids)
     run_state.fixture_count = len(fixture_ids)
     run_state.completed_fixtures = 0
     run_state.current_fixture = None
+    run_state.fitting_parameters = dict(fitting_parameters)
     run_state.progress_messages.put(
         f"Running pytest suite for {run_state.fixture_count} fixture(s)..."
     )
@@ -382,7 +463,11 @@ def _worker(run_state: TestRunState, update_goldens: bool, fixture_ids: list[str
     fixture_dir = run_state.artifact_dir / "fixtures"
 
     try:
-        pytest_result = _run_pytest(update_goldens=update_goldens, fixture_ids=fixture_ids)
+        pytest_result = _run_pytest(
+            update_goldens=update_goldens,
+            fixture_ids=fixture_ids,
+            fitting_parameters=fitting_parameters,
+        )
         run_state.pytest_exit_code = int(pytest_result["exit_code"])
         run_state.fixture_results = _fixture_pass_fail_from_results(
             fixture_ids, pytest_result["node_results"]
@@ -396,7 +481,7 @@ def _worker(run_state: TestRunState, update_goldens: bool, fixture_ids: list[str
             run_state.current_fixture = fixture_id
             run_state.progress_messages.put(f"Analyzing fixture {index}/{total}: {fixture_id}")
             try:
-                detail = _fixture_analysis(fixture_id)
+                detail = _fixture_analysis(fixture_id, fitting_parameters)
                 fixture_details.append(detail)
                 _write_json(fixture_dir / f"{fixture_id}.json", detail)
                 run_state.completed_fixtures = index
@@ -428,6 +513,7 @@ def _worker(run_state: TestRunState, update_goldens: bool, fixture_ids: list[str
         },
         "fixture_ids": fixture_ids,
         "fixture_count": len(fixture_ids),
+        "fitting_parameters": dict(fitting_parameters),
         "fixture_results": run_state.fixture_results,
         "fixture_errors": fixture_errors,
         "artifact_error": error_message,
@@ -449,11 +535,16 @@ def _worker(run_state: TestRunState, update_goldens: bool, fixture_ids: list[str
     run_state.progress_messages.put("Run artifacts written.")
 
 
-def create_run(update_goldens: bool = False, fixture_ids: list[str] | None = None) -> dict[str, Any]:
+def create_run(
+    update_goldens: bool = False,
+    fixture_ids: list[str] | None = None,
+    fitting_parameters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     RUNS_ROOT.mkdir(parents=True, exist_ok=True)
     run_id = _make_run_id()
     artifact_dir = RUNS_ROOT / run_id
     selected_fixtures = _normalize_fixture_selection(fixture_ids)
+    normalized_fitting_parameters = _normalize_fitting_parameters(fitting_parameters)
     if not selected_fixtures:
         raise ValueError("No valid fixture IDs selected for run")
 
@@ -463,11 +554,12 @@ def create_run(update_goldens: bool = False, fixture_ids: list[str] | None = Non
         artifact_dir=artifact_dir,
         fixture_ids=selected_fixtures,
         fixture_count=len(selected_fixtures),
+        fitting_parameters=dict(normalized_fitting_parameters),
     )
 
     worker = threading.Thread(
         target=_worker,
-        args=(run_state, update_goldens, selected_fixtures),
+        args=(run_state, update_goldens, selected_fixtures, normalized_fitting_parameters),
         daemon=True,
     )
     run_state.thread = worker
@@ -483,6 +575,7 @@ def create_run(update_goldens: bool = False, fixture_ids: list[str] | None = Non
         "update_goldens": bool(update_goldens),
         "fixture_ids": selected_fixtures,
         "fixture_count": len(selected_fixtures),
+        "fitting_parameters": dict(normalized_fitting_parameters),
     }
 
 
@@ -498,6 +591,7 @@ def _in_memory_run_status(run_state: TestRunState) -> dict[str, Any]:
         "completed_fixtures": run_state.completed_fixtures,
         "current_fixture": run_state.current_fixture,
         "fixture_results": run_state.fixture_results,
+        "fitting_parameters": run_state.fitting_parameters,
         "artifact_dir": str(run_state.artifact_dir.relative_to(REPO_ROOT)),
     }
 
@@ -519,6 +613,7 @@ def list_runs() -> list[dict[str, Any]]:
                     "fixture_count": summary.get("fixture_count", 0),
                     "fixture_ids": summary.get("fixture_ids", []),
                     "fixture_results": summary.get("fixture_results", {}),
+                    "fitting_parameters": summary.get("fitting_parameters", dict(DEFAULT_FITTING_PARAMETERS)),
                     "artifact_dir": str(summary_path.parent.relative_to(REPO_ROOT)),
                     "pytest_summary": summary.get("pytest", {}).get("summary_line", ""),
                 }
@@ -578,6 +673,7 @@ def get_run_progress(run_id: str) -> dict[str, Any] | None:
             "completed_fixtures": summary.get("fixture_count", 0),
             "current_fixture": None,
             "fixture_results": summary.get("fixture_results", {}),
+            "fitting_parameters": summary.get("fitting_parameters", dict(DEFAULT_FITTING_PARAMETERS)),
         }
 
     # If a summary was already persisted and thread is no longer alive, prefer
@@ -605,4 +701,5 @@ def get_run_progress(run_id: str) -> dict[str, Any] | None:
         "current_fixture": state.current_fixture,
         "pytest_exit_code": state.pytest_exit_code,
         "fixture_results": state.fixture_results,
+        "fitting_parameters": state.fitting_parameters,
     }

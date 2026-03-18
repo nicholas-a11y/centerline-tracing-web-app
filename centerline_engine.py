@@ -9,6 +9,7 @@ All legacy methods (original centerline, KD-tree, red circles) have been removed
 
 import os
 import time
+import bisect
 import numpy as np
 from skimage import io, color, filters, morphology
 from skimage.morphology import binary_erosion, footprint_rectangle
@@ -531,6 +532,14 @@ def _line_distance_stats(points):
     return (float(max(distances)) if distances else 0.0, float(np.mean(distances)) if distances else 0.0)
 
 
+def _path_length(points):
+    if len(points) < 2:
+        return 0.0
+
+    pts = np.asarray(points, dtype=float)
+    return float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum())
+
+
 def _max_turn_angle(points):
     if len(points) < 3:
         return 0.0
@@ -551,7 +560,7 @@ def _max_turn_angle(points):
     return max_angle
 
 
-def _project_points_to_line(points, start, end):
+def _project_points_to_line(points, start, end, clamp=True):
     pts = np.asarray(points, dtype=float)
     start = np.asarray(start, dtype=float)
     end = np.asarray(end, dtype=float)
@@ -563,7 +572,8 @@ def _project_points_to_line(points, start, end):
     projected = []
     for pt in pts:
         t = float(np.dot(pt - start, seg) / denom)
-        t = max(0.0, min(1.0, t))
+        if clamp:
+            t = max(0.0, min(1.0, t))
         projected.append(start + t * seg)
 
     projected = np.asarray(projected, dtype=float)
@@ -599,14 +609,128 @@ def _find_straight_terminal_run(points, at_start=True, min_points=5, max_points=
     return best_end if at_start else (len(points) - 1 - best_end)
 
 
+def _terminal_turn_angle(points, at_start=True):
+    if len(points) < 3:
+        return 0.0
+
+    pts = np.asarray(points, dtype=float)
+    if at_start:
+        first = pts[1] - pts[0]
+        second = pts[2] - pts[1]
+    else:
+        first = pts[-2] - pts[-1]
+        second = pts[-3] - pts[-2]
+
+    first_norm = float(np.linalg.norm(first))
+    second_norm = float(np.linalg.norm(second))
+    if first_norm <= 1e-9 or second_norm <= 1e-9:
+        return 0.0
+
+    cosang = float(np.clip(np.dot(first, second) / (first_norm * second_norm), -1.0, 1.0))
+    return float(np.degrees(np.arccos(cosang)))
+
+
+def _is_terminal_spur(points, at_start=True, deviation_tol=0.45):
+    if len(points) < 3:
+        return False
+
+    pts = np.asarray(points, dtype=float)
+    total_length = _path_length(points)
+    if total_length <= 1e-9:
+        return False
+
+    segment = pts[1] - pts[0] if at_start else pts[-1] - pts[-2]
+    segment_length = float(np.linalg.norm(segment))
+    if segment_length > min(8.0, total_length * 0.08):
+        return False
+
+    remainder = pts[1:] if at_start else pts[:-1]
+    if _path_length(remainder) < max(segment_length * 4.0, 20.0):
+        return False
+
+    endpoint = pts[0] if at_start else pts[-1]
+    if _point_to_segment_distance(endpoint, remainder[0], remainder[-1]) > max(4.5, deviation_tol * 8.0):
+        return False
+
+    return _terminal_turn_angle(points, at_start=at_start) >= 18.0
+
+
+def _project_via_straight_core(points, deviation_tol=0.45):
+    if len(points) < 5 or _is_path_closed(points):
+        return None
+
+    trim_start = 1 if _is_terminal_spur(points, at_start=True, deviation_tol=deviation_tol) else 0
+    trim_end = 1 if _is_terminal_spur(points, at_start=False, deviation_tol=deviation_tol) else 0
+    if trim_start == 0 and trim_end == 0:
+        return None
+
+    core_end = len(points) - trim_end
+    core = points[trim_start:core_end]
+    if len(core) < 2:
+        return None
+
+    core_max_dev, core_mean_dev = _line_distance_stats(core)
+    if core_max_dev > max(1.6, deviation_tol * 3.6) or core_mean_dev > max(1.0, deviation_tol * 2.2):
+        return None
+
+    projected = _project_points_to_line(points, core[0], core[-1], clamp=False)
+    return _remove_duplicate_points([tuple(p) for p in projected])
+
+
+def _is_monotonic_step_line(points, detour_ratio):
+    if len(points) < 5:
+        return False
+
+    pts = np.asarray(points, dtype=float)
+    diffs = np.diff(pts, axis=0)
+    if len(diffs) == 0:
+        return False
+
+    def _axis_monotonic(values):
+        return bool(np.all(values >= -0.1) or np.all(values <= 0.1))
+
+    if not _axis_monotonic(diffs[:, 0]) or not _axis_monotonic(diffs[:, 1]):
+        return False
+
+    x_span = float(np.ptp(pts[:, 0]))
+    y_span = float(np.ptp(pts[:, 1]))
+    dominant_span = max(x_span, y_span)
+    minor_span = min(x_span, y_span)
+    if dominant_span < 24.0:
+        return False
+    if minor_span > max(6.0, dominant_span * 0.12):
+        return False
+
+    minor_step = float(np.max(np.abs(diffs[:, 0]))) if x_span <= y_span else float(np.max(np.abs(diffs[:, 1])))
+    if minor_step > 6.0:
+        return False
+
+    return detour_ratio <= 1.12
+
+
 def _straighten_path_runs(points, deviation_tol=0.45):
     cleaned = _remove_duplicate_points(points)
     if len(cleaned) < 5:
         return cleaned
 
+    projected_core = _project_via_straight_core(cleaned, deviation_tol=deviation_tol)
+    if projected_core is not None:
+        return projected_core
+
     pts = np.asarray(cleaned, dtype=float)
     max_dev, mean_dev = _line_distance_stats(pts)
-    if max_dev <= max(0.8, deviation_tol * 1.6) and mean_dev <= max(0.25, deviation_tol * 0.75):
+    path_length = _path_length(cleaned)
+    chord_length = float(np.linalg.norm(pts[-1] - pts[0])) if len(pts) >= 2 else 0.0
+    detour_ratio = path_length / max(chord_length, 1e-6) if chord_length > 0.0 else 1.0
+    if _is_monotonic_step_line(cleaned, detour_ratio):
+        projected = _project_points_to_line(pts, pts[0], pts[-1])
+        return _remove_duplicate_points([tuple(p) for p in projected])
+
+    if (
+        max_dev <= max(0.8, deviation_tol * 1.6)
+        and mean_dev <= max(0.4, deviation_tol * 0.95)
+        and detour_ratio <= 1.6
+    ):
         projected = _project_points_to_line(pts, pts[0], pts[-1])
         return _remove_duplicate_points([tuple(p) for p in projected])
 
@@ -836,22 +960,19 @@ def fit_curve_to_path(path, curve_type='polynomial', degree=3):
 
 def optimize_path_with_custom_params(path, circle_system, params, initial_score=None, return_diagnostics=False):
     """
-    Optimize path with a conservative RDP pre-simplification followed by a high-quality spline fit.
-    This approach prioritizes smoothness and fidelity over aggressive point reduction.
+    Optimize a path by simplifying the extracted skeleton path directly.
+
+    This keeps the final blue path close to the original skeleton geometry instead of
+    generating spline/arc candidates that substantially reshape it.
     """
     optimize_started_at = time.perf_counter()
     requested_tolerance = float(params.get('rdp_tolerance', 4.0))
-    smoothing_factor = float(params.get('smoothing_factor', 0.006))
     simplification_strength = max(0.0, min(100.0, float(params.get('simplification_strength', 50.0))))
     simplification_ratio = simplification_strength / 100.0
-    arc_fit_strength = max(0.0, min(100.0, float(params.get('arc_fit_strength', 72.0))))
     line_fit_strength = max(0.0, min(100.0, float(params.get('line_fit_strength', 22.0))))
     short_path_protection = max(0.0, min(100.0, float(params.get('short_path_protection', 65.0))))
-    arc_fit_ratio = arc_fit_strength / 100.0
     line_fit_ratio = line_fit_strength / 100.0
     short_path_protection_ratio = short_path_protection / 100.0
-    mean_closeness_px = max(0.25, float(params.get('mean_closeness_px', 1.8)))
-    peak_closeness_px = max(mean_closeness_px, float(params.get('peak_closeness_px', 4.5)))
     score_preservation_ratio = max(0.70, min(0.999, float(params.get('score_preservation', 80.0)) / 100.0))
     min_path_length = int(params.get('min_path_length', 3))
 
@@ -866,7 +987,6 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
             'phase_ms': {},
             'counts': {
                 'score_evaluations': 0,
-                'drift_measurements': 0,
                 'candidates_considered': 0,
                 'candidates_accepted': 0,
             },
@@ -886,57 +1006,13 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
             _record_phase_elapsed('score_evaluation', score_started_at)
         return score
 
-    def _measure_reference_drift(reference, candidate):
-        drift_started_at = time.perf_counter()
-        mean_dist, p95_dist = _reference_to_candidate_metrics(reference, candidate)
-        if diagnostics is not None:
-            diagnostics['counts']['drift_measurements'] += 1
-            _record_phase_elapsed('drift_measurement', drift_started_at)
-        return mean_dist, p95_dist
-
     print(f"    Optimizing path: {len(path)} points, initial score: {best_score:.2f}")
-
-    def _reduce_vertices_evenly(points, target_count):
-        """Keep endpoints while reducing control vertices for display simplicity."""
-        if len(points) <= target_count:
-            return points
-        target_count = max(2, int(target_count))
-        if target_count == 2:
-            return [points[0], points[-1]]
-
-        interior = points[1:-1]
-        keep_interior = max(0, target_count - 2)
-        if len(interior) <= keep_interior:
-            return points
-
-        indices = np.linspace(0, len(interior) - 1, keep_interior).astype(int)
-        reduced = [points[0]] + [interior[i] for i in indices] + [points[-1]]
-        return _remove_duplicate_points(reduced)
-
-    def _reference_to_candidate_metrics(reference, candidate, max_samples=120):
-        """Measure how closely the simplified blue path still follows the magenta source."""
-        if len(reference) < 2 or len(candidate) < 2:
-            return float('inf'), float('inf')
-
-        stride = max(1, len(reference) // max_samples)
-        sampled_reference = reference[::stride]
-        distances = []
-
-        for ref_point in sampled_reference:
-            best_dist = float('inf')
-            for idx in range(1, len(candidate)):
-                dist = _point_to_segment_distance(ref_point, candidate[idx - 1], candidate[idx])
-                if dist < best_dist:
-                    best_dist = dist
-            distances.append(best_dist)
-
-        if not distances:
-            return float('inf'), float('inf')
-
-        return float(np.mean(distances)), float(np.percentile(distances, 95))
 
     path_length = max(1.0, float(params.get('path_length', len(reference_path))))
     max_path_length = max(path_length, float(params.get('max_path_length', path_length)))
+    min_candidate_points = int(min_path_length)
+    if len(reference_path) >= max(10, min_path_length * 4) and path_length >= 18.0 and not _is_path_closed(reference_path):
+        min_candidate_points = 2
 
     relative_length = max(0.0, min(1.0, path_length / max_path_length))
     short_weight = (1.0 - relative_length) ** (0.6 + 0.9 * short_path_protection_ratio)
@@ -973,16 +1049,11 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
         reference_path,
         base_tolerance=max(0.45, requested_tolerance * 0.22),
     )
-    if len(preconditioned_path) >= min_path_length and len(preconditioned_path) <= len(reference_path):
+    if len(preconditioned_path) >= min_candidate_points and len(preconditioned_path) <= len(reference_path):
         precondition_reason = _path_geometry_rejection_reason(preconditioned_path, reference_path)
         if precondition_reason is None:
             precondition_score = _evaluate_path_score(preconditioned_path)
-            mean_dist, p95_dist = _measure_reference_drift(reference_path, preconditioned_path)
-            if (
-                precondition_score >= best_score * max(0.92, score_preservation_ratio - 0.05)
-                and mean_dist <= max(mean_closeness_px, 1.4)
-                and p95_dist <= max(peak_closeness_px, 3.2)
-            ):
+            if precondition_score >= best_score * max(0.92, score_preservation_ratio - 0.05):
                 current_path = preconditioned_path
                 best_score = precondition_score
                 print(
@@ -1014,16 +1085,48 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
     adaptive_tolerance = max(0.85, min(base_tolerance, requested_tolerance + 2.5))
     _record_phase_elapsed('path_analysis', analysis_started_at)
 
+    def _consider_simplified_candidate(candidate, label, min_ratio=None):
+        nonlocal current_path, best_score
+
+        if diagnostics is not None:
+            diagnostics['counts']['candidates_considered'] += 1
+
+        candidate = _remove_duplicate_points(candidate)
+        if len(candidate) < min_candidate_points or len(candidate) >= len(current_path):
+            return
+
+        rejection_reason = _path_geometry_rejection_reason(candidate, reference_path)
+        if rejection_reason is not None:
+            print(f"      ✗ Rejected {label.lower()} ({rejection_reason}).")
+            return
+
+        candidate_score = _evaluate_path_score(candidate)
+        score_ratio = max(score_preservation_ratio, min_ratio if min_ratio is not None else 0.0)
+
+        print(
+            f"      {label}: {len(current_path)} -> {len(candidate)} points, "
+            f"score: {candidate_score:.2f}"
+        )
+
+        if candidate_score >= best_score * score_ratio:
+            current_path = candidate
+            best_score = candidate_score
+            print(f"      ✓ Accepted {label.lower()}.")
+            if diagnostics is not None:
+                diagnostics['counts']['candidates_accepted'] += 1
+        else:
+            print(f"      ✗ Rejected {label.lower()} due to score drop.")
+
     if line_fit_ratio > 0.05:
         rdp_started_at = time.perf_counter()
         try:
             simplified_path = rdp_simplify(even_path, adaptive_tolerance)
-            if len(simplified_path) >= min_path_length:
+            if len(simplified_path) >= min_candidate_points:
                 rejection_reason = _path_geometry_rejection_reason(simplified_path, reference_path)
                 if rejection_reason is not None:
                     print(f"      ✗ Rejected adaptive pre-simplification ({rejection_reason}).")
                     simplified_path = None
-            if simplified_path is not None and len(simplified_path) >= min_path_length:
+            if simplified_path is not None and len(simplified_path) >= min_candidate_points:
                 rdp_score = _evaluate_path_score(simplified_path)
                 print(
                     f"      Adaptive RDP: {len(current_path)} -> {len(simplified_path)} points, "
@@ -1044,119 +1147,7 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
         finally:
             _record_phase_elapsed('adaptive_rdp', rdp_started_at)
 
-    spline_started_at = time.perf_counter()
-    try:
-        if len(current_path) >= 4:
-            smoothed_path = smooth_path_spline(
-                current_path,
-                smoothing_factor * (1.0 + 3.0 * arc_fit_ratio),
-            )
-            rejection_reason = _path_geometry_rejection_reason(smoothed_path, reference_path)
-            if rejection_reason is not None:
-                print(f"      ✗ Rejected high-quality spline fit ({rejection_reason}).")
-            elif len(smoothed_path) >= min_path_length:
-                smooth_score = _evaluate_path_score(smoothed_path)
-                print(f"      Spline smooth: {len(current_path)} -> {len(smoothed_path)} points, score: {smooth_score:.2f}")
-
-                if smooth_score > best_score * max(0.92, score_preservation_ratio):
-                    current_path = smoothed_path
-                    best_score = smooth_score
-                    print("      ✓ Accepted high-quality spline fit.")
-                    if diagnostics is not None:
-                        diagnostics['counts']['candidates_accepted'] += 1
-    except Exception as e:
-        print(f"      Spline smoothing failed: {e}")
-    finally:
-        _record_phase_elapsed('spline_smooth', spline_started_at)
-
-    def _consider_candidate(candidate, label):
-        nonlocal current_path, best_score
-
-        if diagnostics is not None:
-            diagnostics['counts']['candidates_considered'] += 1
-
-        candidate = _remove_duplicate_points(candidate)
-        if len(candidate) < min_path_length or len(candidate) >= len(current_path):
-            return
-
-        rejection_reason = _path_geometry_rejection_reason(candidate, reference_path)
-        if rejection_reason is not None:
-            print(f"      ✗ Rejected {label.lower()} ({rejection_reason}).")
-            return
-
-        candidate_score = _evaluate_path_score(candidate)
-        mean_dist, p95_dist = _measure_reference_drift(reference_path, candidate)
-        max_mean_dist = mean_closeness_px
-        max_p95_dist = peak_closeness_px
-        min_score_ratio = score_preservation_ratio
-
-        print(
-            f"      {label}: {len(current_path)} -> {len(candidate)} points, "
-            f"score: {candidate_score:.2f}, mean drift: {mean_dist:.2f}px, p95 drift: {p95_dist:.2f}px"
-        )
-
-        if candidate_score >= best_score * min_score_ratio and mean_dist <= max_mean_dist and p95_dist <= max_p95_dist:
-            current_path = candidate
-            best_score = candidate_score
-            print(f"      ✓ Accepted {label.lower()}.")
-            if diagnostics is not None:
-                diagnostics['counts']['candidates_accepted'] += 1
-        else:
-            print(f"      ✗ Rejected {label.lower()} (too much drift or score loss).")
-
     if simplification_ratio > 0 and len(current_path) >= max(4, min_path_length + 1):
-        target_count = max(
-            min_path_length,
-            int(round(len(current_path) * (1.0 - 0.78 * effective_simplification_ratio))),
-        )
-        curve_like_path = (
-            mean_angle >= 7.0
-            or sharp_ratio >= 0.04
-            or detour_ratio >= 1.06
-        )
-        meaningful_curve_reduction = target_count <= max(min_path_length, len(current_path) - 2)
-
-        if curve_like_path and meaningful_curve_reduction:
-            try:
-                arc_fit_started_at = time.perf_counter()
-                curve_seed = smooth_path_spline(
-                    current_path,
-                    smoothing_factor * (1.0 + 4.2 * effective_simplification_ratio + 2.2 * arc_fit_ratio),
-                )
-                curve_fit_candidate = _reduce_vertices_evenly(curve_seed, target_count)
-                _consider_candidate(curve_fit_candidate, "Arc-fit simplification")
-            except Exception as e:
-                print(f"      Arc-fit simplification failed: {e}")
-            finally:
-                _record_phase_elapsed('arc_fit_simplification', arc_fit_started_at)
-
-            try:
-                spline_arc_started_at = time.perf_counter()
-                spline_curve_candidate = fit_curve_to_path(current_path, 'spline')
-                spline_curve_candidate = _reduce_vertices_evenly(spline_curve_candidate, target_count)
-                _consider_candidate(spline_curve_candidate, "Spline arc fit")
-            except Exception as e:
-                print(f"      Spline arc fit failed: {e}")
-            finally:
-                _record_phase_elapsed('spline_arc_fit', spline_arc_started_at)
-
-            try:
-                hybrid_started_at = time.perf_counter()
-                hybrid_seed = smooth_path_spline(
-                    current_path,
-                    smoothing_factor * (1.0 + 2.2 * effective_simplification_ratio + 1.3 * arc_fit_ratio),
-                )
-                hybrid_candidate = rdp_simplify(
-                    hybrid_seed,
-                    max(0.85, adaptive_tolerance * (0.6 + 0.6 * effective_simplification_ratio + 0.45 * line_fit_ratio)),
-                )
-                hybrid_candidate = _reduce_vertices_evenly(hybrid_candidate, target_count)
-                _consider_candidate(hybrid_candidate, "Arc-first hybrid fit")
-            except Exception as e:
-                print(f"      Arc-first hybrid fit failed: {e}")
-            finally:
-                _record_phase_elapsed('arc_first_hybrid', hybrid_started_at)
-
         if line_fit_ratio > 0.05:
             try:
                 line_fit_started_at = time.perf_counter()
@@ -1164,7 +1155,11 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
                     current_path,
                     adaptive_tolerance * (0.75 + 2.0 * effective_simplification_ratio * line_fit_ratio),
                 )
-                _consider_candidate(line_fit_candidate, "Line-fit simplification")
+                _consider_simplified_candidate(
+                    line_fit_candidate,
+                    "Line-fit simplification",
+                    min_ratio=max(0.96, score_preservation_ratio + 0.02),
+                )
             except Exception as e:
                 print(f"      Line-fit simplification failed: {e}")
             finally:
@@ -1517,7 +1512,8 @@ def create_svg_output(
     pre_optimization_paths=None,
     curve_fit_tolerance=1.0,
     endpoint_tangent_strictness=85.0,
-    force_orthogonal_as_lines=True,
+    force_orthogonal_as_lines=False,
+    enable_curve_fitting=False,
 ):
     """Create SVG output with bitmap, pre-optimization paths, and optimized paths."""
     print("Creating SVG output...")
@@ -1566,6 +1562,7 @@ def create_svg_output(
         tolerance_px=max(0.35, float(curve_fit_tolerance)),
         endpoint_tangent_strictness=float(endpoint_tangent_strictness),
         force_orthogonal_as_lines=bool(force_orthogonal_as_lines),
+        enable_curve_fitting=bool(enable_curve_fitting),
     )
 
     # Add optimized paths
@@ -2540,7 +2537,8 @@ def fit_curve_segments(
     paths: list,
     tolerance_px: float = 1.0,
     endpoint_tangent_strictness: float = 85.0,
-    force_orthogonal_as_lines: bool = True,
+    force_orthogonal_as_lines: bool = False,
+    enable_curve_fitting: bool = False,
 ) -> list:
     """Fit line/cubic segments to paths using Schneider-style iterative fitting."""
 
@@ -2626,6 +2624,103 @@ def fit_curve_segments(
         if total_steps == 0:
             return 1.0
         return float(axis_steps) / float(total_steps)
+
+    def _project_point_onto_line(point, line_start, line_end):
+        line_vec = line_end - line_start
+        denom = float(np.dot(line_vec, line_vec))
+        if denom <= 1e-9:
+            return point.copy(), 0.0
+        t = float(np.dot(point - line_start, line_vec) / denom)
+        return line_start + (t * line_vec), t
+
+    def _repair_terminal_line_hook(points, at_start=True):
+        if len(points) < 6:
+            return points
+
+        subset = points[1:] if at_start else points[:-1]
+        if len(subset) < 5:
+            return points
+
+        max_dev, mean_dev = _line_distance_stats(subset)
+        if max_dev > max(0.55, fit_error * 0.9) or mean_dev > max(0.22, fit_error * 0.35):
+            return points
+        if _max_turn_angle(subset) > 12.0:
+            return points
+
+        terminal_point = points[0] if at_start else points[-1]
+        neighbor_point = points[1] if at_start else points[-2]
+        trend_start = subset[0]
+        trend_end = subset[-1]
+        trend_vec = trend_end - trend_start
+        terminal_step = neighbor_point - terminal_point if at_start else terminal_point - neighbor_point
+
+        trend_norm = float(np.linalg.norm(trend_vec))
+        step_norm = float(np.linalg.norm(terminal_step))
+        if trend_norm <= 1e-9 or step_norm <= 1e-9:
+            return points
+
+        step_dir = terminal_step / step_norm
+        trend_dir = trend_vec / trend_norm
+        alignment = float(np.dot(step_dir, trend_dir))
+        if alignment >= 0.94:
+            return points
+
+        projected, t = _project_point_onto_line(terminal_point, trend_start, trend_end)
+        distance_to_line = float(np.linalg.norm(projected - terminal_point))
+        if distance_to_line > max(1.5, fit_error * 1.25):
+            return points
+
+        if at_start:
+            if t < -0.35 or t > 0.08:
+                return points
+        else:
+            if t < 0.92 or t > 1.35:
+                return points
+
+        neighbor_projected, _ = _project_point_onto_line(neighbor_point, trend_start, trend_end)
+        extension = projected - neighbor_projected
+        extension_len = float(np.linalg.norm(extension))
+        if extension_len > 1e-6 and extension_len <= max(1.5, fit_error * 1.25):
+            projected = projected + extension
+
+        repaired = list(points)
+        repaired[0 if at_start else -1] = projected
+        return repaired
+
+    def _suppress_terminal_line_hooks(points):
+        repaired = _repair_terminal_line_hook(points, at_start=True)
+        repaired = _repair_terminal_line_hook(repaired, at_start=False)
+        return repaired
+
+    def _extend_uniform_straight_terminals(points, min_points=20):
+        if len(points) < min_points:
+            return points
+
+        rounded = [
+            np.array([int(round(p[0])), int(round(p[1]))], dtype=int)
+            for p in points
+        ]
+        steps = []
+        for i in range(1, len(rounded)):
+            step = rounded[i] - rounded[i - 1]
+            if step[0] == 0 and step[1] == 0:
+                continue
+            steps.append(step)
+
+        if not steps:
+            return points
+
+        first_step = steps[0]
+        if np.max(np.abs(first_step)) != 1:
+            return points
+        if not all(step[0] == first_step[0] and step[1] == first_step[1] for step in steps[1:]):
+            return points
+
+        repaired = list(points)
+        step_vec = np.array([float(first_step[0]), float(first_step[1])], dtype=float)
+        repaired[0] = repaired[0] - step_vec
+        repaired[-1] = repaired[-1] + step_vec
+        return repaired
 
     def _fit_axis_lines(points):
         """Return line-only segments for orthogonal/corner-like paths."""
@@ -2716,6 +2811,43 @@ def fit_curve_segments(
             if not run_defs:
                 return []
 
+            support_lines = []
+            for run in run_defs:
+                run_points = _cyclic_run_points(run, int_points)
+                if len(run_points) < 2:
+                    support_lines = []
+                    break
+
+                if run["axis"] == "h":
+                    row = float(sorted(float(point[0]) for point in run_points)[len(run_points) // 2])
+                    support_lines.append({"axis": "h", "value": row})
+                else:
+                    col = float(sorted(float(point[1]) for point in run_points)[len(run_points) // 2])
+                    support_lines.append({"axis": "v", "value": col})
+
+            if len(support_lines) == len(run_defs):
+                vertices = []
+                for index, current in enumerate(support_lines):
+                    previous = support_lines[index - 1]
+                    if previous["axis"] == current["axis"]:
+                        break
+
+                    if previous["axis"] == "v" and current["axis"] == "h":
+                        vertices.append([current["value"], previous["value"]])
+                    elif previous["axis"] == "h" and current["axis"] == "v":
+                        vertices.append([previous["value"], current["value"]])
+                    else:
+                        break
+                else:
+                    segs = []
+                    for index, end_point in enumerate(vertices[1:] + vertices[:1]):
+                        seg = {"type": "line", "end_point": _as_float_pair(end_point)}
+                        if index == 0:
+                            seg["start_point"] = _as_float_pair(vertices[0])
+                        segs.append(seg)
+                    if segs:
+                        return segs
+
             segs = []
             point_count = len(int_points)
             for run in run_defs:
@@ -2726,6 +2858,123 @@ def fit_curve_segments(
                 segs[0]["start_point"] = _as_float_pair(int_points[run_defs[0]["start"]])
             return segs
 
+        def _run_step_count(run_def, point_count):
+            if point_count <= 0:
+                return 0
+            count = (int(run_def["end"]) - int(run_def["start"]) + 1) % point_count
+            return count if count > 0 else point_count
+
+        def _cyclic_run_points(run_def, int_points):
+            point_count = len(int_points)
+            if point_count == 0:
+                return []
+
+            step_count = _run_step_count(run_def, point_count)
+
+            idx = int(run_def["start"]) % point_count
+            points = [np.asarray(int_points[idx], dtype=float)]
+            for _ in range(step_count):
+                idx = (idx + 1) % point_count
+                points.append(np.asarray(int_points[idx], dtype=float))
+            return points
+
+        def _line_line_intersection(center_a, direction_a, center_b, direction_b):
+            cross = float((direction_a[0] * direction_b[1]) - (direction_a[1] * direction_b[0]))
+            if abs(cross) <= 1e-6:
+                return None
+
+            delta = np.asarray(center_b, dtype=float) - np.asarray(center_a, dtype=float)
+            t = float((delta[0] * direction_b[1]) - (delta[1] * direction_b[0])) / cross
+            return np.asarray(center_a, dtype=float) + (t * np.asarray(direction_a, dtype=float))
+
+        def _merge_short_connector_runs(run_defs, int_points):
+            point_count = len(int_points)
+            if len(run_defs) < 3 or point_count <= 0:
+                return list(run_defs)
+
+            merged = list(run_defs)
+            changed = True
+            while changed and len(merged) >= 3:
+                changed = False
+                for index in range(len(merged)):
+                    curr = merged[index]
+                    if _run_step_count(curr, point_count) > 2:
+                        continue
+
+                    rotated = merged[index - 1 :] + merged[: index - 1]
+                    prev_run, curr_run, next_run = rotated[0], rotated[1], rotated[2]
+                    prev_points = _cyclic_run_points(prev_run, int_points)
+                    next_points = _cyclic_run_points(next_run, int_points)
+                    if len(prev_points) < 2 or len(next_points) < 2:
+                        continue
+
+                    _, prev_direction = _fit_principal_line(prev_points)
+                    _, next_direction = _fit_principal_line(next_points)
+                    if abs(float(np.dot(prev_direction, next_direction))) < 0.96:
+                        continue
+
+                    merged = [
+                        {
+                            "axis": prev_run["axis"],
+                            "start": prev_run["start"],
+                            "end": next_run["end"],
+                        }
+                    ] + rotated[3:]
+                    changed = True
+                    break
+
+            return merged
+
+        def _closed_loop_best_fit_lines(run_defs, int_points):
+            if not run_defs or len(int_points) < 4:
+                return []
+
+            run_defs = _merge_short_connector_runs(run_defs, int_points)
+
+            fitted_runs = []
+            for run in run_defs:
+                run_points = _cyclic_run_points(run, int_points)
+                if len(run_points) < 2:
+                    return []
+
+                center, direction = _fit_principal_line(run_points)
+                if np.linalg.norm(direction) <= 1e-9:
+                    return []
+
+                fitted_runs.append({
+                    "center": center,
+                    "direction": direction,
+                    "raw_corner": np.asarray(int_points[(run["end"] + 1) % len(int_points)], dtype=float),
+                })
+
+            if all(min(abs(float(run["direction"][0])), abs(float(run["direction"][1]))) <= 0.02 for run in fitted_runs):
+                return []
+
+            vertices = []
+            for index in range(len(fitted_runs)):
+                prev_run = fitted_runs[index - 1]
+                curr_run = fitted_runs[index]
+                intersection = _line_line_intersection(
+                    prev_run["center"],
+                    prev_run["direction"],
+                    curr_run["center"],
+                    curr_run["direction"],
+                )
+                raw_corner = prev_run["raw_corner"]
+                if intersection is None:
+                    intersection = raw_corner
+                elif float(np.linalg.norm(intersection - raw_corner)) > max(3.0, fit_error * 3.0):
+                    intersection = raw_corner
+                vertices.append(intersection)
+
+            segs = []
+            for index, end_point in enumerate(vertices[1:] + vertices[:1]):
+                seg = {"type": "line", "end_point": _as_float_pair(end_point)}
+                if index == 0:
+                    seg["start_point"] = _as_float_pair(vertices[0])
+                segs.append(seg)
+            return segs
+
         if is_closed_axis_loop:
             raw_closed = list(raw_ints)
             if len(raw_closed) >= 2 and raw_closed[0] == raw_closed[-1]:
@@ -2733,6 +2982,9 @@ def fit_curve_segments(
 
             closed_runs = _merge_closed_loop_runs(_build_axis_runs(raw_closed + [raw_closed[0]]))
             if len(closed_runs) >= 4:
+                best_fit_closed = _closed_loop_best_fit_lines(closed_runs, raw_closed)
+                if best_fit_closed:
+                    return best_fit_closed
                 return _closed_loop_runs_to_lines(closed_runs, raw_closed)
 
         # For axis-dominant traces, smooth each dominant-axis run by snapping
@@ -3234,6 +3486,534 @@ def fit_curve_segments(
                 out.append(seg)
         return out
 
+    def _segments_as_lines(segments, source_points):
+        def _path_span_stats(points, start_idx, end_idx):
+            if start_idx < 0 or end_idx >= len(points) or end_idx <= start_idx:
+                return 0.0, float("inf")
+
+            seg_pts = np.asarray(points[start_idx : end_idx + 1], dtype=float)
+            seg_start = seg_pts[0]
+            seg_end = seg_pts[-1]
+            seg_delta = seg_end - seg_start
+            seg_len = float(np.linalg.norm(seg_delta))
+            if seg_len <= 1e-9:
+                return 0.0, float("inf")
+
+            max_dev = 0.0
+            for sample in seg_pts[1:-1]:
+                diff = sample - seg_start
+                dist = abs(float((seg_delta[1] * diff[0]) - (seg_delta[0] * diff[1]))) / seg_len
+                if dist > max_dev:
+                    max_dev = dist
+            return seg_len, max_dev
+
+        def _expand_open_spans(span_defs, points):
+            if not span_defs or len(points) < 4:
+                return list(span_defs)
+
+            expanded = [dict(span) for span in span_defs]
+            last_index = len(points) - 1
+
+            for index, span in enumerate(expanded):
+                min_start = 0 if index == 0 else (expanded[index - 1]["end"] + 1)
+                max_end = last_index if index == len(expanded) - 1 else (expanded[index + 1]["start"] - 1)
+                dev_limit = 0.65 if index in (0, len(expanded) - 1) else 0.4
+
+                best_start = int(span["start"])
+                best_end = int(span["end"])
+                changed = True
+                while changed:
+                    changed = False
+                    candidates = []
+                    if best_start > min_start:
+                        candidates.append((best_start - 1, best_end))
+                    if best_end < max_end:
+                        candidates.append((best_start, best_end + 1))
+                    if best_start > min_start and best_end < max_end:
+                        candidates.append((best_start - 1, best_end + 1))
+
+                    best_candidate = None
+                    for cand_start, cand_end in candidates:
+                        seg_len, max_dev = _path_span_stats(points, cand_start, cand_end)
+                        if seg_len < 3.5 or max_dev > dev_limit:
+                            continue
+
+                        coverage = cand_end - cand_start
+                        score = (coverage, seg_len - (2.0 * max_dev))
+                        if best_candidate is None or score > best_candidate[0]:
+                            best_candidate = (score, cand_start, cand_end)
+
+                    if best_candidate is not None:
+                        _, cand_start, cand_end = best_candidate
+                        if cand_start != best_start or cand_end != best_end:
+                            best_start = cand_start
+                            best_end = cand_end
+                            changed = True
+
+                span["start"] = best_start
+                span["end"] = best_end
+                span["start_point"] = _as_float_pair(points[best_start])
+                span["end_point"] = _as_float_pair(points[best_end])
+
+            return expanded
+
+        def _simplify_open_vertex_indices(vertex_indices, points, deviation_limit=0.6):
+            simplified = [int(idx) for idx in vertex_indices]
+            if len(simplified) < 3:
+                return simplified
+
+            changed = True
+            while changed and len(simplified) >= 3:
+                changed = False
+                cursor = 1
+                while cursor < len(simplified) - 1:
+                    _, max_dev = _path_span_stats(points, simplified[cursor - 1], simplified[cursor + 1])
+                    if max_dev <= deviation_limit:
+                        simplified.pop(cursor)
+                        changed = True
+                    else:
+                        cursor += 1
+            return simplified
+
+        def _extend_open_polyline_endpoints(vertices, extension_px=2.0):
+            if len(vertices) < 2:
+                return list(vertices)
+
+            extended = [np.asarray(vertex, dtype=float).copy() for vertex in vertices]
+
+            start_vec = extended[0] - extended[1]
+            start_len = float(np.linalg.norm(start_vec))
+            if start_len > 1e-9:
+                extended[0] = np.round(extended[0] + ((start_vec / start_len) * float(extension_px)))
+
+            end_vec = extended[-1] - extended[-2]
+            end_len = float(np.linalg.norm(end_vec))
+            if end_len > 1e-9:
+                extended[-1] = np.round(extended[-1] + ((end_vec / end_len) * float(extension_px)))
+
+            return [
+                np.asarray(vertex, dtype=float)
+                for vertex in extended
+            ]
+
+        start_point = source_points[0] if len(source_points) else np.asarray([0.0, 0.0], dtype=float)
+        if not segments:
+            p = _as_float_pair(start_point)
+            return [{"type": "line", "start_point": p, "end_point": p}]
+
+        has_non_line_segment = any(seg.get("type") != "line" for seg in segments)
+        if has_non_line_segment and len(source_points) >= 4:
+            source_closed_loop = float(np.linalg.norm(np.asarray(source_points[0], dtype=float) - np.asarray(source_points[-1], dtype=float))) <= max(1.5, fit_error * 1.5)
+            circle_pts = np.asarray(source_points, dtype=float)
+            if len(circle_pts) >= 4 and source_closed_loop:
+                circle_pts = circle_pts[:-1]
+
+            if len(circle_pts) >= 32:
+                circle_center = np.mean(circle_pts, axis=0)
+                circle_radii = np.linalg.norm(circle_pts - circle_center, axis=1)
+                circle_radius_mean = float(np.mean(circle_radii))
+                circle_radius_ratio = (
+                    float(np.std(circle_radii)) / circle_radius_mean
+                    if circle_radius_mean > 1e-9 else 1.0
+                )
+
+                if circle_radius_ratio <= 0.04:
+                    circle_angles = np.unwrap(np.arctan2(circle_pts[:, 0] - circle_center[0], circle_pts[:, 1] - circle_center[1]))
+                    if circle_angles[-1] < circle_angles[0]:
+                        circle_angles = -circle_angles
+                        circle_angles = np.unwrap(circle_angles)
+                    circle_angles = circle_angles - circle_angles[0]
+                    circle_angles_mod = np.mod(circle_angles, 2.0 * np.pi)
+
+                    tangent_candidates = []
+                    max_window = min(18, max(8, len(circle_pts) // 4))
+                    for start_idx in range(len(circle_pts)):
+                        max_end = min(start_idx + max_window, len(circle_pts) - 1)
+                        for end_idx in range(start_idx + 4, max_end + 1):
+                            seg_pts = circle_pts[start_idx : end_idx + 1]
+                            seg_start = seg_pts[0]
+                            seg_end = seg_pts[-1]
+                            seg_delta = seg_end - seg_start
+                            seg_len = float(np.linalg.norm(seg_delta))
+                            if seg_len < 4.5:
+                                continue
+
+                            max_dev = 0.0
+                            for sample in seg_pts[1:-1]:
+                                diff = sample - seg_start
+                                dist = abs(float((seg_delta[1] * diff[0]) - (seg_delta[0] * diff[1]))) / seg_len
+                                if dist > max_dev:
+                                    max_dev = dist
+                            if max_dev > 0.45:
+                                continue
+
+                            mid_idx = (start_idx + end_idx) // 2
+                            tangent_candidates.append({
+                                "start": start_idx,
+                                "end": end_idx,
+                                "length": end_idx - start_idx + 1,
+                                "deviation": max_dev,
+                                "angle": float(circle_angles_mod[mid_idx]),
+                                "start_point": _as_float_pair(seg_start),
+                                "end_point": _as_float_pair(seg_end),
+                                "score": seg_len + (0.35 * float(end_idx - start_idx + 1)) - (4.0 * max_dev),
+                            })
+
+                    if tangent_candidates:
+                        intervals = sorted(tangent_candidates, key=lambda candidate: (candidate["end"], candidate["start"]))
+                        interval_ends = [candidate["end"] for candidate in intervals]
+                        previous_non_overlapping = []
+                        for candidate in intervals:
+                            previous_non_overlapping.append(
+                                bisect.bisect_left(interval_ends, candidate["start"] - 1) - 1
+                            )
+
+                        best_scores = [0.0] * (len(intervals) + 1)
+                        for index, candidate in enumerate(intervals, start=1):
+                            take_score = candidate["score"] + best_scores[previous_non_overlapping[index - 1] + 1]
+                            skip_score = best_scores[index - 1]
+                            best_scores[index] = max(take_score, skip_score)
+
+                        selected_spans = []
+                        cursor = len(intervals)
+                        while cursor > 0:
+                            candidate = intervals[cursor - 1]
+                            take_score = candidate["score"] + best_scores[previous_non_overlapping[cursor - 1] + 1]
+                            if take_score > best_scores[cursor - 1]:
+                                selected_spans.append(candidate)
+                                cursor = previous_non_overlapping[cursor - 1] + 1
+                            else:
+                                cursor -= 1
+
+                        if selected_spans:
+                            selected_spans.reverse()
+                            selected_spans = sorted(selected_spans, key=lambda candidate: candidate["start"])
+                            circular_lines = []
+                            for index, span in enumerate(selected_spans):
+                                reuse_seg = {
+                                    "type": "line",
+                                    "end_point": span["end_point"],
+                                }
+                                if index == 0:
+                                    reuse_seg["start_point"] = span["start_point"]
+                                circular_lines.append(reuse_seg)
+
+                                next_span = selected_spans[(index + 1) % len(selected_spans)]
+                                if next_span["start_point"] != span["end_point"]:
+                                    circular_lines.append({
+                                        "type": "line",
+                                        "end_point": next_span["start_point"],
+                                    })
+
+                            if circular_lines:
+                                return circular_lines
+
+            if not source_closed_loop and len(source_points) >= 12:
+                open_pts = np.asarray(source_points, dtype=float)
+                span_candidates = []
+                max_window = min(14, max(6, len(open_pts) // 3))
+                for start_idx in range(len(open_pts)):
+                    max_end = min(start_idx + max_window, len(open_pts) - 1)
+                    for end_idx in range(start_idx + 3, max_end + 1):
+                        seg_pts = open_pts[start_idx : end_idx + 1]
+                        seg_start = seg_pts[0]
+                        seg_end = seg_pts[-1]
+                        seg_delta = seg_end - seg_start
+                        seg_len = float(np.linalg.norm(seg_delta))
+                        if seg_len < 3.5:
+                            continue
+
+                        max_dev = 0.0
+                        for sample in seg_pts[1:-1]:
+                            diff = sample - seg_start
+                            dist = abs(float((seg_delta[1] * diff[0]) - (seg_delta[0] * diff[1]))) / seg_len
+                            if dist > max_dev:
+                                max_dev = dist
+                        if max_dev > 0.4:
+                            continue
+
+                        span_candidates.append({
+                            "start": start_idx,
+                            "end": end_idx,
+                            "start_point": _as_float_pair(seg_start),
+                            "end_point": _as_float_pair(seg_end),
+                            "score": seg_len + (0.3 * float(end_idx - start_idx + 1)) - (4.0 * max_dev),
+                        })
+
+                if span_candidates:
+                    intervals = sorted(span_candidates, key=lambda candidate: (candidate["end"], candidate["start"]))
+                    interval_ends = [candidate["end"] for candidate in intervals]
+                    previous_non_overlapping = []
+                    for candidate in intervals:
+                        previous_non_overlapping.append(
+                            bisect.bisect_left(interval_ends, candidate["start"] - 1) - 1
+                        )
+
+                    best_scores = [0.0] * (len(intervals) + 1)
+                    for index, candidate in enumerate(intervals, start=1):
+                        take_score = candidate["score"] + best_scores[previous_non_overlapping[index - 1] + 1]
+                        skip_score = best_scores[index - 1]
+                        best_scores[index] = max(take_score, skip_score)
+
+                    selected_spans = []
+                    cursor = len(intervals)
+                    while cursor > 0:
+                        candidate = intervals[cursor - 1]
+                        take_score = candidate["score"] + best_scores[previous_non_overlapping[cursor - 1] + 1]
+                        if take_score > best_scores[cursor - 1]:
+                            selected_spans.append(candidate)
+                            cursor = previous_non_overlapping[cursor - 1] + 1
+                        else:
+                            cursor -= 1
+
+                    if selected_spans:
+                        selected_spans.reverse()
+                        selected_spans = _expand_open_spans(selected_spans, open_pts)
+
+                        vertex_indices = [0]
+                        current_index = 0
+                        for span in selected_spans:
+                            span_start = int(span["start"])
+                            span_end = int(span["end"])
+                            if current_index != span_start:
+                                vertex_indices.append(span_start)
+                            vertex_indices.append(span_end)
+                            current_index = span_end
+
+                        if current_index != len(open_pts) - 1:
+                            vertex_indices.append(len(open_pts) - 1)
+
+                        vertex_indices = _simplify_open_vertex_indices(vertex_indices, open_pts, deviation_limit=0.6)
+                        vertex_points = [np.asarray(open_pts[idx], dtype=float) for idx in vertex_indices]
+                        vertex_points = _extend_open_polyline_endpoints(vertex_points, extension_px=2.0)
+
+                        open_lines = []
+                        for index, end_point in enumerate(vertex_points[1:]):
+                            line_seg = {
+                                "type": "line",
+                                "end_point": _as_float_pair(end_point),
+                            }
+                            if index == 0:
+                                line_seg["start_point"] = _as_float_pair(vertex_points[0])
+                            open_lines.append(line_seg)
+
+                        if open_lines:
+                            return open_lines
+
+            source_vertices = [_as_float_pair(p) for p in rdp_simplify(source_points, max(0.75, fit_error))]
+            if len(source_vertices) >= 3:
+                if source_closed_loop and float(np.linalg.norm(np.asarray(source_vertices[0], dtype=float) - np.asarray(source_vertices[-1], dtype=float))) <= max(1.5, fit_error * 1.5):
+                    source_vertices = [source_vertices[-1]] + source_vertices[1:-1]
+
+                if len(source_vertices) >= 3:
+                    out = []
+                    closed_source_loop = source_closed_loop
+                    end_points = (source_vertices[1:] + source_vertices[:1]) if closed_source_loop else source_vertices[1:]
+                    for index, end_point in enumerate(end_points):
+                        line_seg = {
+                            "type": "line",
+                            "end_point": _as_float_pair(end_point),
+                        }
+                        if index == 0:
+                            line_seg["start_point"] = _as_float_pair(source_vertices[0])
+                        out.append(line_seg)
+                    if out:
+                        return out
+
+        vertices = [_as_float_pair(start_point)]
+        for index, seg in enumerate(segments):
+            end_point = seg.get("end_point")
+            if end_point is None:
+                continue
+
+            if index == 0 and seg.get("start_point") is not None:
+                vertices[0] = _as_float_pair(seg.get("start_point", start_point))
+            vertices.append(_as_float_pair(end_point))
+
+        is_closed_loop = (
+            len(vertices) >= 4
+            and float(np.linalg.norm(np.asarray(vertices[0], dtype=float) - np.asarray(vertices[-1], dtype=float))) <= 1.5
+        )
+
+        if len(vertices) >= 3 and not is_closed_loop:
+            simplified = rdp_simplify(vertices, max(0.35, fit_error * 0.85))
+            if len(simplified) >= 2:
+                vertices = [_as_float_pair(p) for p in simplified]
+
+        if len(vertices) == 3 and not is_closed_loop and len(source_points) >= 6:
+            start = np.asarray(vertices[0], dtype=float)
+            corner = np.asarray(vertices[1], dtype=float)
+            end = np.asarray(vertices[2], dtype=float)
+
+            start_vec = start - corner
+            end_vec = end - corner
+            start_len = float(np.linalg.norm(start_vec))
+            end_len = float(np.linalg.norm(end_vec))
+            if start_len > 1e-9 and end_len > 1e-9:
+                cosang = float(np.clip(np.dot(start_vec, end_vec) / (start_len * end_len), -1.0, 1.0))
+                corner_angle = float(np.degrees(np.arccos(cosang)))
+                if 75.0 <= corner_angle <= 105.0:
+                    pts = np.asarray(source_points, dtype=float)
+                    split_idx = min(range(len(pts)), key=lambda i: float(np.linalg.norm(pts[i] - corner)))
+                    if split_idx >= 2 and (len(pts) - split_idx) >= 3:
+                        left_pts = pts[: split_idx + 1]
+                        right_pts = pts[split_idx:]
+                        left_center, left_dir = _fit_principal_line(left_pts)
+                        right_center, right_dir = _fit_principal_line(right_pts)
+                        dot_dirs = float(np.clip(abs(np.dot(left_dir, right_dir)), -1.0, 1.0))
+                        support_angle = float(np.degrees(np.arccos(dot_dirs)))
+
+                        if 75.0 <= support_angle <= 105.0:
+                            theta_left = float(np.arctan2(left_dir[1], left_dir[0]))
+                            theta_right = float(np.arctan2(right_dir[1], right_dir[0]))
+                            best_dirs = None
+                            best_err = None
+                            for sign in (1.0, -1.0):
+                                alpha = 0.5 * (theta_left + (theta_right - sign * (np.pi / 2.0)))
+                                ortho_left = np.array([np.cos(alpha), np.sin(alpha)], dtype=float)
+                                ortho_right = np.array([-sign * np.sin(alpha), sign * np.cos(alpha)], dtype=float)
+                                if float(np.dot(ortho_left, left_dir)) < 0.0:
+                                    ortho_left = -ortho_left
+                                if float(np.dot(ortho_right, right_dir)) < 0.0:
+                                    ortho_right = -ortho_right
+
+                                err = (
+                                    abs(float(np.degrees(np.arctan2(np.sin(theta_left - np.arctan2(ortho_left[1], ortho_left[0])), np.cos(theta_left - np.arctan2(ortho_left[1], ortho_left[0]))))))
+                                    + abs(float(np.degrees(np.arctan2(np.sin(theta_right - np.arctan2(ortho_right[1], ortho_right[0])), np.cos(theta_right - np.arctan2(ortho_right[1], ortho_right[0]))))))
+                                )
+                                if best_err is None or err < best_err:
+                                    best_err = err
+                                    best_dirs = (ortho_left, ortho_right)
+
+                            if best_dirs is not None:
+                                ortho_left, ortho_right = best_dirs
+                                cross = float((ortho_left[0] * ortho_right[1]) - (ortho_left[1] * ortho_right[0]))
+                                if abs(cross) > 1e-6:
+                                    delta = right_center - left_center
+                                    t = float((delta[0] * ortho_right[1]) - (delta[1] * ortho_right[0])) / cross
+                                    target_corner = left_center + (t * ortho_left)
+
+                                    chord_center = 0.5 * (start + end)
+                                    chord_radius = 0.5 * float(np.linalg.norm(end - start))
+                                    toward_target = target_corner - chord_center
+                                    toward_norm = float(np.linalg.norm(toward_target))
+                                    if chord_radius > 1e-9 and toward_norm > 1e-9:
+                                        exact_corner = chord_center + (chord_radius * toward_target / toward_norm)
+                                        if float(np.linalg.norm(exact_corner - corner)) <= max(2.0, fit_error * 2.0):
+                                            vertices[1] = _as_float_pair(exact_corner)
+
+        if len(vertices) < 2:
+            p = _as_float_pair(start_point)
+            return [{"type": "line", "start_point": p, "end_point": p}]
+
+        out = []
+        for index, end_point in enumerate(vertices[1:]):
+            line_seg = {
+                "type": "line",
+                "end_point": _as_float_pair(end_point),
+            }
+            if index == 0:
+                line_seg["start_point"] = _as_float_pair(vertices[0])
+            out.append(line_seg)
+        return out
+
+    def _fit_principal_line(points):
+        pts = np.asarray(points, dtype=float)
+        center = np.mean(pts, axis=0)
+        _, _, vh = np.linalg.svd(pts - center, full_matrices=False)
+        direction = vh[0]
+        endpoint_delta = pts[-1] - pts[0]
+        if float(np.dot(direction, endpoint_delta)) < 0.0:
+            direction = -direction
+        return center, _normalize(direction)
+
+    def _line_projection_t(point, center, direction):
+        return float(np.dot(np.asarray(point, dtype=float) - center, direction))
+
+    def _point_line_distance(point, center, direction):
+        delta = np.asarray(point, dtype=float) - center
+        projection = float(np.dot(delta, direction))
+        residual = delta - (projection * direction)
+        return float(np.linalg.norm(residual))
+
+    def _recent_diagonal_carry_steps(points, at_start=True, window=8):
+        if len(points) < 3:
+            return []
+
+        ints = [
+            np.array([int(round(p[0])), int(round(p[1]))], dtype=int)
+            for p in points
+        ]
+        step_slice = []
+        if at_start:
+            seq = zip(ints[:-1], ints[1:])
+        else:
+            seq = zip(ints[-window - 1 : -1], ints[-window:]) if len(ints) > window else zip(ints[:-1], ints[1:])
+
+        for prev_pt, next_pt in seq:
+            step = next_pt - prev_pt
+            if step[0] == 0 and step[1] == 0:
+                continue
+            step_slice.append(step)
+
+        candidates = []
+        for step in (step_slice[:window] if at_start else step_slice[-window:]):
+            if abs(int(step[0])) != 1 or abs(int(step[1])) != 1:
+                continue
+            outward = (-step) if at_start else step
+            if not any(int(outward[0]) == int(existing[0]) and int(outward[1]) == int(existing[1]) for existing in candidates):
+                candidates.append(outward.astype(float))
+        return candidates
+
+    def _refine_single_line_endpoints(points, line_segments):
+        if len(line_segments) != 1 or line_segments[0].get("type") != "line":
+            return line_segments
+        if len(points) < 12:
+            return line_segments
+
+        max_dev, mean_dev = _line_distance_stats(points)
+        if max_dev > max(1.8, fit_error * 1.8) or mean_dev > max(0.7, fit_error * 0.8):
+            return line_segments
+
+        center, direction = _fit_principal_line(points)
+        if np.linalg.norm(direction) <= 1e-9:
+            return line_segments
+
+        refined = [dict(line_segments[0])]
+        endpoints = {
+            "start_point": np.asarray(refined[0].get("start_point", points[0]), dtype=float),
+            "end_point": np.asarray(refined[0].get("end_point", points[-1]), dtype=float),
+        }
+
+        for key, at_start in (("start_point", True), ("end_point", False)):
+            current = endpoints[key]
+            current_dist = _point_line_distance(current, center, direction)
+            if current_dist <= 0.45:
+                continue
+
+            current_t = _line_projection_t(current, center, direction)
+            best = None
+            best_dist = current_dist
+            for step in _recent_diagonal_carry_steps(points, at_start=at_start, window=8):
+                candidate = current + step
+                candidate_t = _line_projection_t(candidate, center, direction)
+                if at_start and candidate_t >= current_t - 0.25:
+                    continue
+                if not at_start and candidate_t <= current_t + 0.25:
+                    continue
+
+                candidate_dist = _point_line_distance(candidate, center, direction)
+                if candidate_dist + 0.15 < best_dist:
+                    best = candidate
+                    best_dist = candidate_dist
+
+            if best is not None and best_dist <= 0.85:
+                endpoints[key] = best
+
+        refined[0]["start_point"] = _as_float_pair(endpoints["start_point"])
+        refined[0]["end_point"] = _as_float_pair(endpoints["end_point"])
+        return refined
+
     result = []
     for path in paths:
         if len(path) < 2:
@@ -3250,6 +4030,9 @@ def fit_curve_segments(
             result.append([{"type": "line", "end_point": _as_float_pair(p), "start_point": _as_float_pair(p)}])
             continue
 
+        cleaned = _suppress_terminal_line_hooks(cleaned)
+        cleaned = _extend_uniform_straight_terminals(cleaned)
+
         chunks = _split_by_corners(cleaned)
         path_segments = []
         for chunk in chunks:
@@ -3259,6 +4042,10 @@ def fit_curve_segments(
 
         if not path_segments:
             path_segments = [{"type": "line", "end_point": _as_float_pair(cleaned[-1])}]
+
+        if not enable_curve_fitting:
+            path_segments = _segments_as_lines(path_segments, cleaned)
+            path_segments = _refine_single_line_endpoints(cleaned, path_segments)
 
         # Use the cleaned first-point as the path start, but only if a chunk
         # fitter (e.g. _fit_axis_lines) has not already set a snapped start.

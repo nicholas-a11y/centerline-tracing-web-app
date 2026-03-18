@@ -921,7 +921,7 @@
     <div class="container">
         <div class="header">
             <h1>🎯 Centerline Extraction Tool</h1>
-            <p>Interactive centerline extraction v1.71 Nicholas Leqeta</p>
+            <p>Interactive centerline extraction v1.8 Nicholas Leqeta</p>
         </div>
         
         <div class="main-content">
@@ -1010,19 +1010,9 @@
                     </div>
                     <div id="advancedSettings" style="display: none; margin-top: 8px;">
                         <div class="parameter">
-                            <label>Smoothing Factor <span class="range-value" id="smoothingFactorValue">0.006</span></label>
-                            <input type="range" id="smoothingFactor" min="0.001" max="0.05" step="0.001" value="0.006">
-                            <small style="color: #666; font-size: 0.8em;">Controls how smooth curves appear in the output.</small>
-                        </div>
-                        <div class="parameter">
                             <label>Simplification Strength <span class="range-value" id="simplificationStrengthValue">50</span></label>
                             <input type="range" id="simplificationStrength" min="0" max="100" step="1" value="50">
                             <small style="color: #666; font-size: 0.8em;">Overall vertex reduction target for the blue paths.</small>
-                        </div>
-                        <div class="parameter">
-                            <label>Arc Fit Strength <span class="range-value" id="arcFitStrengthValue">72</span></label>
-                            <input type="range" id="arcFitStrength" min="0" max="100" step="1" value="72">
-                            <small style="color: #666; font-size: 0.8em;">Higher values favor smoother curves.</small>
                         </div>
                         <div class="parameter">
                             <label>Line Fit Strength <span class="range-value" id="lineFitStrengthValue">22</span></label>
@@ -1035,19 +1025,16 @@
                             <small style="color: #666; font-size: 0.8em;">Higher values keep more vertices on short jagged paths.</small>
                         </div>
                         <div class="parameter">
-                            <label>Mean Closeness Guard (px) <span class="range-value" id="meanClosenessPxValue">1.8</span></label>
-                            <input type="range" id="meanClosenessPx" min="0.5" max="6.0" step="0.1" value="1.8">
-                            <small style="color: #666; font-size: 0.8em;">Average allowed distance from the blue path to the magenta path.</small>
-                        </div>
-                        <div class="parameter">
-                            <label>Peak Drift Guard (px) <span class="range-value" id="peakClosenessPxValue">4.5</span></label>
-                            <input type="range" id="peakClosenessPx" min="1.0" max="12.0" step="0.1" value="4.5">
-                            <small style="color: #666; font-size: 0.8em;">Generally allowed drift from magenta for accepted blue fits.</small>
-                        </div>
-                        <div class="parameter">
                             <label>Score Preservation (%) <span class="range-value" id="scorePreservationValue">80</span></label>
                             <input type="range" id="scorePreservation" min="70" max="99" step="1" value="80">
                             <small style="color: #666; font-size: 0.8em;">Higher values keep the blue path closer to the magenta path.</small>
+                        </div>
+                        <div class="parameter">
+                            <label>
+                                <input type="checkbox" id="enableCurveFitting">
+                                Enable Curve Fitting
+                            </label>
+                            <small style="color: #666; font-size: 0.8em;">Off by default so straight-line output can be tuned first. Enable to emit fitted cubic segments.</small>
                         </div>
                         <div class="parameter">
                             <label>Cubic Fit Tolerance (px) <span class="range-value" id="cubicFitToleranceValue">1.0</span></label>
@@ -1061,7 +1048,7 @@
                         </div>
                         <div class="parameter">
                             <label>
-                                <input type="checkbox" id="forceOrthogonalAsLines" checked>
+                                <input type="checkbox" id="forceOrthogonalAsLines">
                                 Force Orthogonal Paths As Lines
                             </label>
                             <small style="color: #666; font-size: 0.8em;">When enabled, axis-aligned and corner-like paths are always output as straight line segments instead of cubic curves.</small>
@@ -1194,14 +1181,11 @@
             'mergeGap',
             'mergeAnglePriority',
             'rdpTolerance',
-            'smoothingFactor',
             'simplificationStrength',
-            'arcFitStrength',
             'lineFitStrength',
             'shortPathProtection',
-            'meanClosenessPx',
-            'peakClosenessPx',
             'scorePreservation',
+            'enableCurveFitting',
             'cubicFitTolerance',
             'endpointTangentStrictness',
             'forceOrthogonalAsLines',
@@ -4042,14 +4026,11 @@
                 merge_gap: parseInt(document.getElementById('mergeGap').value),
                 merge_angle_priority: parseFloat(document.getElementById('mergeAnglePriority').value),
                 rdp_tolerance: parseFloat(document.getElementById('rdpTolerance').value),
-                smoothing_factor: parseFloat(document.getElementById('smoothingFactor').value),
                 simplification_strength: parseFloat(document.getElementById('simplificationStrength').value),
-                arc_fit_strength: parseFloat(document.getElementById('arcFitStrength').value),
                 line_fit_strength: parseFloat(document.getElementById('lineFitStrength').value),
                 short_path_protection: parseFloat(document.getElementById('shortPathProtection').value),
-                mean_closeness_px: parseFloat(document.getElementById('meanClosenessPx').value),
-                peak_closeness_px: parseFloat(document.getElementById('peakClosenessPx').value),
                 score_preservation: parseFloat(document.getElementById('scorePreservation').value),
+                enable_curve_fitting: document.getElementById('enableCurveFitting').checked,
                 cubic_fit_tolerance: parseFloat(document.getElementById('cubicFitTolerance').value),
                 endpoint_tangent_strictness: parseFloat(document.getElementById('endpointTangentStrictness').value),
                 force_orthogonal_as_lines: document.getElementById('forceOrthogonalAsLines').checked,

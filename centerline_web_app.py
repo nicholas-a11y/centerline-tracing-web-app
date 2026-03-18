@@ -46,6 +46,7 @@ TEST_UI_IMPORT_ERROR = None
 try:
     from test_ui_backend import (
         ALL_FIXTURE_IDS,
+        DEFAULT_FITTING_PARAMETERS,
         create_run,
         get_fixture_detail,
         get_run_progress,
@@ -56,6 +57,7 @@ try:
 except Exception as exc:
     # Production images may omit pytest/test dependencies. Keep core app alive.
     ALL_FIXTURE_IDS = []
+    DEFAULT_FITTING_PARAMETERS = {}
     TEST_UI_IMPORT_ERROR = str(exc)
 
 app = Flask(__name__)
@@ -152,7 +154,8 @@ class CenterlineSession:
             'score_preservation': 80.0,  # Minimum retained circle score percentage for accepted fits
             'cubic_fit_tolerance': 1.0,  # SVG cubic fitting tolerance in px (lower = tighter, more segments)
             'endpoint_tangent_strictness': 85.0,  # Strength of start/end handle alignment to extracted path direction (not fixture/golden data)
-            'force_orthogonal_as_lines': True,  # Force axis-aligned/corner paths to use line segments only
+            'force_orthogonal_as_lines': False,  # Optionally force axis-aligned/corner paths to use line segments only
+            'enable_curve_fitting': False,  # Fit optimized paths to cubic segments only when explicitly enabled
             'min_path_length': 3,      # Increase to 8-15 for longer segments
             'enable_optimization': True,   # Enable path optimization and circle evaluation
             'show_pre_optimization': False,  # Show unoptimized paths in SVG
@@ -315,6 +318,7 @@ def _svg_render_signature(
     curve_fit_tolerance,
     endpoint_tangent_strictness,
     force_orthogonal_as_lines,
+    enable_curve_fitting,
     pre_paths,
     optimized_paths,
     suppress_paths_in_view,
@@ -331,6 +335,7 @@ def _svg_render_signature(
         round(float(curve_fit_tolerance), 4),
         round(float(endpoint_tangent_strictness), 4),
         bool(force_orthogonal_as_lines),
+        bool(enable_curve_fitting),
         bool(suppress_paths_in_view),
         bool(has_circle_system),
         int(optimization_generation),
@@ -366,6 +371,7 @@ def _render_svg_content(
     curve_fit_tolerance,
     endpoint_tangent_strictness,
     force_orthogonal_as_lines,
+    enable_curve_fitting,
     include_image,
     show_pre,
     suppress_paths_in_view=False,
@@ -377,6 +383,7 @@ def _render_svg_content(
         curve_fit_tolerance,
         endpoint_tangent_strictness,
         force_orthogonal_as_lines,
+        enable_curve_fitting,
         pre_optimization_paths,
         optimized_paths,
         suppress_paths_in_view,
@@ -408,6 +415,7 @@ def _render_svg_content(
             curve_fit_tolerance=curve_fit_tolerance,
             endpoint_tangent_strictness=endpoint_tangent_strictness,
             force_orthogonal_as_lines=force_orthogonal_as_lines,
+            enable_curve_fitting=enable_curve_fitting,
         )
 
         if not os.path.exists(temp_svg):
@@ -1191,7 +1199,11 @@ def test_ui():
     """Dedicated UI for pytest run management and fixture-layer inspection."""
     if not TEST_UI_ENABLED:
         return render_template('index.html')
-    return render_template('test_management.html', fixture_ids=ALL_FIXTURE_IDS)
+    return render_template(
+        'test_management.html',
+        fixture_ids=ALL_FIXTURE_IDS,
+        fitting_defaults=DEFAULT_FITTING_PARAMETERS,
+    )
 
 
 @app.route('/api/test-runs', methods=['GET'])
@@ -1210,11 +1222,18 @@ def api_execute_test_run():
     data = request.json or {}
     update_goldens = bool(data.get('update_goldens', False))
     fixture_ids = data.get('fixture_ids', None)
+    fitting_parameters = data.get('fitting_parameters', None)
     if fixture_ids is not None and not isinstance(fixture_ids, list):
         return jsonify({'error': 'fixture_ids must be a list of fixture IDs'}), 400
+    if fitting_parameters is not None and not isinstance(fitting_parameters, dict):
+        return jsonify({'error': 'fitting_parameters must be an object'}), 400
 
     try:
-        started = create_run(update_goldens=update_goldens, fixture_ids=fixture_ids)
+        started = create_run(
+            update_goldens=update_goldens,
+            fixture_ids=fixture_ids,
+            fitting_parameters=fitting_parameters,
+        )
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
 
@@ -1884,7 +1903,8 @@ def generate_svg():
         0.0,
         min(100.0, float(session.parameters.get('endpoint_tangent_strictness', 85.0))),
     )
-    force_orthogonal_as_lines = bool(session.parameters.get('force_orthogonal_as_lines', True))
+    force_orthogonal_as_lines = bool(session.parameters.get('force_orthogonal_as_lines', False))
+    enable_curve_fitting = bool(session.parameters.get('enable_curve_fitting', False))
 
     show_pre = session.parameters.get('show_pre_optimization', False)
     
@@ -1944,6 +1964,7 @@ def generate_svg():
             curve_fit_tolerance,
             endpoint_tangent_strictness,
             force_orthogonal_as_lines,
+            enable_curve_fitting,
             bool(session.parameters.get('include_image', False)),
             show_pre,
             suppress_paths_in_view=suppress_paths_in_view,
@@ -1990,7 +2011,8 @@ def download_svg(session_id):
             0.0,
             min(100.0, float(session.parameters.get('endpoint_tangent_strictness', 85.0))),
         )
-        force_orthogonal_as_lines = bool(session.parameters.get('force_orthogonal_as_lines', True))
+        force_orthogonal_as_lines = bool(session.parameters.get('force_orthogonal_as_lines', False))
+        enable_curve_fitting = bool(session.parameters.get('enable_curve_fitting', False))
 
         # Create filename based on original upload
         original_filename = session.original_filename or 'centerline_extraction'
@@ -2030,6 +2052,7 @@ def download_svg(session_id):
             curve_fit_tolerance,
             endpoint_tangent_strictness,
             force_orthogonal_as_lines,
+            enable_curve_fitting,
             bool(session.parameters.get('include_image', False)),
             show_pre,
             suppress_paths_in_view=False,

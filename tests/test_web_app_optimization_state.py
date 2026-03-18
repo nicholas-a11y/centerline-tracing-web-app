@@ -28,6 +28,68 @@ def test_benchmark_filename_prefix_detection():
     assert _should_capture_benchmark_metrics("ordinary_sample.png") is False
 
 
+def test_execute_test_run_passes_fitting_parameters(monkeypatch):
+    captured = {}
+
+    def _fake_create_run(update_goldens=False, fixture_ids=None, fitting_parameters=None):
+        captured["update_goldens"] = update_goldens
+        captured["fixture_ids"] = fixture_ids
+        captured["fitting_parameters"] = fitting_parameters
+        return {
+            "run_id": "run-123",
+            "status": "queued",
+            "created_at": "2026-03-18T00:00:00+00:00",
+            "update_goldens": bool(update_goldens),
+            "fixture_ids": fixture_ids or [],
+            "fixture_count": len(fixture_ids or []),
+            "fitting_parameters": fitting_parameters or {},
+        }
+
+    monkeypatch.setattr("centerline_web_app.create_run", _fake_create_run)
+
+    client = app.test_client()
+    response = client.post(
+        "/api/test-runs/execute",
+        json={
+            "update_goldens": False,
+            "fixture_ids": ["corner-l-shape"],
+            "fitting_parameters": {
+                "enable_curve_fitting": True,
+                "cubic_fit_tolerance": 1.25,
+                "endpoint_tangent_strictness": 72,
+                "force_orthogonal_as_lines": False,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["success"] is True
+    assert payload["run_id"] == "run-123"
+    assert captured["fixture_ids"] == ["corner-l-shape"]
+    assert captured["fitting_parameters"] == {
+        "enable_curve_fitting": True,
+        "cubic_fit_tolerance": 1.25,
+        "endpoint_tangent_strictness": 72,
+        "force_orthogonal_as_lines": False,
+    }
+
+
+def test_execute_test_run_rejects_non_object_fitting_parameters():
+    client = app.test_client()
+    response = client.post(
+        "/api/test-runs/execute",
+        json={
+            "update_goldens": False,
+            "fixture_ids": ["corner-l-shape"],
+            "fitting_parameters": ["bad-shape"],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "fitting_parameters must be an object"
+
+
 def test_benchmark_metrics_route_returns_filename_triggered_metrics():
     session = CenterlineSession("benchmark-session")
     session.original_filename = f"{BENCHMARK_FILENAME_PREFIXES[0]}sample.png"
@@ -392,5 +454,100 @@ def test_generate_svg_reuses_cached_output_for_identical_request(monkeypatch):
         assert second_response.status_code == 200
         assert first_response.get_json()['svg'] == second_response.get_json()['svg']
         assert render_calls['count'] == 1
+    finally:
+        sessions.pop(session.session_id, None)
+
+
+def test_generate_svg_defaults_curve_fitting_off(monkeypatch):
+    session = CenterlineSession("svg-default-curve-fit-off")
+    session.image = np.ones((8, 8), dtype=np.float32)
+    session.display_image = session.image
+    session.partial_optimized_paths = [
+        [[1, 1], [1, 2], [1, 3]],
+    ]
+    session.results = {
+        'pre_optimization_paths': [],
+        'optimized_paths': session.partial_optimized_paths,
+        'optimized_scores': [1.0],
+        'circle_system': None,
+    }
+    session.optimization_complete = True
+
+    captured = {}
+
+    def _stub_create_svg_output(*args, **kwargs):
+        import centerline_engine as engine
+
+        captured['enable_curve_fitting'] = kwargs.get('enable_curve_fitting')
+        with open(engine.OUTPUT_PATH, 'w') as file_handle:
+            file_handle.write('<svg xmlns="http://www.w3.org/2000/svg"></svg>')
+
+    monkeypatch.setattr('centerline_web_app.create_svg_output', _stub_create_svg_output)
+
+    sessions[session.session_id] = session
+    try:
+        client = app.test_client()
+        response = client.post(
+            '/generate_svg',
+            json={
+                'session_id': session.session_id,
+                'mode': 'final',
+                'parameters': session.parameters,
+            },
+        )
+
+        assert response.status_code == 200
+        assert captured['enable_curve_fitting'] is False
+    finally:
+        sessions.pop(session.session_id, None)
+
+
+def test_generate_svg_cache_key_changes_when_curve_fitting_toggles(monkeypatch):
+    session = CenterlineSession("svg-curve-fit-cache-toggle")
+    session.image = np.ones((8, 8), dtype=np.float32)
+    session.display_image = session.image
+    session.partial_optimized_paths = [
+        [[1, 1], [1, 2], [1, 3]],
+    ]
+    session.results = {
+        'pre_optimization_paths': [],
+        'optimized_paths': session.partial_optimized_paths,
+        'optimized_scores': [1.0],
+        'circle_system': None,
+    }
+    session.optimization_complete = True
+
+    render_calls = {'count': 0}
+
+    def _stub_create_svg_output(*args, **kwargs):
+        import centerline_engine as engine
+
+        render_calls['count'] += 1
+        with open(engine.OUTPUT_PATH, 'w') as file_handle:
+            file_handle.write('<svg xmlns="http://www.w3.org/2000/svg"></svg>')
+
+    monkeypatch.setattr('centerline_web_app.create_svg_output', _stub_create_svg_output)
+
+    sessions[session.session_id] = session
+    try:
+        client = app.test_client()
+
+        curve_off_payload = {
+            'session_id': session.session_id,
+            'mode': 'final',
+            'parameters': {**session.parameters, 'enable_curve_fitting': False},
+        }
+        curve_on_payload = {
+            'session_id': session.session_id,
+            'mode': 'final',
+            'parameters': {**session.parameters, 'enable_curve_fitting': True},
+        }
+
+        first_response = client.post('/generate_svg', json=curve_off_payload)
+        second_response = client.post('/generate_svg', json=curve_on_payload)
+
+        assert first_response.status_code == 200
+        assert second_response.status_code == 200
+        assert render_calls['count'] == 2
     finally:
         sessions.pop(session.session_id, None)
