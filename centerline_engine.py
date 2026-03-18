@@ -8,6 +8,7 @@ All legacy methods (original centerline, KD-tree, red circles) have been removed
 """
 
 import os
+import time
 import numpy as np
 from skimage import io, color, filters, morphology
 from skimage.morphology import binary_erosion, footprint_rectangle
@@ -833,11 +834,12 @@ def fit_curve_to_path(path, curve_type='polynomial', degree=3):
     
     return path
 
-def optimize_path_with_custom_params(path, circle_system, params, initial_score=None):
+def optimize_path_with_custom_params(path, circle_system, params, initial_score=None, return_diagnostics=False):
     """
     Optimize path with a conservative RDP pre-simplification followed by a high-quality spline fit.
     This approach prioritizes smoothness and fidelity over aggressive point reduction.
     """
+    optimize_started_at = time.perf_counter()
     requested_tolerance = float(params.get('rdp_tolerance', 4.0))
     smoothing_factor = float(params.get('smoothing_factor', 0.006))
     simplification_strength = max(0.0, min(100.0, float(params.get('simplification_strength', 50.0))))
@@ -856,6 +858,41 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
     reference_path = _remove_duplicate_points(path)
     current_path = reference_path
     best_score = float(initial_score) if initial_score is not None else circle_system.evaluate_path(current_path)
+
+    diagnostics = None
+    if return_diagnostics:
+        diagnostics = {
+            'input_points': int(len(path)),
+            'phase_ms': {},
+            'counts': {
+                'score_evaluations': 0,
+                'drift_measurements': 0,
+                'candidates_considered': 0,
+                'candidates_accepted': 0,
+            },
+        }
+
+    def _record_phase_elapsed(phase_name, started_at):
+        if diagnostics is None:
+            return
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        diagnostics['phase_ms'][phase_name] = diagnostics['phase_ms'].get(phase_name, 0.0) + elapsed_ms
+
+    def _evaluate_path_score(candidate):
+        score_started_at = time.perf_counter()
+        score = circle_system.evaluate_path(candidate)
+        if diagnostics is not None:
+            diagnostics['counts']['score_evaluations'] += 1
+            _record_phase_elapsed('score_evaluation', score_started_at)
+        return score
+
+    def _measure_reference_drift(reference, candidate):
+        drift_started_at = time.perf_counter()
+        mean_dist, p95_dist = _reference_to_candidate_metrics(reference, candidate)
+        if diagnostics is not None:
+            diagnostics['counts']['drift_measurements'] += 1
+            _record_phase_elapsed('drift_measurement', drift_started_at)
+        return mean_dist, p95_dist
 
     print(f"    Optimizing path: {len(path)} points, initial score: {best_score:.2f}")
 
@@ -931,6 +968,7 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
         sharp_ratio = float(np.mean(angles > 35.0)) if len(angles) else 0.0
         return mean_angle, sharp_ratio
 
+    precondition_started_at = time.perf_counter()
     preconditioned_path = precondition_path_for_optimization(
         reference_path,
         base_tolerance=max(0.45, requested_tolerance * 0.22),
@@ -938,8 +976,8 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
     if len(preconditioned_path) >= min_path_length and len(preconditioned_path) <= len(reference_path):
         precondition_reason = _path_geometry_rejection_reason(preconditioned_path, reference_path)
         if precondition_reason is None:
-            precondition_score = circle_system.evaluate_path(preconditioned_path)
-            mean_dist, p95_dist = _reference_to_candidate_metrics(reference_path, preconditioned_path)
+            precondition_score = _evaluate_path_score(preconditioned_path)
+            mean_dist, p95_dist = _measure_reference_drift(reference_path, preconditioned_path)
             if (
                 precondition_score >= best_score * max(0.92, score_preservation_ratio - 0.05)
                 and mean_dist <= max(mean_closeness_px, 1.4)
@@ -951,7 +989,11 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
                     f"      ✓ Accepted magenta preconditioning: {len(reference_path)} -> {len(preconditioned_path)} points, "
                     f"score: {precondition_score:.2f}"
                 )
+                if diagnostics is not None:
+                    diagnostics['counts']['candidates_accepted'] += 1
+    _record_phase_elapsed('precondition', precondition_started_at)
 
+    analysis_started_at = time.perf_counter()
     cleaned_path = _remove_duplicate_points(current_path)
     even_path = _resample_even_spacing(cleaned_path)
 
@@ -964,8 +1006,10 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
     if sharp_ratio > 0.25 or mean_angle > 25.0:
         base_tolerance *= 0.65
     adaptive_tolerance = max(0.85, min(base_tolerance, requested_tolerance + 2.5))
+    _record_phase_elapsed('path_analysis', analysis_started_at)
 
     if line_fit_ratio > 0.05:
+        rdp_started_at = time.perf_counter()
         try:
             simplified_path = rdp_simplify(even_path, adaptive_tolerance)
             if len(simplified_path) >= min_path_length:
@@ -974,7 +1018,7 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
                     print(f"      ✗ Rejected adaptive pre-simplification ({rejection_reason}).")
                     simplified_path = None
             if simplified_path is not None and len(simplified_path) >= min_path_length:
-                rdp_score = circle_system.evaluate_path(simplified_path)
+                rdp_score = _evaluate_path_score(simplified_path)
                 print(
                     f"      Adaptive RDP: {len(current_path)} -> {len(simplified_path)} points, "
                     f"score: {rdp_score:.2f}, tolerance: {adaptive_tolerance:.2f}, "
@@ -985,11 +1029,16 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
                     current_path = simplified_path
                     best_score = rdp_score
                     print("      ✓ Accepted adaptive pre-simplification.")
+                    if diagnostics is not None:
+                        diagnostics['counts']['candidates_accepted'] += 1
                 else:
                     print("      ✗ Rejected RDP due to score drop.")
         except Exception as e:
             print(f"      RDP failed: {e}")
+        finally:
+            _record_phase_elapsed('adaptive_rdp', rdp_started_at)
 
+    spline_started_at = time.perf_counter()
     try:
         if len(current_path) >= 4:
             smoothed_path = smooth_path_spline(
@@ -1000,18 +1049,25 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
             if rejection_reason is not None:
                 print(f"      ✗ Rejected high-quality spline fit ({rejection_reason}).")
             elif len(smoothed_path) >= min_path_length:
-                smooth_score = circle_system.evaluate_path(smoothed_path)
+                smooth_score = _evaluate_path_score(smoothed_path)
                 print(f"      Spline smooth: {len(current_path)} -> {len(smoothed_path)} points, score: {smooth_score:.2f}")
 
                 if smooth_score > best_score * max(0.92, score_preservation_ratio):
                     current_path = smoothed_path
                     best_score = smooth_score
                     print("      ✓ Accepted high-quality spline fit.")
+                    if diagnostics is not None:
+                        diagnostics['counts']['candidates_accepted'] += 1
     except Exception as e:
         print(f"      Spline smoothing failed: {e}")
+    finally:
+        _record_phase_elapsed('spline_smooth', spline_started_at)
 
     def _consider_candidate(candidate, label):
         nonlocal current_path, best_score
+
+        if diagnostics is not None:
+            diagnostics['counts']['candidates_considered'] += 1
 
         candidate = _remove_duplicate_points(candidate)
         if len(candidate) < min_path_length or len(candidate) >= len(current_path):
@@ -1022,8 +1078,8 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
             print(f"      ✗ Rejected {label.lower()} ({rejection_reason}).")
             return
 
-        candidate_score = circle_system.evaluate_path(candidate)
-        mean_dist, p95_dist = _reference_to_candidate_metrics(reference_path, candidate)
+        candidate_score = _evaluate_path_score(candidate)
+        mean_dist, p95_dist = _measure_reference_drift(reference_path, candidate)
         max_mean_dist = mean_closeness_px
         max_p95_dist = peak_closeness_px
         min_score_ratio = score_preservation_ratio
@@ -1037,6 +1093,8 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
             current_path = candidate
             best_score = candidate_score
             print(f"      ✓ Accepted {label.lower()}.")
+            if diagnostics is not None:
+                diagnostics['counts']['candidates_accepted'] += 1
         else:
             print(f"      ✗ Rejected {label.lower()} (too much drift or score loss).")
 
@@ -1047,6 +1105,7 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
         )
 
         try:
+            arc_fit_started_at = time.perf_counter()
             curve_seed = smooth_path_spline(
                 current_path,
                 smoothing_factor * (1.0 + 4.2 * effective_simplification_ratio + 2.2 * arc_fit_ratio),
@@ -1055,15 +1114,21 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
             _consider_candidate(curve_fit_candidate, "Arc-fit simplification")
         except Exception as e:
             print(f"      Arc-fit simplification failed: {e}")
+        finally:
+            _record_phase_elapsed('arc_fit_simplification', arc_fit_started_at)
 
         try:
+            spline_arc_started_at = time.perf_counter()
             spline_curve_candidate = fit_curve_to_path(current_path, 'spline')
             spline_curve_candidate = _reduce_vertices_evenly(spline_curve_candidate, target_count)
             _consider_candidate(spline_curve_candidate, "Spline arc fit")
         except Exception as e:
             print(f"      Spline arc fit failed: {e}")
+        finally:
+            _record_phase_elapsed('spline_arc_fit', spline_arc_started_at)
 
         try:
+            hybrid_started_at = time.perf_counter()
             hybrid_seed = smooth_path_spline(
                 current_path,
                 smoothing_factor * (1.0 + 2.2 * effective_simplification_ratio + 1.3 * arc_fit_ratio),
@@ -1076,9 +1141,12 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
             _consider_candidate(hybrid_candidate, "Arc-first hybrid fit")
         except Exception as e:
             print(f"      Arc-first hybrid fit failed: {e}")
+        finally:
+            _record_phase_elapsed('arc_first_hybrid', hybrid_started_at)
 
         if line_fit_ratio > 0.05:
             try:
+                line_fit_started_at = time.perf_counter()
                 line_fit_candidate = rdp_simplify(
                     current_path,
                     adaptive_tolerance * (0.75 + 2.0 * effective_simplification_ratio * line_fit_ratio),
@@ -1086,8 +1154,19 @@ def optimize_path_with_custom_params(path, circle_system, params, initial_score=
                 _consider_candidate(line_fit_candidate, "Line-fit simplification")
             except Exception as e:
                 print(f"      Line-fit simplification failed: {e}")
+            finally:
+                _record_phase_elapsed('line_fit_simplification', line_fit_started_at)
 
     print(f"    Final: {len(current_path)} points, score: {best_score:.2f}")
+    if diagnostics is not None:
+        diagnostics['output_points'] = int(len(current_path))
+        diagnostics['total_ms'] = (time.perf_counter() - optimize_started_at) * 1000.0
+        diagnostics['score_delta'] = float(best_score) - float(initial_score if initial_score is not None else best_score)
+        diagnostics['score_delta_ratio'] = 0.0
+        if initial_score not in (None, 0):
+            diagnostics['score_delta_ratio'] = diagnostics['score_delta'] / float(initial_score)
+    if return_diagnostics:
+        return current_path, best_score, diagnostics
     return current_path, best_score
 
 def optimize_path_with_circles(path, circle_system, max_iterations=2):  # Reduced iterations for speed

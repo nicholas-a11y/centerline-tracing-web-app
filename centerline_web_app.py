@@ -212,6 +212,19 @@ def _record_benchmark_stage(session, stage_name, elapsed_ms, extra=None):
     metrics['stages'][stage_name] = payload
 
 
+def _merge_benchmark_numeric_dict(target, updates):
+    for key, value in updates.items():
+        target[key] = float(target.get(key, 0.0)) + float(value)
+
+
+def _round_benchmark_numeric_dict(values):
+    return {
+        str(key): round(float(value), 3)
+        for key, value in values.items()
+        if isinstance(value, (int, float))
+    }
+
+
 def _update_benchmark_bucket(session, bucket_name, payload):
     metrics = _ensure_benchmark_metrics(session)
     if metrics is None:
@@ -1496,10 +1509,16 @@ def background_optimization(session, generation):
         valid_paths = session.initial_paths
         original_total_segments = sum(max(len(path) - 1, 0) for path in valid_paths)
         optimized_total_segments = 0
+        benchmark_enabled = bool(session.benchmark_enabled)
+        optimizer_phase_totals_ms = {}
+        optimizer_counts = {}
+        initial_scoring_ms = 0.0
+        path_optimization_ms = 0.0
         
         session.progress_queue.put("Starting optimization process...")
         
         # Initialize circle evaluation system
+        circle_init_started_at = time.perf_counter()
         circle_system = CircleEvaluationSystem(
             session.image, 
             params['dark_threshold'],
@@ -1507,16 +1526,19 @@ def background_optimization(session, generation):
             0.2,  # min_circle_radius
             2.0   # circle_intersection_bonus
         )
+        circle_system_init_ms = (time.perf_counter() - circle_init_started_at) * 1000.0
         
         session.progress_queue.put("Circle evaluation system initialized...")
 
         # Avoid a full upfront scoring pass so the first path starts sooner.
         # Longer paths tend to matter most visually, so prioritize them first.
+        prioritization_started_at = time.perf_counter()
         sorted_indices = sorted(
             range(len(valid_paths)),
             key=lambda idx: len(valid_paths[idx]),
             reverse=True,
         )
+        path_prioritization_ms = (time.perf_counter() - prioritization_started_at) * 1000.0
         max_path_length = max((len(p) for p in valid_paths), default=1)
         session.progress_queue.put("Prioritizing longer paths first...")
         session.progress_queue.put(f"Optimizing {len(valid_paths)} paths...")
@@ -1528,7 +1550,9 @@ def background_optimization(session, generation):
                 break
                 
             path = valid_paths[idx]
+            score_started_at = time.perf_counter()
             original_score = circle_system.evaluate_path(path)
+            initial_scoring_ms += (time.perf_counter() - score_started_at) * 1000.0
             
             session.progress_queue.put(f"Optimizing path {i+1}/{len(valid_paths)} ({len(path)} points, score: {original_score:.3f})")
             
@@ -1548,9 +1572,22 @@ def background_optimization(session, generation):
                 'min_path_length': params.get('min_path_length', 3)
             }
             
-            optimized_path, optimized_score = optimize_path_with_custom_params(
-                path, circle_system, balanced_params, initial_score=original_score
-            )
+            optimization_started_at = time.perf_counter()
+            if benchmark_enabled:
+                optimized_path, optimized_score, optimizer_diagnostics = optimize_path_with_custom_params(
+                    path,
+                    circle_system,
+                    balanced_params,
+                    initial_score=original_score,
+                    return_diagnostics=True,
+                )
+                _merge_benchmark_numeric_dict(optimizer_phase_totals_ms, optimizer_diagnostics.get('phase_ms', {}))
+                _merge_benchmark_numeric_dict(optimizer_counts, optimizer_diagnostics.get('counts', {}))
+            else:
+                optimized_path, optimized_score = optimize_path_with_custom_params(
+                    path, circle_system, balanced_params, initial_score=original_score
+                )
+            path_optimization_ms += (time.perf_counter() - optimization_started_at) * 1000.0
 
             if session.optimization_stopped or generation != session.optimization_generation:
                 session.progress_queue.put("Optimization stopped by user")
@@ -1606,6 +1643,17 @@ def background_optimization(session, generation):
             'original_total_segments': int(original_total_segments),
             'optimized_total_segments': int(optimized_total_segments),
             'segment_reduction_pct': round(float(segment_reduction), 3),
+            'circle_system_init_ms': round(circle_system_init_ms, 3),
+            'path_prioritization_ms': round(path_prioritization_ms, 3),
+            'initial_scoring_ms': round(initial_scoring_ms, 3),
+            'path_optimization_ms': round(path_optimization_ms, 3),
+            'avg_path_optimization_ms': round(path_optimization_ms / max(len(valid_paths), 1), 3),
+            'optimizer_phase_ms': _round_benchmark_numeric_dict(optimizer_phase_totals_ms),
+            'optimizer_counts': {
+                str(key): int(round(float(value)))
+                for key, value in optimizer_counts.items()
+                if isinstance(value, (int, float))
+            },
         })
         
     except Exception as e:
