@@ -1137,7 +1137,7 @@
         <div class="header">
             <div class="header-inner">
                 <h1>🎯 Centerline Extraction Tool</h1>
-                <p>Interactive centerline extraction v1.83 Nicholas Leqeta</p>
+                <p>Interactive centerline extraction v1.84 Nicholas Leqeta</p>
                 <button type="button" class="header-help-btn" id="helpBtn">? Help</button>
             </div>
         </div>
@@ -1218,8 +1218,8 @@
                         <small style="color: #666; font-size: 0.8em;">How far line endpoints can reach to connect with nearby lines.</small>
                     </div>
                     <div class="parameter">
-                        <label>Tolerance <span class="range-value" id="rdpToleranceValue">6.5</span></label>
-                        <input type="range" id="rdpTolerance" min="0.5" max="10.0" step="0.5" value="6.5">
+                        <label>Tolerance <span class="range-value" id="rdpToleranceValue">5.0</span></label>
+                        <input type="range" id="rdpTolerance" min="0.5" max="10.0" step="0.5" value="5.0">
                         <small style="color: #666; font-size: 0.8em;">Level of simplification</small>
                     </div>
                     <div class="parameter">
@@ -4234,6 +4234,18 @@
             handleOptimizationToggle();
         }
 
+        function getOptimizationStatusText(optimizationEnabled, optimizationStarted) {
+            if (!optimizationEnabled) {
+                return 'Disabled (enable Path Optimisation to start)';
+            }
+
+            if (optimizationStarted) {
+                return 'Running in background...';
+            }
+
+            return 'Enabled. Preparing background optimisation...';
+        }
+
         // Parameter change handling
         document.addEventListener('DOMContentLoaded', function() {
             // Add event listeners to all range inputs
@@ -4733,6 +4745,16 @@
                 console.log('Progressive processing response:', data);
                 if (data.success) {
                     showLoading(false);
+
+                    const enableOptimizationToggle = document.getElementById('enableOptimization');
+                    if (
+                        enableOptimizationToggle &&
+                        typeof data.optimization_enabled === 'boolean' &&
+                        enableOptimizationToggle.checked !== data.optimization_enabled
+                    ) {
+                        enableOptimizationToggle.checked = data.optimization_enabled;
+                        handleOptimizationToggle();
+                    }
                     
                     // Display immediate magenta results
                     displayImmediateResults(data);
@@ -4794,11 +4816,13 @@
 
             const optStatusPanel = document.getElementById('optStatusPanel');
             if (optStatusPanel) {
+                const optimizationEnabled = data.optimization_enabled !== false;
+                const optimizationStarted = Boolean(data.optimization_started);
                 lastOptimizationTotalPaths = Number(data.valid_paths_count || 0);
                 optStatusPanel.innerHTML = `
                     <h3 style="margin: 0 0 8px; font-size: 0.95em; color: #444;">Optimisation Status</h3>
-                    <p id="optimization-status" style="margin: 0 0 6px;">${data.optimization_started ? 'Running in background...' : 'Disabled (click on Enable Path Optimisation to start)'}</p>
-                    ${data.optimization_started ? `
+                    <p id="optimization-status" style="margin: 0 0 6px;">${getOptimizationStatusText(optimizationEnabled, optimizationStarted)}</p>
+                    ${optimizationStarted ? `
                     <div class="opt-progress-wrap" id="opt-progress-wrap">
                         <div class="opt-progress-bar-track">
                             <div class="opt-progress-bar-fill" id="opt-progress-bar"></div>

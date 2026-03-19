@@ -188,7 +188,7 @@ class CenterlineSession:
             'merge_gap': 25,  # Endpoint reach-out distance (pixels) for path merging
             'merge_angle_priority': 30.0,  # % weight for angle continuity vs distance
             'enable_long_path_merging': False,  # Optional slower second pass that can join already-long fragments
-            'rdp_tolerance': 6.5,       # Default simplification tolerance
+            'rdp_tolerance': 5.0,       # Default simplification tolerance
             'smoothing_factor': 0.006,  # Balanced smoothing that keeps runtime responsive
             'simplification_strength': 100.0,  # Maximum vertex reduction target
             'arc_fit_strength': 72.0,  # Favor curves without over-smoothing
@@ -2095,6 +2095,7 @@ def process_immediate():
             'extraction_profile': extraction_profile['profile_name'],
             'valid_paths_count': len(valid_paths),
             'paths': json_serializable_paths,  # Use JSON-serializable version
+            'optimization_enabled': bool(params.get('enable_optimization', True)),
             'optimization_started': False,
             'effective_merge_gap': int(merge_gap),
             'median_stroke_width_px': float(session.stroke_width_estimate_px) if session.stroke_width_estimate_px is not None else None,
@@ -2356,7 +2357,7 @@ def background_optimization(session, generation):
             
             # Apply optimization using current UI parameters, including guarded simplification.
             balanced_params = {
-                'rdp_tolerance': params.get('rdp_tolerance', 6.5),
+                'rdp_tolerance': params.get('rdp_tolerance', 5.0),
                 'smoothing_factor': params.get('smoothing_factor', 0.006),
                 'simplification_strength': params.get('simplification_strength', 100.0),
                 'arc_fit_strength': params.get('arc_fit_strength', 72.0),
@@ -2537,6 +2538,7 @@ def get_progress(session_id):
     
     return jsonify({
         'messages': messages,
+        'optimization_enabled': bool(session.parameters.get('enable_optimization', True)),
         'optimization_complete': session.optimization_complete,
         'optimized_count': optimized_count,
         'total_paths': len(session.initial_paths) if session.initial_paths else 0,

@@ -229,6 +229,39 @@ def test_progress_reports_live_preview_metadata():
         sessions.pop(session.session_id, None)
 
 
+def test_process_immediate_reports_disabled_optimization_state(monkeypatch):
+    session = CenterlineSession("immediate-disabled-state")
+    session.image = np.zeros((16, 16), dtype=np.float32)
+
+    def _fake_create_fast_paths(skeleton, min_path_length=1):
+        return [
+            [[0, 0], [0, 1], [0, 2], [0, 3]],
+        ]
+
+    monkeypatch.setattr("centerline_engine.create_fast_paths", _fake_create_fast_paths)
+
+    sessions[session.session_id] = session
+    try:
+        client = app.test_client()
+        response = client.post(
+            "/process_immediate",
+            json={
+                "session_id": session.session_id,
+                "parameters": {
+                    "enable_optimization": False,
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload["success"] is True
+        assert payload["optimization_enabled"] is False
+        assert payload["optimization_started"] is False
+    finally:
+        sessions.pop(session.session_id, None)
+
+
 def test_progress_reports_merge_progress_metadata():
     session = CenterlineSession("merge-progress-state")
     session.initial_paths = [
