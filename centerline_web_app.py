@@ -188,7 +188,7 @@ class CenterlineSession:
             'merge_gap': 25,  # Endpoint reach-out distance (pixels) for path merging
             'merge_angle_priority': 30.0,  # % weight for angle continuity vs distance
             'enable_long_path_merging': False,  # Optional slower second pass that can join already-long fragments
-            'rdp_tolerance': 10.0,      # Maximum tolerance by default for strongest simplification
+            'rdp_tolerance': 6.5,       # Default simplification tolerance
             'smoothing_factor': 0.006,  # Balanced smoothing that keeps runtime responsive
             'simplification_strength': 100.0,  # Maximum vertex reduction target
             'arc_fit_strength': 72.0,  # Favor curves without over-smoothing
@@ -2356,7 +2356,7 @@ def background_optimization(session, generation):
             
             # Apply optimization using current UI parameters, including guarded simplification.
             balanced_params = {
-                'rdp_tolerance': params.get('rdp_tolerance', 10.0),
+                'rdp_tolerance': params.get('rdp_tolerance', 6.5),
                 'smoothing_factor': params.get('smoothing_factor', 0.006),
                 'simplification_strength': params.get('simplification_strength', 100.0),
                 'arc_fit_strength': params.get('arc_fit_strength', 72.0),
