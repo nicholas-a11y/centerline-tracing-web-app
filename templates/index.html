@@ -1265,7 +1265,7 @@
                                 <input type="checkbox" id="enableCurveFitting">
                                 Enable Curve Fitting
                             </label>
-                            <small style="color: #666; font-size: 0.8em;">Off by default so straight-line output can be tuned first. Enable to emit fitted cubic segments.</small>
+                            <small style="color: #666; font-size: 0.8em;">Enable to emit fitted curves, still needs work so you may get a few crazy loops!</small>
                         </div>
                         <div class="parameter" id="cubicFitToleranceWrap">
                             <label>Cubic Fit Tolerance (px) <span class="range-value" id="cubicFitToleranceValue">1.0</span></label>
@@ -1398,7 +1398,7 @@
             <div class="help-modal-header">
                 <div>
                     <h2 class="help-modal-title" id="helpModalTitle">Control Reference</h2>
-                    <p class="help-modal-subtitle">Detailed guidance for the main controls, grouped the same way they appear in the sidebar.</p>
+                    <p class="help-modal-subtitle">Detailed guidance for the main controls and workflow steps in the current UI.</p>
                 </div>
                 <button type="button" class="help-modal-close" id="helpModalClose" aria-label="Close help">&times;</button>
             </div>
@@ -1441,14 +1441,6 @@
                             <p class="help-control-desc">Sets how aggressively Auto mode decides to normalize. Higher sensitivity normalizes more images, which helps difficult scans but can flatten already-good artwork.</p>
                         </div>
                         <div class="help-control-item">
-                            <p class="help-control-name">Merge Gap</p>
-                            <p class="help-control-desc">Maximum endpoint distance for bridging broken skeleton paths. Increase it when lines have small interruptions; decrease it if unrelated features begin joining together.</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Angle Priority</p>
-                            <p class="help-control-desc">Biases merging toward endpoints that continue in a similar direction. Higher values prefer smoother continuation over pure nearest-gap bridging.</p>
-                        </div>
-                        <div class="help-control-item">
                             <p class="help-control-name">Min Path Length</p>
                             <p class="help-control-desc">Filters out short detected paths before optimization. Raise it to drop dots and tiny fragments; lower it only when genuine short strokes are being lost.</p>
                         </div>
@@ -1462,6 +1454,18 @@
                 <section class="help-section">
                     <h3 class="help-section-title">Optimisation</h3>
                     <div class="help-control-list">
+                        <div class="help-control-item">
+                            <p class="help-control-name">Merge Gap</p>
+                            <p class="help-control-desc">Maximum endpoint distance for bridging nearby path ends during the merge stage. Increase it when lines have small interruptions; decrease it if separate features start joining together.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Angle Priority</p>
+                            <p class="help-control-desc">Biases the merge stage toward endpoints that continue in a similar direction. Higher values favor smoother continuation over pure nearest-gap bridging.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Enable Long Fragment Merge Pass</p>
+                            <p class="help-control-desc">Adds a slower second merge pass that can connect already-long fragments after the fast pass finishes. Leave it off for speed; turn it on only when obvious long breaks are still not joining.</p>
+                        </div>
                         <div class="help-control-item">
                             <p class="help-control-name">Tolerance</p>
                             <p class="help-control-desc">Sets the overall simplification looseness. Higher values allow bigger geometric shortcuts and usually produce fewer segments.</p>
@@ -1531,12 +1535,30 @@
                             <p class="help-control-desc">Automatically reprocesses after parameter changes. Keep it on for quick iteration and turn it off when you want to batch several adjustments first.</p>
                         </div>
                         <div class="help-control-item">
+                            <p class="help-control-name">Skip Auto-Tune</p>
+                            <p class="help-control-desc">Stops the upload-time auto-tune pass and keeps the best detection settings found so far. Use it if the suggested settings are already good enough or you want to take over manually.</p>
+                        </div>
+                        <div class="help-control-item">
                             <p class="help-control-name">Reset</p>
                             <p class="help-control-desc">Returns the session UI to its baseline state. Use it to clear the current job and undo exploratory tuning without reloading the page.</p>
                         </div>
                         <div class="help-control-item">
                             <p class="help-control-name">Stop Optimization</p>
-                            <p class="help-control-desc">Stops a running optimization pass and keeps whatever progressive result is available. Useful when a job is taking too long or the intermediate result is already good enough.</p>
+                            <p class="help-control-desc">Stops a running optimization pass and keeps the current progressive result available in the view and download path. Useful when a job is taking too long or the intermediate result is already good enough.</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="help-section">
+                    <h3 class="help-section-title">Guided Tuning</h3>
+                    <div class="help-control-list">
+                        <div class="help-control-item">
+                            <p class="help-control-name">Auto Detection Tuning Review</p>
+                            <p class="help-control-desc">After upload, the app can open a review panel that previews threshold and minimum-length changes on sampled busy regions before the full run starts. Use it to confirm that the suggested detection settings look right.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Accept and Continue</p>
+                            <p class="help-control-desc">Closes the tuning review and starts processing the full image with the currently selected threshold and minimum path length.</p>
                         </div>
                     </div>
                 </section>
@@ -1553,8 +1575,8 @@
                             <p class="help-control-desc">Lets you drag the generated SVG out of the browser, but only on Chromium-family browsers where that drag payload is supported. On other browsers, download the SVG first and drag the saved file from your file manager.</p>
                         </div>
                         <div class="help-control-item">
-                            <p class="help-control-name">Reset View</p>
-                            <p class="help-control-desc">Resets pan and zoom in the SVG preview window. Use it after inspecting details closely so the whole result is framed again.</p>
+                            <p class="help-control-name">Reset View Buttons</p>
+                            <p class="help-control-desc">The image preview and SVG preview each have their own Reset View button. Use them to restore the default framing after panning or zooming deeply into either panel.</p>
                         </div>
                     </div>
                 </section>
