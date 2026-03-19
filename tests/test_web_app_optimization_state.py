@@ -495,6 +495,50 @@ def test_background_optimization_records_optimizer_phase_metrics(monkeypatch):
     assert optimization_metrics['optimizer_counts']['score_evaluations'] == 6
     assert optimization_metrics['optimizer_counts']['candidates_considered'] == 4
     assert optimization_metrics['optimizer_counts']['candidates_accepted'] == 2
+    assert session.results is not None
+    assert len(session.results['optimized_paths']) == 2
+    assert session.optimization_complete is True
+
+
+def test_generate_svg_final_works_immediately_after_background_optimization(monkeypatch):
+    session = CenterlineSession("svg-final-after-background-optimization")
+    session.image = np.ones((8, 8), dtype=np.float32)
+    session.display_image = session.image
+    session.initial_paths = [
+        [[0, 0], [0, 1], [0, 2], [0, 3]],
+        [[1, 0], [1, 1], [1, 2], [1, 3]],
+    ]
+    session.optimization_generation = 1
+    session.parameters['show_pre_optimization'] = True
+
+    monkeypatch.setattr("centerline_web_app.CircleEvaluationSystem", _StubCircleSystem)
+    monkeypatch.setattr("centerline_web_app.merge_nearby_paths", lambda paths, **kwargs: list(paths))
+    monkeypatch.setattr(
+        "centerline_web_app.optimize_path_with_custom_params",
+        lambda path, circle_system, params, initial_score=None, return_diagnostics=False: (path, 1.0, {'phase_ms': {}, 'counts': {}})
+        if return_diagnostics else (path, 1.0),
+    )
+
+    sessions[session.session_id] = session
+    try:
+        background_optimization(session, 1)
+
+        client = app.test_client()
+        response = client.post(
+            "/generate_svg",
+            json={
+                "session_id": session.session_id,
+                "mode": "final",
+                "parameters": session.parameters,
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert "svg" in payload
+        assert 'stroke="#0066CC"' in payload["svg"]
+    finally:
+        sessions.pop(session.session_id, None)
 
 
 def test_benchmark_response_helper_returns_none_when_disabled():
@@ -626,6 +670,55 @@ def test_generate_svg_progressive_uses_live_merge_preview_before_optimization():
         sessions.pop(session.session_id, None)
 
 
+def test_generate_svg_progressive_stitches_optimized_prefix_with_live_preview_tail(monkeypatch):
+    session = CenterlineSession("svg-progressive-stitch-session")
+    session.image = np.ones((8, 8), dtype=np.float32)
+    session.display_image = session.image
+    session.initial_paths = [
+        [[0, 0], [0, 1], [0, 2]],
+        [[2, 0], [2, 1], [2, 2]],
+    ]
+    session.live_preview_paths = [
+        [[10, 10], [10, 11], [10, 12]],
+        [[20, 20], [20, 21], [20, 22]],
+    ]
+    session.partial_optimized_paths = [
+        [[11, 10], [11, 11], [11, 12]],
+    ]
+    session.live_preview_kind = "optimization"
+    session.live_preview_frame_id = 2
+    session.parameters['enable_optimization'] = True
+    session.parameters['show_pre_optimization'] = True
+
+    captured = {}
+
+    def _stub_create_svg_output(*args, **kwargs):
+        captured['optimized_paths'] = kwargs.get('optimized_paths', args[2] if len(args) > 2 else None)
+        return '<svg xmlns="http://www.w3.org/2000/svg"></svg>'
+
+    monkeypatch.setattr('centerline_web_app.create_svg_output', _stub_create_svg_output)
+
+    sessions[session.session_id] = session
+    try:
+        client = app.test_client()
+        response = client.post(
+            '/generate_svg',
+            json={
+                'session_id': session.session_id,
+                'mode': 'progressive',
+                'parameters': session.parameters,
+            },
+        )
+
+        assert response.status_code == 200
+        assert captured['optimized_paths'] == [
+            [[11, 10], [11, 11], [11, 12]],
+            [[20, 20], [20, 21], [20, 22]],
+        ]
+    finally:
+        sessions.pop(session.session_id, None)
+
+
 def test_download_svg_includes_completed_blue_and_selected_magenta_and_image():
     session = CenterlineSession("download-svg-session")
     session.image = np.ones((8, 8), dtype=np.float32)
@@ -745,6 +838,49 @@ def test_generate_svg_reuses_cached_output_for_identical_request(monkeypatch):
         sessions.pop(session.session_id, None)
 
 
+def test_generate_svg_cache_invalidates_when_geometry_changes_with_same_counts(monkeypatch):
+    session = CenterlineSession("svg-cache-geometry-session")
+    session.image = np.ones((8, 8), dtype=np.float32)
+    session.display_image = session.image
+    session.initial_paths = [
+        [[0, 0], [0, 1], [0, 2]],
+    ]
+    session.partial_optimized_paths = [
+        [[1, 1], [1, 2], [1, 3]],
+    ]
+    session.parameters['enable_optimization'] = True
+    session.parameters['show_pre_optimization'] = True
+
+    render_calls = {'count': 0}
+
+    def _stub_create_svg_output(*args, **kwargs):
+        render_calls['count'] += 1
+        return f'<svg xmlns="http://www.w3.org/2000/svg"><!-- {render_calls["count"]} --></svg>'
+
+    monkeypatch.setattr('centerline_web_app.create_svg_output', _stub_create_svg_output)
+
+    sessions[session.session_id] = session
+    try:
+        client = app.test_client()
+        request_payload = {
+            'session_id': session.session_id,
+            'mode': 'progressive',
+            'parameters': session.parameters,
+        }
+
+        first_response = client.post('/generate_svg', json=request_payload)
+        session.partial_optimized_paths = [
+            [[2, 1], [2, 2], [2, 3]],
+        ]
+        second_response = client.post('/generate_svg', json=request_payload)
+
+        assert first_response.status_code == 200
+        assert second_response.status_code == 200
+        assert render_calls['count'] == 2
+    finally:
+        sessions.pop(session.session_id, None)
+
+
 def test_generate_svg_defaults_curve_fitting_off(monkeypatch):
     session = CenterlineSession("svg-default-curve-fit-off")
     session.image = np.ones((8, 8), dtype=np.float32)
@@ -782,13 +918,13 @@ def test_generate_svg_defaults_curve_fitting_off(monkeypatch):
         )
 
         assert response.status_code == 200
-        assert captured['enable_curve_fitting'] is True
+        assert captured['enable_curve_fitting'] is False
         assert captured['fit_optimized_paths'] is True
     finally:
         sessions.pop(session.session_id, None)
 
 
-def test_generate_svg_preview_cache_is_reused_when_curve_fitting_toggles(monkeypatch):
+def test_generate_svg_preview_cache_invalidates_when_curve_fitting_toggles(monkeypatch):
     session = CenterlineSession("svg-curve-fit-cache-toggle")
     session.image = np.ones((8, 8), dtype=np.float32)
     session.display_image = session.image
@@ -831,6 +967,66 @@ def test_generate_svg_preview_cache_is_reused_when_curve_fitting_toggles(monkeyp
 
         assert first_response.status_code == 200
         assert second_response.status_code == 200
-        assert render_calls['count'] == 1
+        assert render_calls['count'] == 2
+    finally:
+        sessions.pop(session.session_id, None)
+
+
+def test_generate_svg_view_and_download_share_render_settings(monkeypatch):
+    session = CenterlineSession("svg-view-download-settings-match")
+    session.image = np.ones((8, 8), dtype=np.float32)
+    session.display_image = session.image
+    session.original_filename = "sample_input.png"
+    session.partial_optimized_paths = [
+        [[1, 1], [1, 2], [1, 3]],
+    ]
+    session.initial_paths = [
+        [[0, 0], [0, 1], [0, 2]],
+    ]
+    session.parameters.update({
+        'show_pre_optimization': True,
+        'include_image': True,
+        'enable_curve_fitting': True,
+        'force_orthogonal_as_lines': True,
+        'cubic_fit_tolerance': 0.65,
+        'endpoint_tangent_strictness': 93.0,
+    })
+
+    captured_calls = []
+
+    def _stub_create_svg_output(*args, **kwargs):
+        captured_calls.append({
+            'curve_fit_tolerance': kwargs.get('curve_fit_tolerance'),
+            'endpoint_tangent_strictness': kwargs.get('endpoint_tangent_strictness'),
+            'force_orthogonal_as_lines': kwargs.get('force_orthogonal_as_lines'),
+            'enable_curve_fitting': kwargs.get('enable_curve_fitting'),
+            'fit_optimized_paths': kwargs.get('fit_optimized_paths'),
+            'combine_optimized_paths': kwargs.get('combine_optimized_paths'),
+            'combine_pre_optimization_paths': kwargs.get('combine_pre_optimization_paths'),
+            'coordinate_precision': kwargs.get('coordinate_precision'),
+        })
+        return '<svg xmlns="http://www.w3.org/2000/svg"></svg>'
+
+    monkeypatch.setattr('centerline_web_app.create_svg_output', _stub_create_svg_output)
+
+    sessions[session.session_id] = session
+    try:
+        client = app.test_client()
+
+        view_response = client.post(
+            '/generate_svg',
+            json={
+                'session_id': session.session_id,
+                'mode': 'progressive',
+                'parameters': session.parameters,
+            },
+        )
+        download_response = client.get(f'/download_svg/{session.session_id}')
+
+        assert view_response.status_code == 200
+        assert 'svg' in view_response.get_json()
+        assert download_response.status_code == 200
+        assert len(captured_calls) == 2
+        assert captured_calls[0] == captured_calls[1]
     finally:
         sessions.pop(session.session_id, None)

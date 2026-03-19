@@ -9,6 +9,7 @@ A Flask web application for interactive centerline extraction with real-time par
 import threading
 import time
 import logging
+import hashlib
 from queue import Queue
 from flask import Flask, render_template, request, jsonify, send_file
 import os
@@ -520,6 +521,19 @@ def _path_snapshot_stats(paths):
     return len(paths), sum(len(path) for path in paths)
 
 
+def _path_snapshot_signature(paths):
+    digest = hashlib.blake2b(digest_size=16)
+    for path in list(paths or []):
+        digest.update(f"{len(path)}:".encode('ascii'))
+        for point in list(path or []):
+            if not isinstance(point, (list, tuple)) or len(point) < 2:
+                digest.update(b'?,?;')
+                continue
+            digest.update(f"{float(point[0]):.4f},{float(point[1]):.4f};".encode('ascii'))
+        digest.update(b'|')
+    return digest.hexdigest()
+
+
 def _svg_render_signature(
     render_variant,
     include_image,
@@ -541,6 +555,8 @@ def _svg_render_signature(
 ):
     pre_count, pre_points = _path_snapshot_stats(pre_paths)
     optimized_count, optimized_points = _path_snapshot_stats(optimized_paths)
+    pre_signature = _path_snapshot_signature(pre_paths)
+    optimized_signature = _path_snapshot_signature(optimized_paths)
     return (
         str(render_variant),
         bool(include_image),
@@ -559,8 +575,10 @@ def _svg_render_signature(
         bool(optimization_complete),
         int(pre_count),
         int(pre_points),
+        str(pre_signature),
         int(optimized_count),
         int(optimized_points),
+        str(optimized_signature),
     )
 
 
@@ -649,6 +667,28 @@ def _render_svg_content(
 
     _store_cached_svg_render(session, cache_key, svg_content, suppress_paths_in_view)
     return svg_content, suppress_paths_in_view, False
+
+
+def _resolve_svg_render_settings(parameters):
+    render_parameters = dict(parameters or {})
+    return {
+        'curve_fit_tolerance': max(
+            0.35,
+            min(8.0, float(render_parameters.get('cubic_fit_tolerance', 1.0))),
+        ),
+        'endpoint_tangent_strictness': max(
+            0.0,
+            min(100.0, float(render_parameters.get('endpoint_tangent_strictness', 85.0))),
+        ),
+        'force_orthogonal_as_lines': bool(render_parameters.get('force_orthogonal_as_lines', False)),
+        'enable_curve_fitting': bool(render_parameters.get('enable_curve_fitting', False)),
+        'include_image': bool(render_parameters.get('include_image', False)),
+        'show_pre': bool(render_parameters.get('show_pre_optimization', False)),
+        'fit_optimized_paths': True,
+        'combine_optimized_paths': False,
+        'combine_pre_optimization_paths': False,
+        'coordinate_precision': 2,
+    }
 
 
 def _benchmark_metrics_response(session):
@@ -2261,6 +2301,8 @@ def background_optimization(session, generation):
         optimizer_counts = {}
         initial_scoring_ms = 0.0
         path_optimization_ms = 0.0
+        optimized_scores = []
+        processed_sorted_indices = []
         
         session.progress_queue.put("Starting optimization process...")
         _set_merge_progress(
@@ -2357,6 +2399,9 @@ def background_optimization(session, generation):
                 session.live_preview_kind = 'optimization'
                 session.live_preview_frame_id += 1
 
+            optimized_scores.append(float(optimized_score))
+            processed_sorted_indices.append(int(idx))
+
             optimized_total_segments += max(len(optimized_path) - 1, 0)
             
             # Show optimization results with dramatic reduction emphasis
@@ -2375,6 +2420,24 @@ def background_optimization(session, generation):
         
         if generation != session.optimization_generation:
             return
+
+        finalized_optimized_paths = list(session.partial_optimized_paths)
+        finalized_pre_optimization_paths = [
+            valid_paths[idx]
+            for idx in processed_sorted_indices[:len(finalized_optimized_paths)]
+            if 0 <= int(idx) < len(valid_paths)
+        ]
+        session.results = {
+            'initial_paths_count': len(session.initial_paths or []),
+            'merged_paths_count': len(valid_paths),
+            'valid_paths_count': len(valid_paths),
+            'stats': {},
+            'best_score': optimized_scores[0] if optimized_scores else 0.0,
+            'optimized_paths': finalized_optimized_paths,
+            'optimized_scores': list(optimized_scores[:len(finalized_optimized_paths)]),
+            'pre_optimization_paths': finalized_pre_optimization_paths,
+            'circle_system': circle_system,
+        }
 
         session.optimization_complete = True
         _mark_live_preview_frame(session, kind='final', generation=generation)
@@ -2701,19 +2764,8 @@ def generate_svg():
     render_parameters = dict(session.parameters)
     if 'parameters' in data and isinstance(data['parameters'], dict):
         render_parameters.update(data['parameters'])
-
-    curve_fit_tolerance = max(
-        0.35,
-        min(8.0, float(render_parameters.get('cubic_fit_tolerance', 1.0))),
-    )
-    endpoint_tangent_strictness = max(
-        0.0,
-        min(100.0, float(render_parameters.get('endpoint_tangent_strictness', 85.0))),
-    )
-    force_orthogonal_as_lines = bool(render_parameters.get('force_orthogonal_as_lines', False))
-    enable_curve_fitting = bool(render_parameters.get('enable_curve_fitting', False))
-
-    show_pre = bool(render_parameters.get('show_pre_optimization', False))
+    svg_render_settings = _resolve_svg_render_settings(render_parameters)
+    show_pre = bool(svg_render_settings['show_pre'])
     
     detected_paths_count = len(session.initial_paths) if session.initial_paths else 0
 
@@ -2735,8 +2787,14 @@ def generate_svg():
         
         _log_debug(f"Generating progressive SVG with {len(optimized_paths)} optimized paths")
         paths_to_show = session.initial_paths
-        if not optimized_paths and live_preview_paths:
-            optimized_paths = live_preview_paths
+        if live_preview_paths:
+            stitched_progressive_paths = list(live_preview_paths)
+            optimized_prefix_count = min(len(optimized_paths), len(stitched_progressive_paths))
+            if optimized_prefix_count > 0:
+                stitched_progressive_paths[:optimized_prefix_count] = optimized_paths[:optimized_prefix_count]
+            if len(optimized_paths) > len(stitched_progressive_paths):
+                stitched_progressive_paths.extend(optimized_paths[optimized_prefix_count:])
+            optimized_paths = stitched_progressive_paths
         circle_system = None  # Could add this later
         pre_optimization_paths = paths_to_show if show_pre else []
         
@@ -2764,8 +2822,6 @@ def generate_svg():
     try:
         svg_started_at = time.perf_counter()
         background_image = session.display_image if session.display_image is not None else session.image
-        is_view_render = str(display_mode) in {'immediate', 'progressive', 'final'}
-        render_enable_curve_fitting = True if is_view_render else enable_curve_fitting
         svg_content, suppressed, cache_hit = _render_svg_content(
             session,
             f"view:{display_mode}",
@@ -2773,17 +2829,17 @@ def generate_svg():
             None if display_mode == 'immediate' else circle_system,
             [] if display_mode == 'immediate' else optimized_paths,
             pre_optimization_paths,
-            curve_fit_tolerance,
-            endpoint_tangent_strictness,
-            force_orthogonal_as_lines,
-            render_enable_curve_fitting,
-            bool(render_parameters.get('include_image', False)),
+            svg_render_settings['curve_fit_tolerance'],
+            svg_render_settings['endpoint_tangent_strictness'],
+            svg_render_settings['force_orthogonal_as_lines'],
+            svg_render_settings['enable_curve_fitting'],
+            svg_render_settings['include_image'],
             show_pre,
             suppress_paths_in_view=suppress_paths_in_view,
-            fit_optimized_paths=True,
-            combine_optimized_paths=is_view_render,
-            combine_pre_optimization_paths=is_view_render,
-            coordinate_precision=2,
+            fit_optimized_paths=svg_render_settings['fit_optimized_paths'],
+            combine_optimized_paths=svg_render_settings['combine_optimized_paths'],
+            combine_pre_optimization_paths=svg_render_settings['combine_pre_optimization_paths'],
+            coordinate_precision=svg_render_settings['coordinate_precision'],
         )
         _log_debug(f"SVG content ready, size: {len(svg_content)} characters (cache_hit={cache_hit})")
         _record_benchmark_svg(
@@ -2819,16 +2875,7 @@ def download_svg(session_id):
     
     try:
         download_started_at = time.perf_counter()
-        curve_fit_tolerance = max(
-            0.35,
-            min(8.0, float(session.parameters.get('cubic_fit_tolerance', 1.0))),
-        )
-        endpoint_tangent_strictness = max(
-            0.0,
-            min(100.0, float(session.parameters.get('endpoint_tangent_strictness', 85.0))),
-        )
-        force_orthogonal_as_lines = bool(session.parameters.get('force_orthogonal_as_lines', False))
-        enable_curve_fitting = bool(session.parameters.get('enable_curve_fitting', False))
+        svg_render_settings = _resolve_svg_render_settings(session.parameters)
 
         # Create filename based on original upload
         original_filename = session.original_filename or 'centerline_extraction'
@@ -2839,7 +2886,7 @@ def download_svg(session_id):
         background_image = session.display_image if session.display_image is not None else session.image
         
         # Determine what to show based on available data
-        show_pre = session.parameters.get('show_pre_optimization', False)
+        show_pre = bool(svg_render_settings['show_pre'])
         if has_progressive_data:
             # Use progressive data
             _log_debug(f"Generating download SVG with progressive data: {len(session.initial_paths)} initial paths, {len(session.partial_optimized_paths)} optimized paths")
@@ -2865,13 +2912,17 @@ def download_svg(session_id):
             circle_system,
             optimized_paths,
             pre_optimization_paths,
-            curve_fit_tolerance,
-            endpoint_tangent_strictness,
-            force_orthogonal_as_lines,
-            enable_curve_fitting,
-            bool(session.parameters.get('include_image', False)),
+            svg_render_settings['curve_fit_tolerance'],
+            svg_render_settings['endpoint_tangent_strictness'],
+            svg_render_settings['force_orthogonal_as_lines'],
+            svg_render_settings['enable_curve_fitting'],
+            svg_render_settings['include_image'],
             show_pre,
             suppress_paths_in_view=False,
+            fit_optimized_paths=svg_render_settings['fit_optimized_paths'],
+            combine_optimized_paths=svg_render_settings['combine_optimized_paths'],
+            combine_pre_optimization_paths=svg_render_settings['combine_pre_optimization_paths'],
+            coordinate_precision=svg_render_settings['coordinate_precision'],
         )
         svg_bytes = svg_content.encode('utf-8')
 

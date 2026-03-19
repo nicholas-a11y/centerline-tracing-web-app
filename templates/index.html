@@ -1137,7 +1137,7 @@
         <div class="header">
             <div class="header-inner">
                 <h1>🎯 Centerline Extraction Tool</h1>
-                <p>Interactive centerline extraction v1.82 Nicholas Leqeta</p>
+                <p>Interactive centerline extraction v1.83 Nicholas Leqeta</p>
                 <button type="button" class="header-help-btn" id="helpBtn">? Help</button>
             </div>
         </div>
@@ -1612,8 +1612,14 @@
         let lastRenderedSvgContent = null;
         let currentSvgObjectUrl = null;
         let currentSvgExportFilename = 'centerline_export.svg';
+        let lastOptimizationTotalPaths = 0;
         let lastProgressiveSvgRenderedCount = 0;
         let lastProgressiveSvgFrameId = 0;
+        let svgRequestSequence = 0;
+        let latestAppliedSvgRequestSequence = 0;
+        let progressiveSvgRenderInFlight = false;
+        let finalSvgRenderInFlight = false;
+        let finalSvgRenderPending = false;
         let autoDetectState = {
             active: false,
             token: 0,
@@ -4766,6 +4772,7 @@
 
             const optStatusPanel = document.getElementById('optStatusPanel');
             if (optStatusPanel) {
+                lastOptimizationTotalPaths = Number(data.valid_paths_count || 0);
                 optStatusPanel.innerHTML = `
                     <h3 style="margin: 0 0 8px; font-size: 0.95em; color: #444;">Optimisation Status</h3>
                     <p id="optimization-status" style="margin: 0 0 6px;">${data.optimization_started ? 'Running in background...' : 'Disabled (click on Enable Path Optimisation to start)'}</p>
@@ -4908,7 +4915,7 @@
                     const mergePhase = String(mergeProgress.phase || 'idle');
                     const mergeActive = Boolean(mergeProgress.active);
 
-                    if (previewFrameId > lastProgressiveSvgFrameId) {
+                    if (!data.optimization_complete && previewFrameId > lastProgressiveSvgFrameId) {
                         const now = Date.now();
                         const refreshIntervalMs = total > LARGE_SVG_VIEW_PATH_LIMIT
                             ? LARGE_SVG_VIEW_REFRESH_MS
@@ -4918,7 +4925,7 @@
                         const shouldRefreshSvg = timeSinceLastRefresh >= refreshIntervalMs
                             || (isEarlyAcceptedWave && timeSinceLastRefresh >= EARLY_PROGRESSIVE_SVG_BURST_MS);
 
-                        if (shouldRefreshSvg && now >= downloadSvgClickLockUntil) {
+                        if (shouldRefreshSvg && now >= downloadSvgClickLockUntil && !progressiveSvgRenderInFlight && !finalSvgRenderPending) {
                             console.log(`Updating SVG with preview frame ${previewFrameId} (${previewCount} paths)`);
                             lastSvgProgressRefreshAt = now;
                             lastProgressiveSvgRenderedCount = done;
@@ -4952,20 +4959,20 @@
                         console.log('Optimization complete!');
                         clearInterval(progressInterval);
                         progressInterval = null;
-                        optimizationReached100 = true;
+                        optimizationReached100 = false;
+                        finalSvgRenderPending = true;
                         const statusEl = document.getElementById('optimization-status');
-                        if (statusEl) statusEl.textContent = 'Complete!';
+                        if (statusEl) statusEl.textContent = 'Rendering final SVG...';
                         const bar = document.getElementById('opt-progress-bar');
                         const lbl = document.getElementById('opt-progress-label');
-                        if (bar) bar.style.width = '100%';
+                        if (bar) bar.style.width = '99%';
                         if (lbl) {
                             const t = Number(data.total_paths || 0);
-                            lbl.textContent = t > 0 ? `${t} / ${t} paths optimised (100%)` : 'Complete';
+                            lbl.textContent = t > 0 ? `${t} / ${t} paths optimised, rendering final SVG...` : 'Rendering final SVG...';
                         }
                         lastProgressiveSvgRenderedCount = Math.max(lastProgressiveSvgRenderedCount, done);
                         lastProgressiveSvgFrameId = Math.max(lastProgressiveSvgFrameId, previewFrameId);
                         document.getElementById('stopOptBtn').style.display = 'none'; // Hide stop button
-                        showProgressMessage('Optimization complete! Final results displayed.', 'success');
                         generateSVG('final');
                     }
                 })
@@ -4999,6 +5006,9 @@
                         progressInterval = null;
                     }
                     optimizationReached100 = false;
+                    finalSvgRenderPending = false;
+                    finalSvgRenderInFlight = false;
+                    progressiveSvgRenderInFlight = false;
                     const stopBtn = document.getElementById('stopOptBtn');
                     if (stopBtn) stopBtn.style.display = 'none';
                     const statusEl = document.getElementById('optimization-status');
@@ -5193,9 +5203,23 @@
                 return;
             }
 
+            if (mode === 'progressive') {
+                if (progressiveSvgRenderInFlight || finalSvgRenderPending || finalSvgRenderInFlight) {
+                    return;
+                }
+                progressiveSvgRenderInFlight = true;
+            } else if (mode === 'final') {
+                if (finalSvgRenderInFlight) {
+                    return;
+                }
+                finalSvgRenderInFlight = true;
+                finalSvgRenderPending = true;
+            }
+
             console.log(`Making SVG request for session: ${currentSessionId}`);
             const parameters = getParameters();
             const svgEpoch = requestEpoch;
+            const svgRequestId = ++svgRequestSequence;
             trackedFetch('/generate_svg', {
                 method: 'POST',
                 headers: {
@@ -5219,12 +5243,30 @@
                 if (isRequestStale(svgEpoch)) {
                     return;
                 }
+                if (svgRequestId < latestAppliedSvgRequestSequence) {
+                    return;
+                }
 
                 console.log('SVG data:', data);
                 showLoading(false); // Hide loading indicator
                 if (data.svg) {
+                    latestAppliedSvgRequestSequence = svgRequestId;
                     displaySVG(data.svg);
                     lastRenderedSvgMode = mode;
+                    if (mode === 'final') {
+                        optimizationReached100 = true;
+                        finalSvgRenderPending = false;
+                        const statusEl = document.getElementById('optimization-status');
+                        if (statusEl) statusEl.textContent = 'Complete!';
+                        const bar = document.getElementById('opt-progress-bar');
+                        const lbl = document.getElementById('opt-progress-label');
+                        if (bar) bar.style.width = '100%';
+                        if (lbl) {
+                            const totalPaths = Number(lastOptimizationTotalPaths || 0);
+                            lbl.textContent = totalPaths > 0 ? `${totalPaths} / ${totalPaths} paths optimised (100%)` : 'Complete';
+                        }
+                        showProgressMessage('Optimization complete! Final results displayed.', 'success');
+                    }
                     
                     if (data.preview_paths_suppressed) {
                         showProgressMessage('SVG view path rendering suppressed for large jobs. Processing continues normally and download will still include the paths.', 'info');
@@ -5247,6 +5289,9 @@
                     }
                 } else {
                     console.error('No SVG in response:', data);
+                    if (mode === 'final') {
+                        finalSvgRenderPending = false;
+                    }
                     showMessage(data.error || 'SVG generation failed', 'error');
                 }
             })
@@ -5256,8 +5301,18 @@
                 }
 
                 console.error('SVG generation error:', error);
+                    if (mode === 'final') {
+                        finalSvgRenderPending = false;
+                    }
                 showLoading(false); // Hide loading indicator
                 showMessage(`SVG generation error: ${error.message}`, 'error');
+                })
+                .finally(() => {
+                    if (mode === 'progressive') {
+                        progressiveSvgRenderInFlight = false;
+                    } else if (mode === 'final') {
+                        finalSvgRenderInFlight = false;
+                    }
             });
         }
 
@@ -5465,6 +5520,12 @@
             lastSvgProgressRefreshAt = 0;
             lastProgressiveSvgRenderedCount = 0;
             lastProgressiveSvgFrameId = 0;
+            lastOptimizationTotalPaths = 0;
+            svgRequestSequence = 0;
+            latestAppliedSvgRequestSequence = 0;
+            progressiveSvgRenderInFlight = false;
+            finalSvgRenderInFlight = false;
+            finalSvgRenderPending = false;
             lastRenderedSvgMode = null;
             lastRenderedSvgContent = null;
             currentPreprocessingInfo = null;
