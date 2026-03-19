@@ -1256,13 +1256,41 @@ def adaptive_resample_path(path, circle_system, target_reduction=0.7):  # More a
 
     return [tuple(p) for p in resampled]
 
-def merge_nearby_paths(paths, max_gap=30, angle_priority=0.30, verbose=True, should_continue=None):
+def merge_nearby_paths(paths, max_gap=30, angle_priority=0.30, verbose=True, should_continue=None,
+                       metrics=None, progress_callback=None, preview_callback=None, allow_long_path_merges=True,
+                       only_long_path_merges=False, long_path_threshold=None):
     """Merge nearby endpoints, prioritizing both distance and directional continuity."""
     if len(paths) <= 1:
         return paths
 
+    started_at = time.perf_counter()
     angle_priority = float(np.clip(angle_priority, 0.0, 1.0))
     distance_priority = 1.0 - angle_priority
+    cell_size = max(float(max_gap), 1.0)
+    max_gap_sq = float(max_gap) * float(max_gap)
+    if long_path_threshold is None:
+        long_path_threshold = max(256, int(round(float(max_gap) * 4.0)))
+    long_path_threshold = max(2, int(long_path_threshold))
+
+    metric_state = metrics if metrics is not None else {}
+    metric_state.clear()
+    metric_state.update({
+        'seed_paths_total': int(len(paths)),
+        'seed_paths_processed': 0,
+        'candidate_paths_scanned': 0,
+        'cheap_candidates_ranked': 0,
+        'long_fragment_candidates_skipped': 0,
+        'endpoint_distance_checks': 0,
+        'safety_checks': 0,
+        'distance_rejections': 0,
+        'angle_rejections': 0,
+        'safety_rejections': 0,
+        'merged_pairs': 0,
+        'cell_size': float(cell_size),
+        'long_path_threshold': int(long_path_threshold),
+        'merge_scope': 'long_only' if only_long_path_merges else ('all' if allow_long_path_merges else 'cheap_only'),
+        'elapsed_sec': 0.0,
+    })
     
     if verbose:
         print(
@@ -1272,6 +1300,56 @@ def merge_nearby_paths(paths, max_gap=30, angle_priority=0.30, verbose=True, sho
     
     merged_paths = []
     used_indices = set()
+
+    endpoint_grid = {}
+
+    def _grid_key(point):
+        py = float(point[0])
+        px = float(point[1])
+        return (int(np.floor(py / cell_size)), int(np.floor(px / cell_size)))
+
+    for path_index, path in enumerate(paths):
+        if len(path) < 2:
+            continue
+        for endpoint_name, point in (('start', path[0]), ('end', path[-1])):
+            endpoint_grid.setdefault(_grid_key(point), []).append((int(path_index), endpoint_name, tuple(point)))
+
+    def _candidate_indices(current_path, base_index):
+        candidates = set()
+        search_radius = max(1, int(np.ceil(float(max_gap) / cell_size)))
+        query_points = [current_path[0], current_path[-1]]
+        for point in query_points:
+            center_y, center_x = _grid_key(point)
+            py = float(point[0])
+            px = float(point[1])
+            for dy in range(-search_radius, search_radius + 1):
+                for dx in range(-search_radius, search_radius + 1):
+                    for candidate_index, _endpoint_name, endpoint_point in endpoint_grid.get((center_y + dy, center_x + dx), []):
+                        if candidate_index == base_index or candidate_index in used_indices:
+                            continue
+                        ey = float(endpoint_point[0])
+                        ex = float(endpoint_point[1])
+                        dist_sq = ((ey - py) * (ey - py)) + ((ex - px) * (ex - px))
+                        if dist_sq <= max_gap_sq:
+                            candidates.add(int(candidate_index))
+        return candidates
+
+    last_progress_emit = started_at
+
+    def _emit_progress(force=False, preview_paths=None):
+        nonlocal last_progress_emit
+        if progress_callback is None and preview_callback is None:
+            return
+        now = time.perf_counter()
+        if not force and (now - last_progress_emit) < 0.75:
+            return
+        metric_state['elapsed_sec'] = float(now - started_at)
+        snapshot = dict(metric_state)
+        if progress_callback is not None:
+            progress_callback(snapshot)
+        if preview_callback is not None and preview_paths is not None:
+            preview_callback(snapshot, preview_paths)
+        last_progress_emit = now
 
     def _normalize(vec):
         norm = np.linalg.norm(vec)
@@ -1302,10 +1380,20 @@ def merge_nearby_paths(paths, max_gap=30, angle_priority=0.30, verbose=True, sho
             return -tangent
         return tangent
 
-    def _angle_match_score(path_a, endpoint_a, path_b, endpoint_b):
+    endpoint_direction_cache = {}
+
+    def _angle_match_score(path_a, endpoint_a, path_b, endpoint_b, current_directions=None):
         """Return [0..1] score, where 1 means highly compatible bridge directions."""
-        out_a = _outward_direction(path_a, endpoint_a)
-        out_b = _outward_direction(path_b, endpoint_b)
+        if current_directions is not None:
+            out_a = current_directions.get(endpoint_a)
+        else:
+            out_a = _outward_direction(path_a, endpoint_a)
+
+        cache_key = (id(path_b), endpoint_b)
+        out_b = endpoint_direction_cache.get(cache_key)
+        if cache_key not in endpoint_direction_cache:
+            out_b = _outward_direction(path_b, endpoint_b)
+            endpoint_direction_cache[cache_key] = out_b
         if out_a is None or out_b is None:
             return 0.5  # Neutral when direction cannot be estimated.
 
@@ -1345,55 +1433,84 @@ def merge_nearby_paths(paths, max_gap=30, angle_priority=0.30, verbose=True, sho
         for iteration in range(3):  # Allow multiple merging passes
             extended = False
             best_merge = None
+            current_directions = {
+                'start': _outward_direction(current_path, 'start'),
+                'end': _outward_direction(current_path, 'end'),
+            }
+            current_path_closed = _is_path_closed(current_path)
 
-            for j, path2 in enumerate(paths):
-                if j == i or j in used_indices or len(path2) < 2:
-                    continue
-                if _is_path_closed(current_path) or _is_path_closed(path2):
-                    continue
+            candidate_indices = _candidate_indices(current_path, i)
+            metric_state['candidate_paths_scanned'] += int(len(candidate_indices))
+            ranked_candidates = []
 
-                # Check all possible endpoint combinations.
-                candidates = []
-                raw_connections = [
-                    ('end_to_start', current_path[-1], path2[0], 'end', 'start'),
-                    ('end_to_end', current_path[-1], path2[-1], 'end', 'end'),
-                    ('start_to_start', current_path[0], path2[0], 'start', 'start'),
-                    ('start_to_end', current_path[0], path2[-1], 'start', 'end'),
-                ]
-
-                for connection_type, p_a, p_b, endpoint_a, endpoint_b in raw_connections:
-                    distance = np.linalg.norm(np.array(p_a) - np.array(p_b))
-                    if distance > max_gap:
+            if not current_path_closed:
+                for j in candidate_indices:
+                    path2 = paths[j]
+                    if len(path2) < 2 or _is_path_closed(path2):
                         continue
 
-                    angle_score = _angle_match_score(
-                        current_path, endpoint_a, path2, endpoint_b
-                    )
-                    if distance > max_gap * 0.55 and angle_score < 0.55:
+                    current_is_long = len(current_path) > long_path_threshold
+                    candidate_is_long = len(path2) > long_path_threshold
+                    if only_long_path_merges:
+                        if not (current_is_long or candidate_is_long):
+                            metric_state['long_fragment_candidates_skipped'] += 1
+                            continue
+                    elif not allow_long_path_merges and (current_is_long or candidate_is_long):
+                        metric_state['long_fragment_candidates_skipped'] += 1
                         continue
-                    if not _merge_is_safe(current_path, path2, connection_type):
-                        continue
-                    distance_score = 1.0 - (distance / max(max_gap, 1e-9))
-                    combined_score = (
-                        distance_priority * distance_score
-                        + angle_priority * angle_score
-                    )
-                    candidates.append(
-                        (connection_type, distance, angle_score, combined_score)
-                    )
 
-                if candidates:
-                    local_best = max(candidates, key=lambda x: x[3])
-                    connection_type, distance, angle_score, combined_score = local_best
-                    if best_merge is None or combined_score > best_merge['combined_score']:
-                        best_merge = {
+                    raw_connections = [
+                        ('end_to_start', current_path[-1], path2[0], 'end', 'start'),
+                        ('end_to_end', current_path[-1], path2[-1], 'end', 'end'),
+                        ('start_to_start', current_path[0], path2[0], 'start', 'start'),
+                        ('start_to_end', current_path[0], path2[-1], 'start', 'end'),
+                    ]
+
+                    for connection_type, p_a, p_b, endpoint_a, endpoint_b in raw_connections:
+                        metric_state['endpoint_distance_checks'] += 1
+                        delta_y = float(p_a[0]) - float(p_b[0])
+                        delta_x = float(p_a[1]) - float(p_b[1])
+                        distance_sq = (delta_y * delta_y) + (delta_x * delta_x)
+                        if distance_sq > max_gap_sq:
+                            metric_state['distance_rejections'] += 1
+                            continue
+
+                        distance = float(np.sqrt(distance_sq))
+                        if distance > max_gap:
+                            metric_state['distance_rejections'] += 1
+                            continue
+
+                        angle_score = _angle_match_score(
+                            current_path, endpoint_a, path2, endpoint_b, current_directions=current_directions
+                        )
+                        if distance > max_gap * 0.55 and angle_score < 0.55:
+                            metric_state['angle_rejections'] += 1
+                            continue
+
+                        distance_score = 1.0 - (distance / max(max_gap, 1e-9))
+                        combined_score = (
+                            distance_priority * distance_score
+                            + angle_priority * angle_score
+                        )
+                        ranked_candidates.append({
                             'j': j,
                             'path2': path2,
                             'connection_type': connection_type,
                             'distance': distance,
                             'angle_score': angle_score,
                             'combined_score': combined_score,
-                        }
+                        })
+
+                ranked_candidates.sort(key=lambda item: item['combined_score'], reverse=True)
+                metric_state['cheap_candidates_ranked'] += int(len(ranked_candidates))
+
+                for candidate in ranked_candidates:
+                    metric_state['safety_checks'] += 1
+                    if not _merge_is_safe(current_path, candidate['path2'], candidate['connection_type']):
+                        metric_state['safety_rejections'] += 1
+                        continue
+                    best_merge = candidate
+                    break
 
             if best_merge is not None:
                 path2 = best_merge['path2']
@@ -1414,6 +1531,8 @@ def merge_nearby_paths(paths, max_gap=30, angle_priority=0.30, verbose=True, sho
 
                 used_indices.add(j)
                 extended = True
+                metric_state['merged_pairs'] += 1
+                _emit_progress(force=False, preview_paths=merged_paths + [current_path])
 
                 if verbose:
                     print(
@@ -1426,6 +1545,8 @@ def merge_nearby_paths(paths, max_gap=30, angle_priority=0.30, verbose=True, sho
         
         merged_paths.append(current_path)
         used_indices.add(i)
+        metric_state['seed_paths_processed'] += 1
+        _emit_progress(force=False, preview_paths=merged_paths)
     
     if verbose:
         print(f"  Before merging: {len(paths)} paths")
@@ -1437,6 +1558,9 @@ def merge_nearby_paths(paths, max_gap=30, angle_priority=0.30, verbose=True, sho
         path_lengths.sort(reverse=True)
         if verbose:
             print(f"  Longest merged paths: {path_lengths[:5]}")
+
+    metric_state['elapsed_sec'] = float(time.perf_counter() - started_at)
+    _emit_progress(force=True, preview_paths=merged_paths)
     
     return merged_paths
 
@@ -1514,12 +1638,82 @@ def create_svg_output(
     endpoint_tangent_strictness=85.0,
     force_orthogonal_as_lines=False,
     enable_curve_fitting=False,
+    output_path=OUTPUT_PATH,
+    fit_optimized_paths=True,
+    combine_optimized_paths=False,
+    combine_pre_optimization_paths=False,
+    coordinate_precision=2,
 ):
     """Create SVG output with bitmap, pre-optimization paths, and optimized paths."""
     print("Creating SVG output...")
+
+    def _format_svg_coord(value):
+        return f"{float(value):.{int(max(0, coordinate_precision))}f}"
+
+    def _polyline_path_data(path):
+        if len(path) < 2:
+            return ""
+
+        path_data = []
+        for point_index, point in enumerate(path):
+            y, x = point
+            command = "M" if point_index == 0 else "L"
+            path_data.append(f"{command} {_format_svg_coord(x + 0.5)} {_format_svg_coord(y + 0.5)}")
+        return " ".join(path_data)
+
+    def _segment_path_data(path, segments):
+        if not segments:
+            return _polyline_path_data(path)
+
+        start_point = segments[0].get("start_point", list(path[0]))
+        sy, sx = float(start_point[0]), float(start_point[1])
+        path_data = [f"M {_format_svg_coord(sx + 0.5)} {_format_svg_coord(sy + 0.5)}"]
+
+        for seg in segments:
+            end = seg.get("end_point")
+            if not isinstance(end, (list, tuple)) or len(end) != 2:
+                continue
+
+            ey, ex = float(end[0]), float(end[1])
+            if seg.get("type") == "cubic":
+                c1 = seg.get("control1")
+                c2 = seg.get("control2")
+                if (
+                    isinstance(c1, (list, tuple))
+                    and len(c1) == 2
+                    and isinstance(c2, (list, tuple))
+                    and len(c2) == 2
+                ):
+                    c1y, c1x = float(c1[0]), float(c1[1])
+                    c2y, c2x = float(c2[0]), float(c2[1])
+                    path_data.append(
+                        f"C {_format_svg_coord(c1x + 0.5)} {_format_svg_coord(c1y + 0.5)} "
+                        f"{_format_svg_coord(c2x + 0.5)} {_format_svg_coord(c2y + 0.5)} "
+                        f"{_format_svg_coord(ex + 0.5)} {_format_svg_coord(ey + 0.5)}"
+                    )
+                    continue
+
+            path_data.append(f"L {_format_svg_coord(ex + 0.5)} {_format_svg_coord(ey + 0.5)}")
+
+        return " ".join(path_data)
+
+    def _add_stroked_path(path_data, stroke, stroke_width, opacity):
+        if not path_data:
+            return
+
+        dwg.add(dwg.path(
+            d=path_data,
+            stroke=stroke,
+            fill="none",
+            stroke_width=stroke_width,
+            opacity=opacity,
+            stroke_linecap="round",
+            stroke_linejoin="round",
+            stroke_miterlimit=1.0,
+        ))
     
     height, width = image.shape
-    dwg = svgwrite.Drawing(OUTPUT_PATH, profile="tiny", size=(width, height))
+    dwg = svgwrite.Drawing(output_path or "memory.svg", profile="tiny", size=(width, height))
     
     # Add bitmap background
     if SHOW_BITMAP:
@@ -1535,38 +1729,42 @@ def create_svg_output(
     # Add pre-optimization paths (before circle optimization)
     if SHOW_PRE_OPTIMIZATION_PATHS and pre_optimization_paths is not None:
         print(f"Adding {len(pre_optimization_paths)} pre-optimization paths...")
-        for i, path in enumerate(pre_optimization_paths):
-            if len(path) < 2:
-                continue
-            
-            # Create SVG path with +0.5 pixel offset to align with circle centers
-            path_data = []
-            for j, point in enumerate(path):
-                y, x = point
-                if j == 0:
-                    path_data.append(f"M {x + 0.5:.2f} {y + 0.5:.2f}")
-                else:
-                    path_data.append(f"L {x + 0.5:.2f} {y + 0.5:.2f}")
-            
-            dwg.add(dwg.path(
-                d=" ".join(path_data),
-                stroke=PRE_OPTIMIZATION_PATH_COLOR,
-                fill="none",
-                stroke_width=PRE_OPTIMIZATION_PATH_WIDTH,
-                opacity=PRE_OPTIMIZATION_PATH_OPACITY
-            ))
+        pre_path_data = [
+            _polyline_path_data(path)
+            for path in pre_optimization_paths
+            if len(path) >= 2
+        ]
+        if combine_pre_optimization_paths:
+            _add_stroked_path(
+                " ".join(chunk for chunk in pre_path_data if chunk),
+                PRE_OPTIMIZATION_PATH_COLOR,
+                PRE_OPTIMIZATION_PATH_WIDTH,
+                PRE_OPTIMIZATION_PATH_OPACITY,
+            )
+        else:
+            for path_data in pre_path_data:
+                _add_stroked_path(
+                    path_data,
+                    PRE_OPTIMIZATION_PATH_COLOR,
+                    PRE_OPTIMIZATION_PATH_WIDTH,
+                    PRE_OPTIMIZATION_PATH_OPACITY,
+                )
     
     # Fit optimized paths to SVG-native line/cubic segments.
-    fitted_segments = fit_curve_segments(
-        optimized_paths,
-        tolerance_px=max(0.35, float(curve_fit_tolerance)),
-        endpoint_tangent_strictness=float(endpoint_tangent_strictness),
-        force_orthogonal_as_lines=bool(force_orthogonal_as_lines),
-        enable_curve_fitting=bool(enable_curve_fitting),
-    )
+    if fit_optimized_paths and optimized_paths:
+        fitted_segments = fit_curve_segments(
+            optimized_paths,
+            tolerance_px=max(0.35, float(curve_fit_tolerance)),
+            endpoint_tangent_strictness=float(endpoint_tangent_strictness),
+            force_orthogonal_as_lines=bool(force_orthogonal_as_lines),
+            enable_curve_fitting=bool(enable_curve_fitting),
+        )
+    else:
+        fitted_segments = [[] for _ in optimized_paths]
 
     # Add optimized paths
     print(f"Adding {len(optimized_paths)} optimized paths...")
+    optimized_path_data = []
     for i, (path, score, segments) in enumerate(zip(optimized_paths, path_scores, fitted_segments)):
         if len(path) < 2:
             continue
@@ -1576,53 +1774,11 @@ def create_svg_output(
         width = 2.0
         opacity = 1.0  # Keep consistent opacity for all optimized paths
         
-        # Emit true SVG cubic segments when available.
-        path_data = []
-        if segments:
-            start_point = segments[0].get("start_point", list(path[0]))
-            sy, sx = float(start_point[0]), float(start_point[1])
-            path_data.append(f"M {sx + 0.5:.2f} {sy + 0.5:.2f}")
-
-            for seg in segments:
-                end = seg.get("end_point")
-                if not isinstance(end, (list, tuple)) or len(end) != 2:
-                    continue
-
-                ey, ex = float(end[0]), float(end[1])
-                if seg.get("type") == "cubic":
-                    c1 = seg.get("control1")
-                    c2 = seg.get("control2")
-                    if (
-                        isinstance(c1, (list, tuple))
-                        and len(c1) == 2
-                        and isinstance(c2, (list, tuple))
-                        and len(c2) == 2
-                    ):
-                        c1y, c1x = float(c1[0]), float(c1[1])
-                        c2y, c2x = float(c2[0]), float(c2[1])
-                        path_data.append(
-                            f"C {c1x + 0.5:.2f} {c1y + 0.5:.2f} "
-                            f"{c2x + 0.5:.2f} {c2y + 0.5:.2f} "
-                            f"{ex + 0.5:.2f} {ey + 0.5:.2f}"
-                        )
-                        continue
-
-                path_data.append(f"L {ex + 0.5:.2f} {ey + 0.5:.2f}")
+        path_data = _segment_path_data(path, segments)
+        if combine_optimized_paths:
+            optimized_path_data.append(path_data)
         else:
-            for j, point in enumerate(path):
-                y, x = point
-                if j == 0:
-                    path_data.append(f"M {x + 0.5:.2f} {y + 0.5:.2f}")
-                else:
-                    path_data.append(f"L {x + 0.5:.2f} {y + 0.5:.2f}")
-        
-        dwg.add(dwg.path(
-            d=" ".join(path_data),
-            stroke=color,
-            fill="none",
-            stroke_width=width,
-            opacity=opacity
-        ))
+            _add_stroked_path(path_data, color, width, opacity)
         
         # Add score annotation for best path
         # if i == 0 and len(path) > 0:
@@ -1635,8 +1791,21 @@ def create_svg_output(
         #         font_weight="bold"
         #     ))
     
+    if combine_optimized_paths:
+        _add_stroked_path(
+            " ".join(chunk for chunk in optimized_path_data if chunk),
+            "#0066CC",
+            2.0,
+            1.0,
+        )
+
+    svg_content = dwg.tostring()
+    if output_path is None:
+        return svg_content
+
     dwg.save()
-    print(f"SVG saved to: {OUTPUT_PATH}")
+    print(f"SVG saved to: {output_path}")
+    return svg_content
 
 def create_fast_paths(skeleton, min_path_length=MIN_PATH_LENGTH):
     """Extract branch-aware paths from a skeleton while preserving open segments."""

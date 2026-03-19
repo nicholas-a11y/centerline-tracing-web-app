@@ -825,19 +825,26 @@
             margin-top: 14px;
         }
 
-        .spinner {
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #4facfe;
-            border-radius: 50%;
-            width: 30px;
-            height: 30px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 10px;
+        .loading-log {
+            margin: 12px auto 0;
+            max-width: 720px;
+            max-height: 180px;
+            overflow-y: auto;
+            text-align: left;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
+            font-size: 0.82em;
+            line-height: 1.4;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid #d9e4ef;
+            background: #f7fbff;
+            color: #31506f;
+            display: none;
+            white-space: pre-wrap;
         }
 
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        .loading-log.show {
+            display: block;
         }
 
         .error {
@@ -1165,8 +1172,18 @@
                     <div class="parameter">
                         <label>Dark Threshold <span class="range-value" id="darkThresholdValue">0.20</span></label>
                         <input type="range" id="darkThreshold" min="0.05" max="0.8" step="0.05" value="0.20">
-                        <button class="btn btn-secondary" id="autoDetectBtn" onclick="autoDetectThreshold()" style="margin-top: 8px; padding: 6px 12px; font-size: 14px; display: none;" disabled>🎯 Auto-Detect</button>
+                        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top: 8px;">
+                            <button class="btn btn-secondary" id="autoDetectBtn" onclick="autoDetectThreshold()" style="padding: 6px 12px; font-size: 14px; display: none;" disabled>🎯 Auto-Detect</button>
+                            <button class="btn btn-warning" id="autoDetectSkipBtn" onclick="skipAutoDetectThreshold()" style="padding: 6px 12px; font-size: 14px; display: none;">Skip</button>
+                        </div>
+                        <div class="tile-tune-readonly" id="thresholdAutoDetectInfo" style="display: none; margin-top: 8px;"></div>
                         <small style="color: #666; font-size: 0.8em;">Sensitivity of the detection.</small>
+                    </div>
+                    <div class="parameter" style="margin-top: 10px;">
+                        <label>Min Path Length (px) <span class="range-value" id="minPathLengthValue">3</span></label>
+                        <input type="range" id="minPathLength" min="1" max="20" step="1" value="3">
+                        <button class="btn btn-secondary" id="autoDetectMinLengthBtn" onclick="autoDetectMinPathLength()" style="margin-top: 8px; padding: 6px 12px; font-size: 14px; display: none;" disabled>🎯 Auto-Detect</button>
+                        <small style="color: #666; font-size: 0.8em;">Increase to ignore shorter paths (dots).</small>
                     </div>
                     <div style="margin-top: 10px;">
                         <button type="button" id="detectionAdvancedToggleBtn" onclick="toggleDetectionAdvancedSettings()" style="background: none; border: none; color: #4facfe; cursor: pointer; font-size: 0.85em; padding: 0;">⚙️ Advanced settings ▼</button>
@@ -1190,55 +1207,58 @@
                             </select>
                             <small style="color: #666; font-size: 0.8em;">Higher sensitivity normalizes more images in auto mode.</small>
                         </div>
-                        <div class="parameter">
-                            <label>Merge Gap (px) <span class="range-value" id="mergeGapValue">25</span></label>
-                            <input type="range" id="mergeGap" min="1" max="80" step="1" value="25">
-                            <small style="color: #666; font-size: 0.8em;">How far line endpoints can reach to connect with nearby lines.</small>
-                        </div>
-                        <div class="parameter">
-                            <label>Angle Priority (%) <span class="range-value" id="mergeAnglePriorityValue">30</span></label>
-                            <input type="range" id="mergeAnglePriority" min="0" max="100" step="1" value="30">
-                            <small style="color: #666; font-size: 0.8em;">Higher values prefer bridging endpoints that continue in the same direction.</small>
-                        </div>
-                    </div>
-                    <div class="parameter" style="margin-top: 10px;">
-                        <label>Min Path Length (px) <span class="range-value" id="minPathLengthValue">3</span></label>
-                        <input type="range" id="minPathLength" min="1" max="20" step="1" value="3">
-                        <button class="btn btn-secondary" id="autoDetectMinLengthBtn" onclick="autoDetectMinPathLength()" style="margin-top: 8px; padding: 6px 12px; font-size: 14px; display: none;" disabled>🎯 Auto-Detect</button>
-                        <small style="color: #666; font-size: 0.8em;">Increase to ignore shorter paths (dots).</small>
                     </div>
                 </div>
 
                 <div class="parameter-group" id="optimizationParametersGroup">
                     <h3>🎨 Optimisation</h3>
                     <div class="parameter">
-                        <label>Tolerance <span class="range-value" id="rdpToleranceValue">4</span></label>
-                        <input type="range" id="rdpTolerance" min="0.5" max="10.0" step="0.5" value="4">
+                        <label>Merge Gap (px) <span class="range-value" id="mergeGapValue">25</span></label>
+                        <input type="range" id="mergeGap" min="1" max="80" step="1" value="25">
+                        <small style="color: #666; font-size: 0.8em;">How far line endpoints can reach to connect with nearby lines.</small>
+                    </div>
+                    <div class="parameter">
+                        <label>Tolerance <span class="range-value" id="rdpToleranceValue">10</span></label>
+                        <input type="range" id="rdpTolerance" min="0.5" max="10.0" step="0.5" value="10">
                         <small style="color: #666; font-size: 0.8em;">Higher values for a closer fit and larger file size.</small>
+                    </div>
+                    <div class="parameter">
+                        <label>Score Preservation (%) <span class="range-value" id="scorePreservationValue">99</span></label>
+                        <input type="range" id="scorePreservation" min="70" max="99" step="1" value="99">
+                        <small style="color: #666; font-size: 0.8em;">Higher values keep the blue path closer to the magenta path.</small>
                     </div>
                     <div style="margin-top: 10px;">
                         <button type="button" id="advancedToggleBtn" onclick="toggleAdvancedSettings()" style="background: none; border: none; color: #4facfe; cursor: pointer; font-size: 0.85em; padding: 0;">⚙️ Advanced settings ▼</button>
                     </div>
                     <div id="advancedSettings" style="display: none; margin-top: 8px;">
+                        <div style="margin: 2px 0 10px; font-size: 0.75em; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #5a7087;">Merge Settings</div>
                         <div class="parameter">
-                            <label>Simplification Strength <span class="range-value" id="simplificationStrengthValue">50</span></label>
-                            <input type="range" id="simplificationStrength" min="0" max="100" step="1" value="50">
+                            <label>Angle Priority (%) <span class="range-value" id="mergeAnglePriorityValue">30</span></label>
+                            <input type="range" id="mergeAnglePriority" min="0" max="100" step="1" value="30">
+                            <small style="color: #666; font-size: 0.8em;">Higher values prefer bridging endpoints that continue in the same direction.</small>
+                        </div>
+                        <div class="parameter">
+                            <label>
+                                <input type="checkbox" id="enableLongPathMerging">
+                                Enable Long Fragment Merge Pass
+                            </label>
+                            <small style="color: #666; font-size: 0.8em;">Off by default for speed. When enabled, a slower second pass can try to join already-long fragments after the cheap pass finishes.</small>
+                        </div>
+                        <div style="margin: 14px 0 10px; font-size: 0.75em; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #5a7087;">Path Fitting</div>
+                        <div class="parameter">
+                            <label>Simplification Strength <span class="range-value" id="simplificationStrengthValue">100</span></label>
+                            <input type="range" id="simplificationStrength" min="0" max="100" step="1" value="100">
                             <small style="color: #666; font-size: 0.8em;">Overall vertex reduction target for the blue paths.</small>
                         </div>
                         <div class="parameter">
-                            <label>Line Fit Strength <span class="range-value" id="lineFitStrengthValue">22</span></label>
-                            <input type="range" id="lineFitStrength" min="0" max="100" step="1" value="22">
+                            <label>Line Fit Strength <span class="range-value" id="lineFitStrengthValue">0</span></label>
+                            <input type="range" id="lineFitStrength" min="0" max="100" step="1" value="0">
                             <small style="color: #666; font-size: 0.8em;">Controls how much straight-segment fitting is allowed.</small>
                         </div>
                         <div class="parameter">
-                            <label>Short Path Protection <span class="range-value" id="shortPathProtectionValue">65</span></label>
-                            <input type="range" id="shortPathProtection" min="0" max="100" step="1" value="65">
+                            <label>Short Path Protection <span class="range-value" id="shortPathProtectionValue">0</span></label>
+                            <input type="range" id="shortPathProtection" min="0" max="100" step="1" value="0">
                             <small style="color: #666; font-size: 0.8em;">Higher values keep more vertices on short jagged paths.</small>
-                        </div>
-                        <div class="parameter">
-                            <label>Score Preservation (%) <span class="range-value" id="scorePreservationValue">80</span></label>
-                            <input type="range" id="scorePreservation" min="70" max="99" step="1" value="80">
-                            <small style="color: #666; font-size: 0.8em;">Higher values keep the blue path closer to the magenta path.</small>
                         </div>
                         <div class="parameter">
                             <label>
@@ -1323,17 +1343,16 @@
                 </div>
 
                 <div class="loading" id="loadingArea">
-                    <div class="spinner"></div>
                     <div id="loadingText">Processing centerlines...</div>
                     <div id="loadingDetails" style="font-size: 0.9em; color: #666; margin-top: 10px;"></div>
+                    <div class="action-buttons" id="loadingActionButtons" style="display: none; margin-top: 12px; justify-content: center;">
+                        <button class="btn btn-warning" id="stopAutoTuneBtn" onclick="stopAutoTune()">Skip Auto-Tune</button>
+                    </div>
                     <div class="auto-tune-progress" id="autoTuneProgressWrap">
                         <div class="auto-tune-progress-track">
                             <div class="auto-tune-progress-fill" id="autoTuneProgressFill"></div>
                         </div>
                         <div class="auto-tune-progress-label" id="autoTuneProgressLabel">0%</div>
-                    </div>
-                    <div class="loading-actions" id="loadingActions" style="display: none;">
-                        <button class="btn btn-secondary" id="skipAutoTuneBtn" onclick="skipAutoTune()">Skip</button>
                     </div>
                 </div>
 
@@ -1346,26 +1365,24 @@
                     <div class="tile-tune-actions">
                         <button class="btn btn-secondary" id="resampleTileTuneBtn" onclick="resampleTileTuning()">🔁 Resample</button>
                     </div>
-                    <div class="tile-tune-console" id="tileTuneConsole"></div>
                     <div class="tile-tune-actions">
                         <button class="btn" id="acceptTileTuneBtn" onclick="acceptTileTuningAndContinue()">✅ Accept and Continue</button>
                     </div>
                 </div>
 
                 <div class="results-panel" id="resultsPanel" style="display: none;">
-                    <h3>📊 Results</h3>
                     <div class="results-grid" id="resultsGrid"></div>
                 </div>
 
                 <div class="svg-display" id="svgDisplay" style="display: none;"></div>
-
-                <div class="opt-status-panel" id="optStatusPanel" style="display: none;"></div>
 
                 <div class="action-buttons" id="svgActionButtons">
                     <button class="btn btn-secondary" id="downloadBtn" onclick="downloadSVG()" style="display: none;">💾 Download SVG</button>
                     <a class="btn btn-secondary drag-export-chip" id="dragSvgBtn" style="display: none;" href="#" download draggable="true">🧲 Drag SVG File</a>
                     <button class="btn btn-secondary" id="resetSvgViewBtn" onclick="resetSvgViewport()" style="display: none;">🔍 Reset View</button>
                 </div>
+
+                <div class="opt-status-panel" id="optStatusPanel" style="display: none;"></div>
             </div>
         </div>
     </div>
@@ -1561,6 +1578,7 @@
             'darkThreshold',
             'mergeGap',
             'mergeAnglePriority',
+            'enableLongPathMerging',
             'rdpTolerance',
             'simplificationStrength',
             'lineFitStrength',
@@ -1582,6 +1600,7 @@
         let touchedParameterIds = new Set();
         let activeRequestControllers = new Set();
         let requestEpoch = 0;
+        let autoDetectProgressInterval = null;
         let autoTuneProgressInterval = null;
         let autoTuneOverlayLastFrameId = 0;
         let lastAutoTuneSampleMetadata = null;
@@ -1593,6 +1612,12 @@
         let lastRenderedSvgContent = null;
         let currentSvgObjectUrl = null;
         let currentSvgExportFilename = 'centerline_export.svg';
+        let lastProgressiveSvgRenderedCount = 0;
+        let lastProgressiveSvgFrameId = 0;
+        let autoDetectState = {
+            active: false,
+            token: 0,
+        };
         const svgDragExportSupported = (() => {
             const uaData = navigator.userAgentData;
             if (uaData && Array.isArray(uaData.brands)) {
@@ -1629,13 +1654,15 @@
         };
         let svgViewportState = {
             scale: 1,
-            translateX: 0,
-            translateY: 0,
+            viewBoxX: 0,
+            viewBoxY: 0,
+            viewBoxWidth: 0,
+            viewBoxHeight: 0,
             isDragging: false,
             dragStartX: 0,
             dragStartY: 0,
-            dragOriginX: 0,
-            dragOriginY: 0,
+            dragOriginViewBoxX: 0,
+            dragOriginViewBoxY: 0,
             dragMoved: false,
         };
         let cropState = {
@@ -1825,21 +1852,159 @@
                 return;
             }
 
-            svg.style.transformOrigin = 'center center';
-            svg.style.transform = `translate(${svgViewportState.translateX}px, ${svgViewportState.translateY}px) scale(${svgViewportState.scale})`;
+            if (!(svgViewportState.viewBoxWidth > 0 && svgViewportState.viewBoxHeight > 0)) {
+                const focusViewBox = getSvgFocusViewBox(svg) || getSvgBaseViewBox(svg);
+                if (focusViewBox) {
+                    [
+                        svgViewportState.viewBoxX,
+                        svgViewportState.viewBoxY,
+                        svgViewportState.viewBoxWidth,
+                        svgViewportState.viewBoxHeight,
+                    ] = focusViewBox;
+                }
+            }
+
+            clampSvgViewportToBase(svg);
+            svg.setAttribute(
+                'viewBox',
+                [
+                    svgViewportState.viewBoxX,
+                    svgViewportState.viewBoxY,
+                    svgViewportState.viewBoxWidth,
+                    svgViewportState.viewBoxHeight,
+                ].join(' ')
+            );
+            svg.style.transform = '';
             updateSvgDisplayInteractionState();
         }
 
+        function parseSvgViewBox(value) {
+            if (!value) {
+                return null;
+            }
+            const parsed = String(value).split(/\s+/).map(Number);
+            return parsed.length === 4 && parsed.every(Number.isFinite) ? parsed : null;
+        }
+
+        function getSvgBaseViewBox(svg) {
+            if (!svg) {
+                return null;
+            }
+
+            const parsedStored = parseSvgViewBox(svg.dataset.baseViewBox || svg.getAttribute('viewBox'));
+            if (parsedStored) {
+                return parsedStored;
+            }
+
+            const width = Number(svg.getAttribute('width') || 0);
+            const height = Number(svg.getAttribute('height') || 0);
+            if (width > 0 && height > 0) {
+                return [0, 0, width, height];
+            }
+
+            return null;
+        }
+
+        function getSvgFocusViewBox(svg) {
+            return parseSvgViewBox(svg && svg.dataset ? svg.dataset.focusViewBox : null);
+        }
+
+        function getActiveSvgFocusViewBox(svg) {
+            const baseViewBox = getSvgBaseViewBox(svg);
+            const crop = getCropParams();
+            const shape = currentUploadDisplayImages.shape;
+            if (!baseViewBox || !crop || !Array.isArray(shape) || shape.length < 2) {
+                return baseViewBox;
+            }
+
+            const imageHeight = Number(shape[0] || 0);
+            const imageWidth = Number(shape[1] || 0);
+            if (!(imageWidth > 0 && imageHeight > 0)) {
+                return baseViewBox;
+            }
+
+            const [baseX, baseY, baseWidth, baseHeight] = baseViewBox;
+            const cropX = baseX + (Number(crop.left) * imageWidth);
+            const cropY = baseY + (Number(crop.top) * imageHeight);
+            const cropWidth = Math.max(1, (Number(crop.right) - Number(crop.left)) * imageWidth);
+            const cropHeight = Math.max(1, (Number(crop.bottom) - Number(crop.top)) * imageHeight);
+            const paddingX = Math.max(4, cropWidth * 0.03);
+            const paddingY = Math.max(4, cropHeight * 0.03);
+            const focusX = Math.max(baseX, cropX - paddingX);
+            const focusY = Math.max(baseY, cropY - paddingY);
+            const maxX = baseX + baseWidth;
+            const maxY = baseY + baseHeight;
+            const focusRight = Math.min(maxX, cropX + cropWidth + paddingX);
+            const focusBottom = Math.min(maxY, cropY + cropHeight + paddingY);
+
+            return [
+                focusX,
+                focusY,
+                Math.max(1, focusRight - focusX),
+                Math.max(1, focusBottom - focusY),
+            ];
+        }
+
+        function prepareSvgViewBox(svg) {
+            if (!svg) {
+                return null;
+            }
+
+            let baseViewBox = getSvgBaseViewBox(svg);
+            if (!baseViewBox) {
+                const width = Number(svg.getAttribute('width') || 800);
+                const height = Number(svg.getAttribute('height') || 600);
+                baseViewBox = [0, 0, width, height];
+            }
+
+            svg.dataset.baseViewBox = baseViewBox.join(' ');
+            const activeViewBox = getActiveSvgFocusViewBox(svg) || baseViewBox;
+            svg.dataset.focusViewBox = activeViewBox.join(' ');
+            svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+            return activeViewBox;
+        }
+
+        function clampSvgViewportToBase(svg) {
+            const baseViewBox = getSvgBaseViewBox(svg);
+            if (!baseViewBox) {
+                return;
+            }
+
+            const [baseX, baseY, baseWidth, baseHeight] = baseViewBox;
+            svgViewportState.viewBoxWidth = Math.min(Math.max(1, svgViewportState.viewBoxWidth || baseWidth), baseWidth);
+            svgViewportState.viewBoxHeight = Math.min(Math.max(1, svgViewportState.viewBoxHeight || baseHeight), baseHeight);
+
+            const maxX = baseX + baseWidth - svgViewportState.viewBoxWidth;
+            const maxY = baseY + baseHeight - svgViewportState.viewBoxHeight;
+            svgViewportState.viewBoxX = Math.min(Math.max(svgViewportState.viewBoxX, baseX), Math.max(baseX, maxX));
+            svgViewportState.viewBoxY = Math.min(Math.max(svgViewportState.viewBoxY, baseY), Math.max(baseY, maxY));
+
+            const focusViewBox = getSvgFocusViewBox(svg) || baseViewBox;
+            svgViewportState.scale = focusViewBox && svgViewportState.viewBoxWidth > 0
+                ? (focusViewBox[2] / svgViewportState.viewBoxWidth)
+                : 1;
+        }
+
         function resetSvgViewport() {
-            svgViewportState.scale = 1;
-            svgViewportState.translateX = 0;
-            svgViewportState.translateY = 0;
             svgViewportState.isDragging = false;
             svgViewportState.dragStartX = 0;
             svgViewportState.dragStartY = 0;
-            svgViewportState.dragOriginX = 0;
-            svgViewportState.dragOriginY = 0;
+            svgViewportState.dragOriginViewBoxX = 0;
+            svgViewportState.dragOriginViewBoxY = 0;
             svgViewportState.dragMoved = false;
+            const svgDisplay = document.getElementById('svgDisplay');
+            const svg = svgDisplay ? svgDisplay.querySelector('svg') : null;
+            const focusViewBox = prepareSvgViewBox(svg) || getSvgBaseViewBox(svg);
+            if (focusViewBox) {
+                [
+                    svgViewportState.viewBoxX,
+                    svgViewportState.viewBoxY,
+                    svgViewportState.viewBoxWidth,
+                    svgViewportState.viewBoxHeight,
+                ] = focusViewBox;
+                svgViewportState.scale = 1;
+            }
+            autoFitSVG();
             applySvgViewportTransform();
         }
 
@@ -2165,6 +2330,20 @@
             }
         }
 
+        function setThresholdAutoDetectInfo(html) {
+            const info = document.getElementById('thresholdAutoDetectInfo');
+            if (!info) {
+                return;
+            }
+            if (html) {
+                info.innerHTML = html;
+                info.style.display = 'block';
+            } else {
+                info.innerHTML = '';
+                info.style.display = 'none';
+            }
+        }
+
         function formatPercentValue(value, digits = 1) {
             const numeric = Number(value || 0);
             return `${(numeric * 100).toFixed(digits)}%`;
@@ -2173,6 +2352,11 @@
         function formatIntegerValue(value) {
             const numeric = Number(value || 0);
             return Number.isFinite(numeric) ? Math.round(numeric).toLocaleString() : '0';
+        }
+
+        function formatPixelValue(value, digits = 1) {
+            const numeric = Number(value);
+            return Number.isFinite(numeric) ? `${numeric.toFixed(digits)} px` : 'n/a';
         }
 
         function buildTileTuneReadonlyInfo(sampleMetadata, previewData = null) {
@@ -2190,6 +2374,7 @@
             const effectiveMinLength = Number(preview.effective_min_path_length || metadata.effective_min_path_length || 0);
             const logicalMergeGap = Number(metadata.logical_merge_gap || 0);
             const effectiveMergeGap = Number(preview.effective_merge_gap || metadata.effective_merge_gap || 0);
+            const medianStrokeWidth = Number(preview.median_stroke_width_px || metadata.median_stroke_width_px || 0);
             const selectedHotspots = Number(metadata.selected_hotspot_tiles || 0);
             const selectedCoverage = Number(metadata.selected_coverage_tiles || 0);
             const selectedFallback = Number(metadata.selected_fallback_tiles || 0);
@@ -2221,6 +2406,9 @@
             if (logicalMergeGap > 0 || effectiveMergeGap > 0) {
                 items.push(`<span class="tile-tune-readonly-item">Merge gap <strong>${formatIntegerValue(logicalMergeGap)}</strong> logical, <strong>${formatIntegerValue(effectiveMergeGap || logicalMergeGap)}</strong> effective</span>`);
             }
+            if (medianStrokeWidth > 0) {
+                items.push(`<span class="tile-tune-readonly-item">Median stroke <strong>${formatPixelValue(medianStrokeWidth)}</strong></span>`);
+            }
             if (tileCount > 0) {
                 items.push(`<span class="tile-tune-readonly-item">Distribution <strong>${selectedHotspots}</strong> hotspot, <strong>${selectedCoverage}</strong> coverage, <strong>${selectedFallback}</strong> fallback</span>`);
             }
@@ -2240,25 +2428,78 @@
                 `<div class="tile-tune-readonly-note">${notes.join(' ')}</div>`;
         }
 
+        function buildThresholdAutoDetectInfo(data) {
+            const result = data || {};
+            const metadata = result.sample_metadata || {};
+            const sourceShape = Array.isArray(metadata.source_shape) ? metadata.source_shape : [];
+            const sourceHeight = Number(sourceShape[0] || 0);
+            const sourceWidth = Number(sourceShape[1] || 0);
+            const previewShape = Array.isArray(result.preview_shape)
+                ? result.preview_shape
+                : (Array.isArray(metadata.sample_shape) ? metadata.sample_shape : []);
+            const previewHeight = Number(previewShape[0] || 0);
+            const previewWidth = Number(previewShape[1] || 0);
+            const tileShape = Array.isArray(metadata.tile_shape) ? metadata.tile_shape : [];
+            const tileHeight = Number(tileShape[0] || 0);
+            const tileWidth = Number(tileShape[1] || 0);
+            const tileCount = Number(metadata.tile_count || 0);
+            const samplingMode = String(metadata.sampling_mode || 'full_image');
+            const parameterScale = Number(metadata.parameter_scale || 1.0);
+            const effectiveMinLength = Number(metadata.effective_min_path_length || 0);
+            const thresholdValue = Number(result.detected_threshold || 0);
+            const confidenceScore = Number(result.confidence_score || 0);
+            const elapsedSec = Number(result.elapsed_sec || 0);
+            const thresholdsEvaluated = Number(result.thresholds_evaluated || 0);
+            const previewScale = Number(result.preview_scale || 1.0);
+            const recommendation = String(result.recommendation || (result.success ? 'auto-detected' : 'manual adjustment recommended'));
+            const sampleScope = samplingMode === 'random_tiles_mosaic'
+                ? `${formatIntegerValue(tileCount)} sampled tiles`
+                : 'Full image';
+
+            const items = [];
+            items.push(`<span class="tile-tune-readonly-item">Threshold <strong>${thresholdValue.toFixed(3)}</strong></span>`);
+            items.push(`<span class="tile-tune-readonly-item">Confidence <strong>${Math.round(confidenceScore * 100)}%</strong></span>`);
+            items.push(`<span class="tile-tune-readonly-item">Runtime <strong>${elapsedSec.toFixed(2)}s</strong></span>`);
+            if (thresholdsEvaluated > 0) {
+                items.push(`<span class="tile-tune-readonly-item">Threshold tests <strong>${formatIntegerValue(thresholdsEvaluated)}</strong></span>`);
+            }
+            items.push(`<span class="tile-tune-readonly-item">Sample scope <strong>${sampleScope}</strong></span>`);
+            if (sourceWidth > 0 && sourceHeight > 0) {
+                items.push(`<span class="tile-tune-readonly-item">Image <strong>${formatIntegerValue(sourceWidth)} × ${formatIntegerValue(sourceHeight)}</strong></span>`);
+            }
+            if (previewWidth > 0 && previewHeight > 0) {
+                items.push(`<span class="tile-tune-readonly-item">Scored preview <strong>${formatIntegerValue(previewWidth)} × ${formatIntegerValue(previewHeight)}</strong></span>`);
+            }
+            items.push(`<span class="tile-tune-readonly-item">Scale factor <strong>${parameterScale.toFixed(2)}×</strong></span>`);
+            if (effectiveMinLength > 0) {
+                items.push(`<span class="tile-tune-readonly-item">Effective min path <strong>${formatIntegerValue(effectiveMinLength)}</strong> px</span>`);
+            }
+            if (tileWidth > 0 && tileHeight > 0 && tileCount > 0) {
+                items.push(`<span class="tile-tune-readonly-item">Tile plan <strong>${formatIntegerValue(tileCount)}</strong> at <strong>${formatIntegerValue(tileWidth)} × ${formatIntegerValue(tileHeight)}</strong></span>`);
+            }
+
+            const notes = [];
+            notes.push(`Recommendation: ${recommendation}.`);
+            if (samplingMode === 'random_tiles_mosaic' && tileCount > 0) {
+                notes.push(`Threshold scoring ran on sampled tiles first, then applied the result to the full image.`);
+            } else {
+                notes.push(`Threshold scoring ran on a reduced full-image preview.`);
+            }
+            if (previewScale > 0 && previewScale < 0.999) {
+                notes.push(`Preview downscale factor: ${(previewScale * 100).toFixed(1)}% of the sampled source.`);
+            }
+
+            return `<div class="tile-tune-readonly-title">Last threshold auto-detect</div>` +
+                `<div class="tile-tune-readonly-grid">${items.join('')}</div>` +
+                `<div class="tile-tune-readonly-note">${notes.join(' ')}</div>`;
+        }
+
         function tileTuneLog(msg, type) {
-            const box = document.getElementById('tileTuneConsole');
-            if (!box) return;
-            const now = new Date();
-            const ts = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            const line = document.createElement('div');
-            line.className = 'tile-tune-console-line' + (type ? ' ttc-' + type : '');
-            line.textContent = '[' + ts + '] ' + msg;
-            box.appendChild(line);
-            if (box.children.length > 120) { box.removeChild(box.firstChild); }
-            box.style.display = 'block';
-            box.scrollTop = box.scrollHeight;
+            void msg;
+            void type;
         }
 
         function clearTileTuneConsole() {
-            const box = document.getElementById('tileTuneConsole');
-            if (!box) return;
-            box.innerHTML = '';
-            box.style.display = 'none';
             setTileTuneReadonlyInfo('');
         }
 
@@ -2864,7 +3105,10 @@
         }
 
         function cancelActiveUiWork() {
+            stopAutoDetectProgressPolling();
+            signalAutoDetectStop(currentSessionId);
             stopAutoTuneProgressPolling();
+            signalAutoTuneStop(currentSessionId);
 
             if (autoProcessTimeout) {
                 clearTimeout(autoProcessTimeout);
@@ -2884,6 +3128,44 @@
             clearSampleBoundingBox();
             setLoadingActionButton(false);
             showLoading(false);
+        }
+
+        function stopAutoDetectProgressPolling() {
+            if (autoDetectProgressInterval) {
+                clearInterval(autoDetectProgressInterval);
+                autoDetectProgressInterval = null;
+            }
+            autoDetectState.active = false;
+        }
+
+        function setAutoDetectControls(isBusy) {
+            const autoDetectBtn = document.getElementById('autoDetectBtn');
+            const autoDetectSkipBtn = document.getElementById('autoDetectSkipBtn');
+
+            if (autoDetectBtn) {
+                autoDetectBtn.disabled = isBusy || !currentSessionId;
+                autoDetectBtn.textContent = isBusy ? '🔍 Detecting...' : '🎯 Auto-Detect';
+            }
+
+            if (autoDetectSkipBtn) {
+                autoDetectSkipBtn.style.display = isBusy ? 'inline-block' : 'none';
+                autoDetectSkipBtn.disabled = !isBusy;
+            }
+        }
+
+        function signalAutoDetectStop(sessionId) {
+            if (!sessionId) return;
+
+            fetch('/stop_auto_detect', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: sessionId
+                }),
+                keepalive: true
+            }).catch(() => {});
         }
 
         function signalOptimizationStop(sessionId) {
@@ -2921,6 +3203,7 @@
                 shape: null,
                 normalizationApplied: false,
             };
+            setThresholdAutoDetectInfo(null);
             fileInput.value = '';
             autoProcessEnabled = true;
             setAutoProcessButtonState();
@@ -2946,7 +3229,7 @@
             cropState.right = 1; cropState.bottom = 1;
             cropState.draggingEdge = null;
             document.getElementById('processBtn').disabled = true;
-            document.getElementById('autoDetectBtn').disabled = true;
+            setAutoDetectControls(false);
             document.getElementById('autoDetectMinLengthBtn').disabled = true;
 
             showMessage('Reset complete. Settings returned to defaults and active browser requests were cancelled.', 'success');
@@ -3030,7 +3313,12 @@
                 if (!svg) return;
 
                 event.preventDefault();
-                const previousScale = svgViewportState.scale;
+                const focusViewBox = getSvgFocusViewBox(svg) || prepareSvgViewBox(svg) || getSvgBaseViewBox(svg);
+                if (!focusViewBox) {
+                    return;
+                }
+
+                const previousScale = svgViewportState.scale || 1;
                 const deltaScale = event.deltaY < 0 ? 1.12 : (1 / 1.12);
                 const nextScale = Math.max(1, Math.min(12, previousScale * deltaScale));
                 if (Math.abs(nextScale - previousScale) < 0.0001) {
@@ -3038,15 +3326,34 @@
                 }
 
                 const rect = svg.getBoundingClientRect();
-                const imageCenterX = rect.left + rect.width / 2;
-                const imageCenterY = rect.top + rect.height / 2;
-                const pointerOffsetX = event.clientX - imageCenterX;
-                const pointerOffsetY = event.clientY - imageCenterY;
-                const scaleRatio = nextScale / previousScale;
+                if (!(rect.width > 0 && rect.height > 0)) {
+                    return;
+                }
 
+                const pointerFracX = (event.clientX - rect.left) / rect.width;
+                const pointerFracY = (event.clientY - rect.top) / rect.height;
+                const currentWidth = Number.isFinite(svgViewportState.viewBoxWidth) && svgViewportState.viewBoxWidth > 0
+                    ? svgViewportState.viewBoxWidth
+                    : focusViewBox[2];
+                const currentHeight = Number.isFinite(svgViewportState.viewBoxHeight) && svgViewportState.viewBoxHeight > 0
+                    ? svgViewportState.viewBoxHeight
+                    : focusViewBox[3];
+                const currentX = Number.isFinite(svgViewportState.viewBoxX)
+                    ? svgViewportState.viewBoxX
+                    : focusViewBox[0];
+                const currentY = Number.isFinite(svgViewportState.viewBoxY)
+                    ? svgViewportState.viewBoxY
+                    : focusViewBox[1];
+                const anchorX = currentX + (pointerFracX * currentWidth);
+                const anchorY = currentY + (pointerFracY * currentHeight);
+                const nextWidth = focusViewBox[2] / nextScale;
+                const nextHeight = focusViewBox[3] / nextScale;
+
+                svgViewportState.viewBoxWidth = nextWidth;
+                svgViewportState.viewBoxHeight = nextHeight;
+                svgViewportState.viewBoxX = anchorX - (pointerFracX * nextWidth);
+                svgViewportState.viewBoxY = anchorY - (pointerFracY * nextHeight);
                 svgViewportState.scale = nextScale;
-                svgViewportState.translateX -= pointerOffsetX * (scaleRatio - 1);
-                svgViewportState.translateY -= pointerOffsetY * (scaleRatio - 1);
                 applySvgViewportTransform();
             }, { passive: false });
 
@@ -3063,8 +3370,8 @@
                 svgViewportState.dragMoved = false;
                 svgViewportState.dragStartX = event.clientX;
                 svgViewportState.dragStartY = event.clientY;
-                svgViewportState.dragOriginX = svgViewportState.translateX;
-                svgViewportState.dragOriginY = svgViewportState.translateY;
+                svgViewportState.dragOriginViewBoxX = svgViewportState.viewBoxX;
+                svgViewportState.dragOriginViewBoxY = svgViewportState.viewBoxY;
                 updateSvgDisplayInteractionState();
             });
         }
@@ -3103,14 +3410,22 @@
             }
 
             if (svgViewportState.isDragging) {
+                const svg = svgDisplay ? svgDisplay.querySelector('svg') : null;
+                const rect = svg ? svg.getBoundingClientRect() : null;
+                if (!svg || !rect || !(rect.width > 0 && rect.height > 0)) {
+                    return;
+                }
+
                 const dx = event.clientX - svgViewportState.dragStartX;
                 const dy = event.clientY - svgViewportState.dragStartY;
                 if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
                     svgViewportState.dragMoved = true;
                 }
 
-                svgViewportState.translateX = svgViewportState.dragOriginX + dx;
-                svgViewportState.translateY = svgViewportState.dragOriginY + dy;
+                const svgUnitsPerPixelX = svgViewportState.viewBoxWidth / rect.width;
+                const svgUnitsPerPixelY = svgViewportState.viewBoxHeight / rect.height;
+                svgViewportState.viewBoxX = svgViewportState.dragOriginViewBoxX - (dx * svgUnitsPerPixelX);
+                svgViewportState.viewBoxY = svgViewportState.dragOriginViewBoxY - (dy * svgUnitsPerPixelY);
                 applySvgViewportTransform();
                 return;
             }
@@ -3324,6 +3639,7 @@
 
             // New upload should always start from a clean UI state.
             clearResults();
+            setThresholdAutoDetectInfo(null);
             autoTuneState.token += 1;
             autoTuneState.active = false;
             autoTuneState.shouldProcessAfter = false;
@@ -3360,7 +3676,7 @@
                     renderPreprocessingStatus(currentPreprocessingInfo);
                     updateParameters(data.parameters, { preserveTouched: true });
                     document.getElementById('processBtn').disabled = false;
-                    document.getElementById('autoDetectBtn').disabled = false;
+                    setAutoDetectControls(false);
                     document.getElementById('autoDetectMinLengthBtn').disabled = false;
                     showMessage(`File loaded: ${data.image_shape[0]}x${data.image_shape[1]} pixels`, 'success');
                     startUploadAutoTune(autoProcessEnabled);
@@ -3379,14 +3695,52 @@
             });
         }
 
-        function setLoadingActionButton(show, text = 'Skip') {
-            const loadingActions = document.getElementById('loadingActions');
-            const skipButton = document.getElementById('skipAutoTuneBtn');
+        function setLoadingActionButton(show, text = '') {
+            const actionWrap = document.getElementById('loadingActionButtons');
+            const stopAutoTuneBtn = document.getElementById('stopAutoTuneBtn');
+            if (!actionWrap || !stopAutoTuneBtn) {
+                return;
+            }
 
-            if (!loadingActions || !skipButton) return;
+            if (!show) {
+                actionWrap.style.display = 'none';
+                stopAutoTuneBtn.disabled = false;
+                stopAutoTuneBtn.textContent = 'Skip Auto-Tune';
+                return;
+            }
 
-            skipButton.textContent = text;
-            loadingActions.style.display = show ? 'flex' : 'none';
+            actionWrap.style.display = 'flex';
+            stopAutoTuneBtn.disabled = false;
+            stopAutoTuneBtn.textContent = text || 'Skip Auto-Tune';
+        }
+
+        function signalAutoTuneStop(sessionId) {
+            if (!sessionId) return;
+
+            fetch('/stop_auto_tune', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: sessionId
+                }),
+                keepalive: true
+            }).catch(() => {});
+        }
+
+        function stopAutoTune() {
+            if (!currentSessionId || !autoTuneState.active) {
+                return;
+            }
+
+            const stopAutoTuneBtn = document.getElementById('stopAutoTuneBtn');
+            if (stopAutoTuneBtn) {
+                stopAutoTuneBtn.disabled = true;
+                stopAutoTuneBtn.textContent = 'Stopping...';
+            }
+
+            signalAutoTuneStop(currentSessionId);
         }
 
         function setAutoTuneLoadingProgress(show, percent = 0, labelText = '') {
@@ -3421,7 +3775,7 @@
             lastAutoTuneSampleMetadata = null;
 
             showLoading(true, 'Sampling image and auto-setting detection parameters...', 'Auto-setting best threshold and minimum path length (max 90s).');
-            setLoadingActionButton(true, 'Skip');
+            setLoadingActionButton(true);
             setAutoTuneLoadingProgress(true, 0, '0 / 90s');
 
             trackedFetch('/auto_tune_sample_region', {
@@ -3454,7 +3808,7 @@
                                 loadingDetails.textContent = `Orange dashed box = sampled busy area (${sampleShape[1]}x${sampleShape[0]}), tuning capped at 90s.`;
                             }
                         }
-                        setLoadingActionButton(true, 'Skip & Manual Tune');
+                        setLoadingActionButton(true);
                     }
 
                     const drawSampleOverlay = () => renderSampleBoundingBox(sampleData.sample_metadata);
@@ -3631,73 +3985,6 @@
             });
         }
 
-        function skipAutoTune() {
-            if (!autoTuneState.active) {
-                return;
-            }
-
-            const shouldProcessAfter = autoTuneState.shouldProcessAfter;
-            autoTuneState.token += 1;
-            autoTuneState.active = false;
-            autoTuneState.shouldProcessAfter = false;
-            stopAutoTuneProgressPolling();
-            abortAllActiveRequests();
-            setLoadingActionButton(false);
-            showLoading(false);
-            clearSampleBoundingBox();
-            const _skipOpacitySlider = document.getElementById('detectionImageOpacity');
-            if (_skipOpacitySlider) {
-                _skipOpacitySlider.value = '10';
-                updateRangeValue('detectionImageOpacity');
-                applyDetectionImageOpacity();
-            }
-
-            if (!currentSessionId) {
-                if (shouldProcessAfter) {
-                    processImage({ fromAutoTune: true });
-                }
-                return;
-            }
-
-            trackedFetch('/stop_auto_tune', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    session_id: currentSessionId
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.updated_parameters) {
-                    updateParameters(data.updated_parameters);
-                }
-
-                const sampleMetadata = lastAutoTuneSampleMetadata;
-                const hasTileSampling = Boolean(
-                    sampleMetadata &&
-                    String(sampleMetadata.sampling_mode || '') === 'random_tiles_mosaic'
-                );
-
-
-
-                if (hasTileSampling) {
-                    enterTileTuneReview(sampleMetadata, shouldProcessAfter);
-                    return;
-                }
-
-                if (shouldProcessAfter) {
-                    processImage({ fromAutoTune: true });
-                }
-            })
-            .catch(() => {
-                if (shouldProcessAfter) {
-                    processImage({ fromAutoTune: true });
-                }
-            });
-        }
-
         function displayImage(rawImageData, normalizedImageData, imageShape, normalizationApplied = false) {
             exitTileTuneReview({ clearOverlays: true });
             lastAutoTuneSampleMetadata = null;
@@ -3757,6 +4044,8 @@
             const bgTexture = typeof preprocessing.background_texture === 'number'
                 ? preprocessing.background_texture.toFixed(4)
                 : 'n/a';
+            const medianStrokeWidth = Number(preprocessing.median_stroke_width_px || 0);
+            const effectiveMergeGap = Number(preprocessing.effective_merge_gap || 0);
 
             const metricLine = `
                 <small>
@@ -3773,15 +4062,18 @@
             const enhancementNote = preprocessing.enhancement_applied
                 ? '<br><small>Faint-line enhancement applied</small>'
                 : '';
+            const mergeSizingNote = (medianStrokeWidth > 0 || effectiveMergeGap > 0)
+                ? `<br><small>Median stroke: ${medianStrokeWidth > 0 ? formatPixelValue(medianStrokeWidth) : 'n/a'} · effective merge gap: ${effectiveMergeGap > 0 ? formatIntegerValue(effectiveMergeGap) + ' px' : 'n/a'}</small>`
+                : '';
 
             if (preprocessing.applied) {
                 statusEl.classList.remove('skipped');
                 statusEl.classList.add('applied');
-                statusEl.innerHTML = `Normalization applied<br><small>${preprocessing.reason || 'Uneven background detected'}</small>${enhancementNote}${metricLine}`;
+                statusEl.innerHTML = `Normalization applied<br><small>${preprocessing.reason || 'Uneven background detected'}</small>${enhancementNote}${mergeSizingNote}${metricLine}`;
             } else {
                 statusEl.classList.remove('applied');
                 statusEl.classList.add('skipped');
-                statusEl.innerHTML = `Normalization skipped<br><small>${preprocessing.reason || 'Background already uniform enough'}</small>${enhancementNote}${metricLine}`;
+                statusEl.innerHTML = `Normalization skipped<br><small>${preprocessing.reason || 'Background already uniform enough'}</small>${enhancementNote}${mergeSizingNote}${metricLine}`;
             }
 
             statusEl.style.display = 'block';
@@ -4144,6 +4436,152 @@
             setAutoProcessButtonState();
         }
 
+        function autoDetectThreshold() {
+            if (!currentSessionId) {
+                showMessage('Please upload an image first', 'error');
+                return;
+            }
+
+            const detectEpoch = requestEpoch;
+            const detectToken = ++autoDetectState.token;
+            stopAutoDetectProgressPolling();
+            autoDetectState.active = true;
+            setAutoDetectControls(true);
+
+            showLoading(true, 'Auto-detecting optimal threshold...', 'Scoring sampled image regions to estimate a strong starting darkness cutoff.');
+
+            trackedFetch('/auto_detect_threshold_start', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: currentSessionId
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (isRequestStale(detectEpoch)) {
+                    return;
+                }
+
+                if (!data.success) {
+                    autoDetectState.active = false;
+                    showLoading(false);
+                    setAutoDetectControls(false);
+                    showMessage(data.error || 'Auto-detection failed', 'error');
+                    return;
+                }
+
+                startAutoDetectProgressPolling(detectEpoch, detectToken);
+            })
+            .catch(error => {
+                if (isAbortError(error) || isRequestStale(detectEpoch)) {
+                    return;
+                }
+
+                autoDetectState.active = false;
+                stopAutoDetectProgressPolling();
+                showLoading(false);
+                setAutoDetectControls(false);
+                showMessage(`Auto-detection error: ${error.message}`, 'error');
+            });
+        }
+
+        function startAutoDetectProgressPolling(detectEpoch, detectToken) {
+            stopAutoDetectProgressPolling();
+            autoDetectState.active = true;
+            let pollInFlight = false;
+
+            autoDetectProgressInterval = setInterval(() => {
+                if (!currentSessionId || isRequestStale(detectEpoch) || autoDetectState.token !== detectToken) {
+                    stopAutoDetectProgressPolling();
+                    return;
+                }
+                if (pollInFlight) {
+                    return;
+                }
+
+                pollInFlight = true;
+                trackedFetch(`/auto_detect_threshold_progress/${currentSessionId}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (isRequestStale(detectEpoch) || autoDetectState.token !== detectToken) {
+                            return;
+                        }
+
+                        const elapsedSec = Number(data.elapsed_sec || 0);
+                        const thresholdsEvaluated = Number(data.thresholds_evaluated || 0);
+                        const thresholdsPlanned = Number(data.thresholds_planned || 0);
+                        const bestThreshold = Number(data.best_threshold || data.detected_threshold || document.getElementById('darkThreshold')?.value || 0.20);
+
+                        if (data.running) {
+                            const detail = thresholdsEvaluated > 0
+                                ? `Tested ${thresholdsEvaluated}${thresholdsPlanned > 0 ? ` / ${thresholdsPlanned}` : ''} thresholds in ${elapsedSec.toFixed(1)}s. Best so far ${bestThreshold.toFixed(3)}.`
+                                : 'Scoring sampled image regions to estimate a strong starting darkness cutoff.';
+                            showLoading(true, 'Auto-detecting optimal threshold...', detail);
+                            return;
+                        }
+
+                        stopAutoDetectProgressPolling();
+                        showLoading(false);
+                        setAutoDetectControls(false);
+
+                        if (data.cancelled) {
+                            showMessage(data.message || 'Auto-detect cancelled. Previous threshold kept.', 'warning');
+                            return;
+                        }
+
+                        if (data.success) {
+                            touchedParameterIds.add('darkThreshold');
+                            updateParameters(data.updated_parameters, { preserveTouched: true });
+
+                            const thresholdSlider = document.getElementById('darkThreshold');
+                            if (thresholdSlider) {
+                                thresholdSlider.value = Number(data.detected_threshold || 0.20).toFixed(3);
+                                updateRangeValue('darkThreshold');
+                            }
+
+                            setThresholdAutoDetectInfo(buildThresholdAutoDetectInfo(data));
+
+                            if (autoProcessEnabled) {
+                                setTimeout(() => {
+                                    processImage();
+                                }, 1000);
+                            }
+                        } else {
+                            showMessage(data.message || data.error || 'Auto-detection failed', 'error');
+                        }
+                    })
+                    .catch(error => {
+                        if (isAbortError(error) || isRequestStale(detectEpoch) || autoDetectState.token !== detectToken) {
+                            return;
+                        }
+
+                        stopAutoDetectProgressPolling();
+                        showLoading(false);
+                        setAutoDetectControls(false);
+                        showMessage(`Auto-detection error: ${error.message}`, 'error');
+                    })
+                    .finally(() => {
+                        pollInFlight = false;
+                    });
+            }, 350);
+        }
+
+        function skipAutoDetectThreshold() {
+            if (!currentSessionId || !autoDetectState.active) {
+                return;
+            }
+
+            autoDetectState.token += 1;
+            stopAutoDetectProgressPolling();
+            setAutoDetectControls(false);
+            showLoading(false);
+            signalAutoDetectStop(currentSessionId);
+            showMessage('Auto-detect cancelled. Previous threshold kept.', 'warning');
+        }
+
         function autoDetectMinPathLength() {
             if (!currentSessionId) {
                 showMessage('Please upload an image first', 'error');
@@ -4243,6 +4681,7 @@
             console.log('Starting progressive processing mode...');
             showLoading(true, 'Detecting centerline candidates...', 'Thresholding the image, skeletonizing the strokes, and preparing the first overlay.');
             showProgressMessage('Starting progressive processing...', 'info');
+            startProcessStagePolling(processEpoch);
             
             trackedFetch('/process_immediate', {
                 method: 'POST',
@@ -4260,6 +4699,8 @@
                 if (isRequestStale(processEpoch)) {
                     return;
                 }
+
+                stopProcessStagePolling();
 
                 console.log('Progressive processing response:', data);
                 if (data.success) {
@@ -4293,6 +4734,8 @@
                     return;
                 }
 
+                stopProcessStagePolling();
+
                 console.error('Progressive processing error:', error);
                 showLoading(false);
                 showMessage(`Processing error: ${error.message}`, 'error');
@@ -4303,16 +4746,21 @@
             console.log('Displaying immediate results:', data);
             const resultsPanel = document.getElementById('resultsPanel');
             const resultsGrid = document.getElementById('resultsGrid');
+            const fragmentCount = Number(data.merged_paths_count ?? data.initial_paths_count ?? 0);
+            const summaryText = data.merge_deferred
+                ? `${formatIntegerValue(data.valid_paths_count)} centerline paths extracted and ${formatIntegerValue(fragmentCount)} fragments queued for background merging`
+                : `${formatIntegerValue(data.valid_paths_count)} centerline paths extracted and ${formatIntegerValue(fragmentCount)} fragments after endpoint merging`;
             
             resultsGrid.innerHTML = `
-                <div class="result-item">
-                    <h3>Initial Paths Found</h3>
-                    <p><strong>${data.valid_paths_count}</strong> centerline paths extracted</p>
-                </div>
-                <div class="result-item">
-                    <h3>Merged Paths</h3>
-                    <p><strong>${data.merged_paths_count ?? data.initial_paths_count}</strong> after endpoint merging</p>
-                    <p style="font-size:0.8em; color:#888; margin-top:4px;">gap=${document.getElementById('mergeGap').value}px &nbsp;|&nbsp; angle priority=${document.getElementById('mergeAnglePriority').value}%</p>
+                <div class="result-item" style="display:flex; flex-direction:column; gap:8px; align-items:flex-start;">
+                    <p style="margin:0; font-weight:600; color:#2f3d4f;">${summaryText}</p>
+                    <p style="font-size:0.8em; color:#888; margin-top:4px;">gap=${document.getElementById('mergeGap').value}px logical &nbsp;|&nbsp; effective=${Math.round(Number(data.effective_merge_gap || document.getElementById('mergeGap').value))}px &nbsp;|&nbsp; stroke=${Number(data.median_stroke_width_px || 0) > 0 ? formatPixelValue(data.median_stroke_width_px) : 'n/a'} &nbsp;|&nbsp; angle priority=${document.getElementById('mergeAnglePriority').value}% &nbsp;|&nbsp; long pass=${document.getElementById('enableLongPathMerging').checked ? 'on' : 'off'}${data.merge_deferred ? ' &nbsp;|&nbsp; deferred for faster first overlay' : ''}</p>
+                    <label style="font-size:0.85em; color:#555; display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" id="initialResultsIncludeImage" checked>
+                        Include source image
+                    </label>
+                    <button class="btn download-btn-magenta" id="downloadInitialSvgBtn" onclick="downloadInitialSkeletonSVG()">Download SVG</button>
+                    <p style="font-size:0.8em; color:#888; margin:0;">Downloads the current magenta skeleton paths immediately, without waiting for optimization.</p>
                 </div>
             `;
 
@@ -4340,16 +4788,72 @@
         }
 
         let progressInterval;
+        let processStagePollInterval = null;
         let lastSvgProgressRefreshAt = 0;
         const LARGE_SVG_VIEW_PATH_LIMIT = 5000;
-        const LARGE_SVG_VIEW_REFRESH_MS = 8000;
-        const NORMAL_SVG_VIEW_REFRESH_MS = 1000;
+        const LARGE_SVG_VIEW_REFRESH_MS = 2500;
+        const NORMAL_SVG_VIEW_REFRESH_MS = 900;
+        const EARLY_PROGRESSIVE_SVG_BURST_MS = 300;
+
+        function stopProcessStagePolling() {
+            if (processStagePollInterval) {
+                clearInterval(processStagePollInterval);
+                processStagePollInterval = null;
+            }
+        }
+
+        function startProcessStagePolling(processEpoch) {
+            stopProcessStagePolling();
+
+            processStagePollInterval = setInterval(() => {
+                if (!currentSessionId || isRequestStale(processEpoch)) {
+                    stopProcessStagePolling();
+                    return;
+                }
+
+                trackedFetch(`/progress/${currentSessionId}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (isRequestStale(processEpoch)) {
+                            return;
+                        }
+
+                        const messages = Array.isArray(data.messages) ? data.messages : [];
+                        if (messages.length === 0) {
+                            return;
+                        }
+
+                        const latestMessage = String(messages[messages.length - 1] || '').trim();
+                        const latestHeadline = [...messages]
+                            .reverse()
+                            .map(message => String(message || '').trim())
+                            .find(message => message && !message.startsWith('->') && !message.startsWith('→')) || latestMessage;
+                        const loadingText = document.getElementById('loadingText');
+                        const loadingDetails = document.getElementById('loadingDetails');
+                        if (loadingText && latestHeadline) {
+                            loadingText.textContent = latestHeadline;
+                        }
+                        if (loadingDetails && latestMessage && latestMessage !== latestHeadline) {
+                            loadingDetails.textContent = latestMessage;
+                        }
+                    })
+                    .catch(error => {
+                        if (isAbortError(error) || isRequestStale(processEpoch)) {
+                            return;
+                        }
+
+                        console.error('Immediate-stage progress polling error:', error);
+                    });
+            }, 400);
+        }
 
         function startProgressMonitoring() {
             console.log('Starting progress monitoring...');
             if (progressInterval) clearInterval(progressInterval);
             const progressEpoch = requestEpoch;
             lastSvgProgressRefreshAt = 0;
+            lastProgressiveSvgRenderedCount = 0;
+            lastProgressiveSvgFrameId = 0;
             
             // Show stop button
             const stopBtn = document.getElementById('stopOptBtn');
@@ -4397,28 +4901,51 @@
                     
                     const total = Number(data.total_paths || 0);
                     const done = Number(data.optimized_count || 0);
+                    const previewFrameId = Number(data.live_preview_frame_id || 0);
+                    const previewCount = Number(data.live_preview_count || 0);
+                    const mergeProgress = data.merge_progress || {};
+                    const mergePercent = Math.max(0, Math.min(100, Number(mergeProgress.percent || 0)));
+                    const mergePhase = String(mergeProgress.phase || 'idle');
+                    const mergeActive = Boolean(mergeProgress.active);
 
-                    if (done > 0) {
+                    if (previewFrameId > lastProgressiveSvgFrameId) {
                         const now = Date.now();
                         const refreshIntervalMs = total > LARGE_SVG_VIEW_PATH_LIMIT
                             ? LARGE_SVG_VIEW_REFRESH_MS
                             : NORMAL_SVG_VIEW_REFRESH_MS;
-                        const shouldRefreshSvg = (now - lastSvgProgressRefreshAt) >= refreshIntervalMs;
+                        const isEarlyAcceptedWave = previewCount <= 3;
+                        const timeSinceLastRefresh = now - lastSvgProgressRefreshAt;
+                        const shouldRefreshSvg = timeSinceLastRefresh >= refreshIntervalMs
+                            || (isEarlyAcceptedWave && timeSinceLastRefresh >= EARLY_PROGRESSIVE_SVG_BURST_MS);
 
                         if (shouldRefreshSvg && now >= downloadSvgClickLockUntil) {
-                            console.log(`Updating SVG with ${done} optimized paths`);
+                            console.log(`Updating SVG with preview frame ${previewFrameId} (${previewCount} paths)`);
                             lastSvgProgressRefreshAt = now;
+                            lastProgressiveSvgRenderedCount = done;
+                            lastProgressiveSvgFrameId = previewFrameId;
                             generateSVG('progressive');
                         }
                     }
 
                     // Update progress bar
                     if (total > 0) {
-                        const pct = Math.min(100, Math.round(done / total * 100));
+                        const optimizationPercent = total > 0 ? Math.max(0, Math.min(100, (done / total) * 100)) : 0;
+                        let pct = 0;
+                        let progressLabel = `${done} / ${total} paths optimised (${Math.round(optimizationPercent)}%)`;
+
+                        if (mergeActive || mergePhase === 'cheap_merge' || mergePhase === 'long_merge') {
+                            pct = Math.round(mergePercent * 0.5);
+                            const mergeLabel = mergePhase === 'long_merge' ? 'Long-fragment merge' : 'Merging paths';
+                            progressLabel = `${mergeLabel} ${Math.round(mergePercent)}%`;
+                        } else if (mergePhase === 'merge_complete' || mergePhase === 'optimizing' || done > 0) {
+                            pct = Math.round(50 + (optimizationPercent * 0.5));
+                        }
+
+                        pct = Math.min(100, Math.max(0, pct));
                         const bar = document.getElementById('opt-progress-bar');
                         const lbl = document.getElementById('opt-progress-label');
                         if (bar) bar.style.width = pct + '%';
-                        if (lbl) lbl.textContent = `${done} / ${total} paths optimised (${pct}%)`;
+                        if (lbl) lbl.textContent = progressLabel;
                     }
                     
                     if (data.optimization_complete) {
@@ -4435,6 +4962,8 @@
                             const t = Number(data.total_paths || 0);
                             lbl.textContent = t > 0 ? `${t} / ${t} paths optimised (100%)` : 'Complete';
                         }
+                        lastProgressiveSvgRenderedCount = Math.max(lastProgressiveSvgRenderedCount, done);
+                        lastProgressiveSvgFrameId = Math.max(lastProgressiveSvgFrameId, previewFrameId);
                         document.getElementById('stopOptBtn').style.display = 'none'; // Hide stop button
                         showProgressMessage('Optimization complete! Final results displayed.', 'success');
                         generateSVG('final');
@@ -4504,6 +5033,14 @@
                 .replace(/[^a-zA-Z0-9._-]+/g, '_')
                 .replace(/^_+|_+$/g, '');
             return `${base || 'centerline_export'}_centerline.svg`;
+        }
+
+        function buildImmediateSvgExportFilename() {
+            const base = String(currentUploadFileName || `centerline_${currentSessionId || 'export'}`)
+                .replace(/\.[^.]+$/, '')
+                .replace(/[^a-zA-Z0-9._-]+/g, '_')
+                .replace(/^_+|_+$/g, '');
+            return `${base || 'centerline_export'}_skeleton.svg`;
         }
 
         function buildSvgExportFilename() {
@@ -4591,6 +5128,7 @@
                 dark_threshold: parseFloat(document.getElementById('darkThreshold').value),
                 merge_gap: parseInt(document.getElementById('mergeGap').value),
                 merge_angle_priority: parseFloat(document.getElementById('mergeAnglePriority').value),
+                enable_long_path_merging: document.getElementById('enableLongPathMerging').checked,
                 rdp_tolerance: parseFloat(document.getElementById('rdpTolerance').value),
                 simplification_strength: parseFloat(document.getElementById('simplificationStrength').value),
                 line_fit_strength: parseFloat(document.getElementById('lineFitStrength').value),
@@ -4734,10 +5272,10 @@
             svgDisplay.innerHTML = svgContent;
             svgDisplay.style.display = 'block';
             updateSvgExportHandle(svgContent);
-            
-            // Auto-fit SVG to container bounds
-            autoFitSVG();
-            applySvgViewportTransform();
+
+            const svg = svgDisplay.querySelector('svg');
+            prepareSvgViewBox(svg);
+            resetSvgViewport();
             
             console.log('SVG displayed with auto-fit');
         }
@@ -4752,18 +5290,13 @@
             const containerWidth = containerRect.width - 20; // 10px padding each side
             const containerHeight = containerRect.height - 20; // 10px padding each side
             
-            // Get the SVG viewBox or calculate from content bounds
-            let viewBox = svg.getAttribute('viewBox');
-            if (!viewBox) {
-                // If no viewBox, try to get bounds from width/height attributes
-                const width = svg.getAttribute('width') || '800';
-                const height = svg.getAttribute('height') || '600';
-                viewBox = `0 0 ${width} ${height}`;
-                svg.setAttribute('viewBox', viewBox);
-            }
+            // Fit to the active crop-aware viewBox when present.
+            const referenceViewBox = getSvgFocusViewBox(svg) || prepareSvgViewBox(svg) || getSvgBaseViewBox(svg);
+            if (!referenceViewBox) return;
             
-            // Parse viewBox to get SVG dimensions
-            const [x, y, svgWidth, svgHeight] = viewBox.split(' ').map(Number);
+            // Keep the displayed SVG sized to the focused crop/full frame; zooming is
+            // handled through the native viewBox so paths stay sharp.
+            const [, , svgWidth, svgHeight] = referenceViewBox;
             
             // Calculate scale to fit both width and height
             const scaleX = containerWidth / svgWidth;
@@ -4821,6 +5354,73 @@
             }, 2500);
         }
 
+        function triggerSvgDownloadFromContent(svgContent, filename) {
+            if (!svgContent) {
+                return;
+            }
+
+            const svgBlob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
+            const objectUrl = URL.createObjectURL(svgBlob);
+            const link = document.createElement('a');
+            link.href = objectUrl;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+        }
+
+        function downloadInitialSkeletonSVG() {
+            if (!currentSessionId) {
+                showMessage('No session available', 'error');
+                return;
+            }
+
+            const includeImageCheckbox = document.getElementById('initialResultsIncludeImage');
+            const includeImage = !includeImageCheckbox || includeImageCheckbox.checked;
+            const downloadBtn = document.getElementById('downloadInitialSvgBtn');
+            if (downloadBtn) {
+                downloadBtn.disabled = true;
+            }
+
+            const parameters = {
+                ...getParameters(),
+                include_image: Boolean(includeImage),
+                show_pre_optimization: true,
+            };
+
+            trackedFetch('/generate_svg', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: currentSessionId,
+                    mode: 'immediate',
+                    parameters,
+                    persist_parameters: false,
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (!data.svg) {
+                    throw new Error(data.error || 'Immediate SVG generation failed');
+                }
+                triggerSvgDownloadFromContent(data.svg, buildImmediateSvgExportFilename());
+            })
+            .catch(error => {
+                if (isAbortError(error)) {
+                    return;
+                }
+                showMessage(`Immediate SVG download error: ${error.message}`, 'error');
+            })
+            .finally(() => {
+                if (downloadBtn) {
+                    downloadBtn.disabled = false;
+                }
+            });
+        }
+
         function showMessage(message, type) {
             // Messaging UI intentionally removed.
             void message;
@@ -4854,12 +5454,17 @@
                 clearInterval(progressInterval);
                 progressInterval = null;
             }
+            stopAutoDetectProgressPolling();
+            setAutoDetectControls(false);
+            stopProcessStagePolling();
             exitTileTuneReview({ clearOverlays: true });
             lastAutoTuneSampleMetadata = null;
             lastMagentaSkeletonPaths = null;
             clearMagentaSkeletonOverlay();
             optimizationReached100 = false;
             lastSvgProgressRefreshAt = 0;
+            lastProgressiveSvgRenderedCount = 0;
+            lastProgressiveSvgFrameId = 0;
             lastRenderedSvgMode = null;
             lastRenderedSvgContent = null;
             currentPreprocessingInfo = null;

@@ -14,9 +14,9 @@ from flask import Flask, render_template, request, jsonify, send_file
 import os
 import numpy as np
 import base64
+from scipy import ndimage as ndi
 from io import BytesIO
 from PIL import Image
-import tempfile
 import uuid
 
 # Import our existing centerline extraction functions
@@ -63,6 +63,8 @@ except Exception as exc:
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
+MERGE_GAP_REFERENCE_STROKE_WIDTH_PX = 3.0
+
 IS_RAILWAY_DEPLOYMENT = any(key.startswith('RAILWAY_') for key in os.environ)
 QUIET_HTTP_LOGS = os.environ.get('QUIET_HTTP_LOGS', '1' if IS_RAILWAY_DEPLOYMENT else '0') == '1'
 VERBOSE_SERVER_LOGS = os.environ.get('VERBOSE_SERVER_LOGS', '0') == '1'
@@ -94,7 +96,34 @@ def _test_ui_unavailable_response():
 # Global storage for session data
 sessions = {}
 SVG_VIEW_PATH_RENDER_LIMIT = 5000
+SVG_PROGRESSIVE_PREVIEW_PATH_LIMIT = 1200
 BENCHMARK_FILENAME_PREFIXES = ('bench__', 'metrics__')
+
+
+def _sample_paths_for_progressive_preview(paths, max_paths):
+    """Return an evenly spread subset of paths while keeping first and last."""
+    paths = list(paths or [])
+    limit = max(0, int(max_paths or 0))
+    if limit <= 0 or len(paths) <= limit:
+        return paths
+
+    if limit == 1:
+        return [paths[0]]
+
+    sampled_indices = []
+    last_index = len(paths) - 1
+    for slot in range(limit):
+        sampled_index = int(round(slot * last_index / max(limit - 1, 1)))
+        if sampled_indices and sampled_index == sampled_indices[-1]:
+            continue
+        sampled_indices.append(sampled_index)
+
+    if sampled_indices[0] != 0:
+        sampled_indices[0] = 0
+    if sampled_indices[-1] != last_index:
+        sampled_indices[-1] = last_index
+
+    return [paths[index] for index in sampled_indices]
 
 class CenterlineSession:
     def __init__(self, session_id):
@@ -115,6 +144,9 @@ class CenterlineSession:
         self.optimization_complete = False
         self.optimization_stopped = False
         self.optimization_generation = 0
+        self.auto_detect_generation = 0
+        self.auto_detect_active = False
+        self.auto_detect_thread = None
         self.auto_tune_generation = 0
         self.auto_tune_active = False
         self.auto_tune_best = None
@@ -137,21 +169,33 @@ class CenterlineSession:
             'sample_metadata': {'sampled': False},
         }
         self.partial_optimized_paths = []  # Store partially optimized paths
+        self.live_preview_paths = []
+        self.live_preview_kind = None
+        self.live_preview_frame_id = 0
+        self.stroke_width_estimate_px = None
+        self.merge_progress = {
+            'active': False,
+            'phase': 'idle',
+            'processed': 0,
+            'total': 0,
+            'percent': 0.0,
+        }
         self.svg_cache = {}
         self.lock = threading.Lock()  # Lock for thread-safe access to partial_optimized_paths
         self.parameters = {
             'dark_threshold': 0.20,
             'merge_gap': 25,  # Endpoint reach-out distance (pixels) for path merging
             'merge_angle_priority': 30.0,  # % weight for angle continuity vs distance
-            'rdp_tolerance': 4.0,      # Balanced simplification for speed and smoothness
+            'enable_long_path_merging': False,  # Optional slower second pass that can join already-long fragments
+            'rdp_tolerance': 10.0,      # Maximum tolerance by default for strongest simplification
             'smoothing_factor': 0.006,  # Balanced smoothing that keeps runtime responsive
-            'simplification_strength': 50.0,  # Moderate vertex reduction target
+            'simplification_strength': 100.0,  # Maximum vertex reduction target
             'arc_fit_strength': 72.0,  # Favor curves without over-smoothing
-            'line_fit_strength': 22.0,  # Moderate straight segment fitting
-            'short_path_protection': 65.0,  # Preserve detail on shorter paths
+            'line_fit_strength': 0.0,  # Disable line fitting by default
+            'short_path_protection': 0.0,  # No extra protection for shorter paths by default
             'mean_closeness_px': 1.8,  # Average allowed distance from blue path to magenta path
             'peak_closeness_px': 4.5,  # 95th percentile allowed distance from blue path to magenta path
-            'score_preservation': 80.0,  # Minimum retained circle score percentage for accepted fits
+            'score_preservation': 99.0,  # Keep accepted fits as close as possible to the source path
             'cubic_fit_tolerance': 1.0,  # SVG cubic fitting tolerance in px (lower = tighter, more segments)
             'endpoint_tangent_strictness': 85.0,  # Strength of start/end handle alignment to extracted path direction (not fixture/golden data)
             'force_orthogonal_as_lines': False,  # Optionally force axis-aligned/corner paths to use line segments only
@@ -163,6 +207,67 @@ class CenterlineSession:
             'normalization_mode': 'auto',  # auto|on|off preprocessing normalization
             'normalization_sensitivity': 'medium',  # low|medium|high
         }
+        self.auto_detect_progress = {
+            'running': False,
+            'started_at': 0.0,
+            'finished': False,
+            'success': False,
+            'cancelled': False,
+            'elapsed_sec': 0.0,
+            'confidence_score': 0.0,
+            'detected_threshold': float(self.parameters['dark_threshold']),
+            'best_threshold': float(self.parameters['dark_threshold']),
+            'recommendation': 'idle',
+            'thresholds_evaluated': 0,
+            'thresholds_planned': 0,
+            'preview_shape': [],
+            'preview_scale': 1.0,
+            'sample_metadata': {'sampled': False},
+            'message': 'idle',
+            'updated_parameters': dict(self.parameters),
+        }
+
+
+def _clear_live_preview(session, generation=None):
+    with session.lock:
+        if generation is not None and generation != session.optimization_generation:
+            return
+        session.live_preview_paths = []
+        session.live_preview_kind = None
+
+
+def _publish_live_preview(session, paths, kind, generation=None, max_paths=SVG_PROGRESSIVE_PREVIEW_PATH_LIMIT):
+    sampled_paths = _sample_paths_for_progressive_preview(paths, max_paths)
+    with session.lock:
+        if generation is not None and generation != session.optimization_generation:
+            return False
+        session.live_preview_paths = list(sampled_paths)
+        session.live_preview_kind = str(kind or 'progressive')
+        session.live_preview_frame_id += 1
+        return True
+
+
+def _mark_live_preview_frame(session, kind, generation=None):
+    with session.lock:
+        if generation is not None and generation != session.optimization_generation:
+            return False
+        session.live_preview_kind = str(kind or 'progressive')
+        session.live_preview_frame_id += 1
+        return True
+
+
+def _set_merge_progress(session, *, active, phase, processed=0, total=0, percent=0.0, generation=None):
+    with session.lock:
+        if generation is not None and generation != session.optimization_generation:
+            return False
+        session.merge_progress = {
+            'active': bool(active),
+            'phase': str(phase or 'idle'),
+            'processed': max(0, int(processed or 0)),
+            'total': max(0, int(total or 0)),
+            'percent': max(0.0, min(100.0, float(percent or 0.0))),
+        }
+        return True
 
 
 def _get_session_extraction_profile(session):
@@ -186,6 +291,79 @@ def _effective_merge_gap(params, image_shape=None):
     return max(1, int(round(logical_merge_gap * parameter_scale)))
 
 
+def _estimate_median_stroke_width_from_masks(binary_mask, skeleton_mask):
+    if binary_mask is None or skeleton_mask is None:
+        return None
+
+    try:
+        binary = np.asarray(binary_mask, dtype=bool)
+        skeleton = np.asarray(skeleton_mask, dtype=bool)
+    except Exception:
+        return None
+
+    if binary.shape != skeleton.shape or not np.any(binary) or not np.any(skeleton):
+        return None
+
+    distances = ndi.distance_transform_edt(binary)
+    radii = distances[skeleton]
+    radii = radii[np.isfinite(radii) & (radii > 0.0)]
+    if radii.size == 0:
+        return None
+
+    return float(np.median(radii) * 2.0)
+
+
+def _estimate_median_stroke_width(gray_image, dark_threshold, min_object_size=1):
+    if gray_image is None:
+        return None
+
+    from skimage import morphology
+
+    binary = np.asarray(gray_image) < float(dark_threshold)
+    min_object_size = max(1, int(min_object_size or 1))
+    if min_object_size > 1:
+        binary = morphology.remove_small_objects(binary, min_object_size)
+    if not np.any(binary):
+        return None
+
+    skeleton = morphology.skeletonize(binary)
+    return _estimate_median_stroke_width_from_masks(binary, skeleton)
+
+
+def _effective_merge_gap_from_stroke(params, image_shape=None, median_stroke_width_px=None):
+    merge_gap_mode = str(params.get('merge_gap_mode', '') or '').strip().lower()
+    logical_merge_gap = max(1, int(params.get('merge_gap', 25)))
+    if merge_gap_mode == 'stroke_factor':
+        if median_stroke_width_px is None or not np.isfinite(median_stroke_width_px) or median_stroke_width_px <= 0.0:
+            return logical_merge_gap
+        return max(1, int(round(float(logical_merge_gap) * float(median_stroke_width_px))))
+
+    if median_stroke_width_px is None or not np.isfinite(median_stroke_width_px) or median_stroke_width_px <= 0.0:
+        return _effective_merge_gap(params, image_shape=image_shape)
+
+    stroke_scaled_gap = float(logical_merge_gap) * (float(median_stroke_width_px) / float(MERGE_GAP_REFERENCE_STROKE_WIDTH_PX))
+    return max(1, int(round(stroke_scaled_gap)))
+
+
+def _apply_auto_tuned_merge_gap(session, dark_threshold, gray_image, min_object_size=1):
+    median_stroke_width_px = _estimate_median_stroke_width(
+        gray_image,
+        dark_threshold,
+        min_object_size=min_object_size,
+    )
+    session.stroke_width_estimate_px = median_stroke_width_px
+    session.parameters['merge_gap'] = 2
+    session.parameters['merge_gap_mode'] = 'stroke_factor'
+    if median_stroke_width_px is not None and np.isfinite(median_stroke_width_px) and median_stroke_width_px > 0.0:
+        session.preprocessing_info['median_stroke_width_px'] = float(median_stroke_width_px)
+    session.preprocessing_info['effective_merge_gap'] = int(_effective_merge_gap_from_stroke(
+        session.parameters,
+        image_shape=gray_image.shape if gray_image is not None else None,
+        median_stroke_width_px=median_stroke_width_px,
+    ))
+    return median_stroke_width_px
+
+
 def _augment_sample_metadata(sample_metadata, image_shape, logical_min_path_length=None, logical_merge_gap=None):
     metadata = dict(sample_metadata or {})
     parameter_scale = resolve_parameter_scale(image_shape)
@@ -197,6 +375,15 @@ def _augment_sample_metadata(sample_metadata, image_shape, logical_min_path_leng
         metadata['logical_merge_gap'] = int(max(1, logical_merge_gap))
         metadata['effective_merge_gap'] = int(max(1, round(float(logical_merge_gap) * parameter_scale)))
     return metadata
+
+
+def _attach_merge_gap_metadata(metadata, logical_merge_gap, effective_merge_gap, median_stroke_width_px=None):
+    enriched = dict(metadata or {})
+    enriched['logical_merge_gap'] = int(max(1, logical_merge_gap))
+    enriched['effective_merge_gap'] = int(max(1, effective_merge_gap))
+    if median_stroke_width_px is not None and np.isfinite(median_stroke_width_px) and median_stroke_width_px > 0.0:
+        enriched['median_stroke_width_px'] = float(median_stroke_width_px)
+    return enriched
 
 
 def _should_capture_benchmark_metrics(filename):
@@ -341,6 +528,10 @@ def _svg_render_signature(
     endpoint_tangent_strictness,
     force_orthogonal_as_lines,
     enable_curve_fitting,
+    fit_optimized_paths,
+    combine_optimized_paths,
+    combine_pre_optimization_paths,
+    coordinate_precision,
     pre_paths,
     optimized_paths,
     suppress_paths_in_view,
@@ -358,6 +549,10 @@ def _svg_render_signature(
         round(float(endpoint_tangent_strictness), 4),
         bool(force_orthogonal_as_lines),
         bool(enable_curve_fitting),
+        bool(fit_optimized_paths),
+        bool(combine_optimized_paths),
+        bool(combine_pre_optimization_paths),
+        int(coordinate_precision),
         bool(suppress_paths_in_view),
         bool(has_circle_system),
         int(optimization_generation),
@@ -397,6 +592,10 @@ def _render_svg_content(
     include_image,
     show_pre,
     suppress_paths_in_view=False,
+    fit_optimized_paths=True,
+    combine_optimized_paths=False,
+    combine_pre_optimization_paths=False,
+    coordinate_precision=2,
 ):
     cache_key = _svg_render_signature(
         render_variant,
@@ -406,6 +605,10 @@ def _render_svg_content(
         endpoint_tangent_strictness,
         force_orthogonal_as_lines,
         enable_curve_fitting,
+        fit_optimized_paths,
+        combine_optimized_paths,
+        combine_pre_optimization_paths,
+        coordinate_precision,
         pre_optimization_paths,
         optimized_paths,
         suppress_paths_in_view,
@@ -417,18 +620,14 @@ def _render_svg_content(
     if cached_render is not None:
         return cached_render['svg'], cached_render['preview_paths_suppressed'], True
 
-    temp_svg = os.path.join(tempfile.gettempdir(), f"centerline_render_{session.session_id}_{abs(hash(cache_key))}.svg")
-
     import centerline_engine as wo
-    original_output = wo.OUTPUT_PATH
     original_show_bitmap = wo.SHOW_BITMAP
     original_show_pre = wo.SHOW_PRE_OPTIMIZATION_PATHS
 
     try:
-        wo.OUTPUT_PATH = temp_svg
         wo.SHOW_BITMAP = include_image
         wo.SHOW_PRE_OPTIMIZATION_PATHS = show_pre
-        create_svg_output(
+        svg_content = create_svg_output(
             background_image,
             circle_system,
             optimized_paths,
@@ -438,19 +637,15 @@ def _render_svg_content(
             endpoint_tangent_strictness=endpoint_tangent_strictness,
             force_orthogonal_as_lines=force_orthogonal_as_lines,
             enable_curve_fitting=enable_curve_fitting,
+            output_path=None,
+            fit_optimized_paths=fit_optimized_paths,
+            combine_optimized_paths=combine_optimized_paths,
+            combine_pre_optimization_paths=combine_pre_optimization_paths,
+            coordinate_precision=coordinate_precision,
         )
-
-        if not os.path.exists(temp_svg):
-            raise FileNotFoundError(f"SVG generation failed - file not created: {temp_svg}")
-
-        with open(temp_svg, 'r') as file_handle:
-            svg_content = file_handle.read()
     finally:
-        wo.OUTPUT_PATH = original_output
         wo.SHOW_BITMAP = original_show_bitmap
         wo.SHOW_PRE_OPTIMIZATION_PATHS = original_show_pre
-        if os.path.exists(temp_svg):
-            os.remove(temp_svg)
 
     _store_cached_svg_render(session, cache_key, svg_content, suppress_paths_in_view)
     return svg_content, suppress_paths_in_view, False
@@ -510,7 +705,17 @@ def process_centerlines(session):
     
     if optimization_enabled:
         # Full processing mode: merge paths and handle overlaps
-        merge_gap = _effective_merge_gap(params, image_shape=gray.shape)
+        median_stroke_width_px = _estimate_median_stroke_width(
+            gray,
+            params['dark_threshold'],
+            min_object_size=extraction_profile['full_min_object_size'],
+        )
+        session.stroke_width_estimate_px = median_stroke_width_px
+        merge_gap = _effective_merge_gap_from_stroke(
+            params,
+            image_shape=gray.shape,
+            median_stroke_width_px=median_stroke_width_px,
+        )
         merge_angle_priority = float(params.get('merge_angle_priority', 30.0)) / 100.0
 
         # Merge nearby paths
@@ -699,12 +904,22 @@ def auto_detect_threshold():
         if detection_result['best_score'] > 0:
             # Update session parameters with detected threshold
             session.parameters['dark_threshold'] = detection_result['best_threshold']
+            sample_metadata = _augment_sample_metadata(
+                detection_result.get('sample_metadata'),
+                session.image.shape,
+                logical_min_path_length=3,
+            )
             
             return jsonify({
                 'success': True,
                 'detected_threshold': detection_result['best_threshold'],
                 'confidence_score': detection_result['best_score'],
                 'recommendation': detection_result['recommendation'],
+                'elapsed_sec': float(detection_result.get('elapsed_sec', 0.0)),
+                'thresholds_evaluated': int(detection_result.get('thresholds_evaluated', 0)),
+                'preview_shape': detection_result.get('preview_shape'),
+                'preview_scale': float(detection_result.get('preview_scale', 1.0)),
+                'sample_metadata': sample_metadata,
                 'updated_parameters': session.parameters
             })
         else:
@@ -712,11 +927,222 @@ def auto_detect_threshold():
                 'success': False,
                 'error': 'Could not detect suitable threshold. Manual adjustment recommended.',
                 'detected_threshold': detection_result['best_threshold'],
-                'recommendation': detection_result['recommendation']
+                'recommendation': detection_result['recommendation'],
+                'elapsed_sec': float(detection_result.get('elapsed_sec', 0.0)),
+                'thresholds_evaluated': int(detection_result.get('thresholds_evaluated', 0)),
+                'preview_shape': detection_result.get('preview_shape'),
+                'preview_scale': float(detection_result.get('preview_scale', 1.0)),
+                'sample_metadata': _augment_sample_metadata(
+                    detection_result.get('sample_metadata'),
+                    session.image.shape,
+                    logical_min_path_length=3,
+                ),
             })
             
     except Exception as e:
         return jsonify({'error': f'Auto-detection error: {str(e)}'})
+
+
+def _run_auto_detect_threshold_job(session, auto_detect_generation):
+    """Background threshold auto-detect job with cancellable progress state."""
+    try:
+        source_image = session.image
+        extraction_profile = _get_session_extraction_profile(session)
+        parameter_scale = resolve_parameter_scale(source_image.shape)
+
+        def _should_continue_auto_detect():
+            with session.lock:
+                return session.auto_detect_generation == auto_detect_generation
+
+        def _record_progress(progress_payload):
+            with session.lock:
+                if session.auto_detect_generation != auto_detect_generation:
+                    return
+
+                sample_metadata = _augment_sample_metadata(
+                    progress_payload.get('sample_metadata'),
+                    source_image.shape,
+                    logical_min_path_length=3,
+                )
+                best_threshold = float(progress_payload.get('best_threshold') or session.parameters.get('dark_threshold', 0.20))
+                thresholds_evaluated = int(progress_payload.get('thresholds_evaluated', 0))
+                thresholds_planned = int(progress_payload.get('thresholds_planned', 0))
+                elapsed_sec = float(progress_payload.get('elapsed_sec', 0.0))
+                session.auto_detect_progress.update({
+                    'running': True,
+                    'finished': False,
+                    'success': False,
+                    'cancelled': bool(progress_payload.get('cancelled', False)),
+                    'elapsed_sec': elapsed_sec,
+                    'confidence_score': float(progress_payload.get('confidence_score', 0.0)),
+                    'detected_threshold': best_threshold,
+                    'best_threshold': best_threshold,
+                    'recommendation': 'evaluating thresholds',
+                    'thresholds_evaluated': thresholds_evaluated,
+                    'thresholds_planned': thresholds_planned,
+                    'preview_shape': progress_payload.get('preview_shape'),
+                    'preview_scale': float(progress_payload.get('preview_scale', 1.0)),
+                    'sample_metadata': sample_metadata,
+                    'message': (
+                        f"Auto-detect running: tested {thresholds_evaluated}"
+                        + (f" / {thresholds_planned}" if thresholds_planned > 0 else '')
+                        + f" thresholds in {elapsed_sec:.1f}s. Best so far {best_threshold:.3f}."
+                    ),
+                })
+
+        detection_result = auto_detect_dark_threshold(
+            source_image,
+            min_object_size=extraction_profile['auto_tune_min_object_size'],
+            parameter_scale=parameter_scale,
+            should_continue=_should_continue_auto_detect,
+            on_progress=_record_progress,
+        )
+
+        sample_metadata = _augment_sample_metadata(
+            detection_result.get('sample_metadata'),
+            source_image.shape,
+            logical_min_path_length=3,
+        )
+
+        with session.lock:
+            if session.auto_detect_generation != auto_detect_generation:
+                return
+            session.auto_detect_active = False
+
+        if bool(detection_result.get('cancelled', False)):
+            with session.lock:
+                if session.auto_detect_generation != auto_detect_generation:
+                    return
+                session.auto_detect_progress.update({
+                    'running': False,
+                    'finished': True,
+                    'success': False,
+                    'cancelled': True,
+                    'elapsed_sec': float(detection_result.get('elapsed_sec', 0.0)),
+                    'confidence_score': float(detection_result.get('best_score', 0.0)),
+                    'detected_threshold': float(session.parameters.get('dark_threshold', 0.20)),
+                    'best_threshold': float(detection_result.get('best_threshold', session.parameters.get('dark_threshold', 0.20))),
+                    'recommendation': 'cancelled',
+                    'thresholds_evaluated': int(detection_result.get('thresholds_evaluated', 0)),
+                    'preview_shape': detection_result.get('preview_shape'),
+                    'preview_scale': float(detection_result.get('preview_scale', 1.0)),
+                    'sample_metadata': sample_metadata,
+                    'message': 'Auto-detect cancelled. Previous threshold kept.',
+                    'updated_parameters': dict(session.parameters),
+                })
+            return
+
+        if detection_result['best_score'] > 0:
+            session.parameters['dark_threshold'] = float(detection_result['best_threshold'])
+            success = True
+            status_message = f"Auto-detect complete. Threshold set to {float(detection_result['best_threshold']):.3f}."
+        else:
+            success = False
+            status_message = 'Could not detect a suitable threshold. Previous value kept.'
+
+        with session.lock:
+            if session.auto_detect_generation != auto_detect_generation:
+                return
+            session.auto_detect_progress.update({
+                'running': False,
+                'finished': True,
+                'success': bool(success),
+                'cancelled': False,
+                'elapsed_sec': float(detection_result.get('elapsed_sec', 0.0)),
+                'confidence_score': float(detection_result.get('best_score', 0.0)),
+                'detected_threshold': float(detection_result.get('best_threshold', session.parameters.get('dark_threshold', 0.20))),
+                'best_threshold': float(detection_result.get('best_threshold', session.parameters.get('dark_threshold', 0.20))),
+                'recommendation': str(detection_result.get('recommendation', 'manual adjustment recommended')),
+                'thresholds_evaluated': int(detection_result.get('thresholds_evaluated', 0)),
+                'thresholds_planned': int(max(session.auto_detect_progress.get('thresholds_planned', 0), detection_result.get('thresholds_evaluated', 0))),
+                'preview_shape': detection_result.get('preview_shape'),
+                'preview_scale': float(detection_result.get('preview_scale', 1.0)),
+                'sample_metadata': sample_metadata,
+                'message': status_message,
+                'updated_parameters': dict(session.parameters),
+            })
+    except Exception as e:
+        with session.lock:
+            if session.auto_detect_generation != auto_detect_generation:
+                return
+            session.auto_detect_active = False
+            session.auto_detect_progress.update({
+                'running': False,
+                'finished': True,
+                'success': False,
+                'cancelled': False,
+                'message': f'Auto-detect failed: {str(e)}',
+                'updated_parameters': dict(session.parameters),
+            })
+
+
+@app.route('/auto_detect_threshold_start', methods=['POST'])
+def auto_detect_threshold_start():
+    """Start threshold auto-detect in the background for cancellable UI polling."""
+    data = request.json or {}
+    session_id = data.get('session_id')
+
+    if session_id not in sessions:
+        return jsonify({'error': 'Invalid session'})
+
+    session = sessions[session_id]
+
+    if session.image is None:
+        return jsonify({'error': 'No image loaded'})
+
+    with session.lock:
+        session.auto_detect_generation += 1
+        auto_detect_generation = session.auto_detect_generation
+        session.auto_detect_active = True
+        session.auto_detect_progress = {
+            'running': True,
+            'started_at': float(time.perf_counter()),
+            'finished': False,
+            'success': False,
+            'cancelled': False,
+            'elapsed_sec': 0.0,
+            'confidence_score': 0.0,
+            'detected_threshold': float(session.parameters.get('dark_threshold', 0.20)),
+            'best_threshold': float(session.parameters.get('dark_threshold', 0.20)),
+            'recommendation': 'evaluating thresholds',
+            'thresholds_evaluated': 0,
+            'thresholds_planned': 8,
+            'preview_shape': [],
+            'preview_scale': 1.0,
+            'sample_metadata': {'sampled': False},
+            'message': 'Auto-detect started. Evaluating threshold candidates...',
+            'updated_parameters': dict(session.parameters),
+        }
+
+        worker = threading.Thread(
+            target=_run_auto_detect_threshold_job,
+            args=(session, auto_detect_generation),
+            daemon=True,
+        )
+        session.auto_detect_thread = worker
+
+    worker.start()
+
+    return jsonify({'success': True, 'started': True})
+
+
+@app.route('/auto_detect_threshold_progress/<session_id>', methods=['GET'])
+def auto_detect_threshold_progress(session_id):
+    """Return live threshold auto-detect progress state."""
+    if session_id not in sessions:
+        return jsonify({'error': 'Invalid session'})
+
+    session = sessions[session_id]
+    with session.lock:
+        progress = dict(session.auto_detect_progress)
+        progress['active'] = bool(session.auto_detect_active)
+
+    if progress.get('running'):
+        started_at = float(progress.get('started_at', 0.0) or 0.0)
+        if started_at > 0.0:
+            progress['elapsed_sec'] = max(float(progress.get('elapsed_sec', 0.0)), float(time.perf_counter() - started_at))
+
+    return jsonify(progress)
 
 @app.route('/auto_tune_extraction', methods=['POST'])
 def auto_tune_extraction():
@@ -731,6 +1157,8 @@ def auto_tune_extraction():
 
     if session.image is None:
         return jsonify({'error': 'No image loaded'})
+
+    extraction_profile = _get_session_extraction_profile(session)
 
     try:
         with session.lock:
@@ -811,6 +1239,12 @@ def auto_tune_extraction():
 
         session.parameters['dark_threshold'] = tuning_result['best_threshold']
         session.parameters['min_path_length'] = tuning_result['best_min_length']
+        _apply_auto_tuned_merge_gap(
+            session,
+            dark_threshold=tuning_result['best_threshold'],
+            gray_image=session.image,
+            min_object_size=extraction_profile['auto_tune_min_object_size'],
+        )
 
         return jsonify({
             'success': True,
@@ -918,7 +1352,11 @@ def auto_tune_tile_preview():
     except Exception:
         return jsonify({'error': 'Invalid threshold or min path length'})
 
-    effective_merge_gap = _effective_merge_gap(session.parameters, image_shape=session.image.shape)
+    effective_merge_gap = _effective_merge_gap_from_stroke(
+        session.parameters,
+        image_shape=session.image.shape,
+        median_stroke_width_px=session.stroke_width_estimate_px,
+    )
 
     sample_metadata = data.get('sample_metadata')
     if not isinstance(sample_metadata, dict):
@@ -959,6 +1397,12 @@ def auto_tune_tile_preview():
         logical_min_path_length=min_path_length,
         logical_merge_gap=int(session.parameters.get('merge_gap', 25)),
     )
+    sample_metadata = _attach_merge_gap_metadata(
+        sample_metadata,
+        logical_merge_gap=int(session.parameters.get('merge_gap', 25)),
+        effective_merge_gap=effective_merge_gap,
+        median_stroke_width_px=session.stroke_width_estimate_px,
+    )
 
     preview_started_at = time.perf_counter()
     full_image_preview = bool(data.get('full_image_preview', False))
@@ -988,6 +1432,7 @@ def auto_tune_tile_preview():
         'min_path_length': int(min_path_length),
         'effective_min_path_length': int(effective_min_path_length),
         'effective_merge_gap': int(effective_merge_gap),
+        'median_stroke_width_px': float(session.stroke_width_estimate_px) if session.stroke_width_estimate_px is not None else None,
     })
 
 
@@ -1121,6 +1566,15 @@ def _run_auto_tune_job(session, auto_tune_generation):
             if effective_max_min_path_length is not None:
                 detected_min_length = min(detected_min_length, int(effective_max_min_path_length))
             session.parameters['min_path_length'] = detected_min_length
+            stroke_measure_image = source_image
+            if crop_bounds is not None:
+                stroke_measure_image = source_image[crop_bounds['y1']:crop_bounds['y2'], crop_bounds['x1']:crop_bounds['x2']]
+            _apply_auto_tuned_merge_gap(
+                session,
+                dark_threshold=tuning_result['best_threshold'],
+                gray_image=stroke_measure_image,
+                min_object_size=extraction_profile['auto_tune_min_object_size'],
+            )
             success = True
             if tuning_result.get('high_confidence_reached'):
                 status_message = 'Reached 95% confidence early.'
@@ -1375,14 +1829,28 @@ def upload_file():
         session.display_image = raw_gray
         session.preprocessing_info = preprocessing_info
         session.image_path = None
+        extraction_profile = _get_session_extraction_profile(session)
+        session.stroke_width_estimate_px = _estimate_median_stroke_width(
+            extraction_gray,
+            session.parameters['dark_threshold'],
+            min_object_size=extraction_profile['preview_min_object_size'],
+        )
+        session.preprocessing_info = dict(preprocessing_info)
+        if session.stroke_width_estimate_px is not None:
+            session.preprocessing_info['median_stroke_width_px'] = float(session.stroke_width_estimate_px)
+            session.preprocessing_info['effective_merge_gap'] = int(_effective_merge_gap_from_stroke(
+                session.parameters,
+                image_shape=extraction_gray.shape,
+                median_stroke_width_px=session.stroke_width_estimate_px,
+            ))
         _record_benchmark_stage(session, 'load_and_preprocess', load_elapsed_ms, {
             'raw_shape': list(raw_gray.shape),
-            'normalization_applied': bool(preprocessing_info.get('applied', False)),
+            'normalization_applied': bool(session.preprocessing_info.get('applied', False)),
             'loaded_from_memory': True,
         })
         metrics = _ensure_benchmark_metrics(session)
         if metrics is not None:
-            metrics['preprocessing'] = dict(preprocessing_info)
+            metrics['preprocessing'] = dict(session.preprocessing_info)
         
         # Store session
         sessions[session_id] = session
@@ -1395,7 +1863,7 @@ def upload_file():
         raw_buf.seek(0)
         raw_img_data = base64.b64encode(raw_buf.read()).decode('utf-8')
 
-        normalization_applied = bool(preprocessing_info.get('applied', False))
+        normalization_applied = bool(session.preprocessing_info.get('applied', False))
         if normalization_applied:
             normalized_img = Image.fromarray((extraction_gray * 255).astype(np.uint8))
             normalized_buf = BytesIO()
@@ -1422,7 +1890,7 @@ def upload_file():
             'normalization_applied': normalization_applied,
             'image_shape': raw_gray.shape,
             'parameters': session.parameters,
-            'preprocessing': preprocessing_info
+            'preprocessing': session.preprocessing_info
         }
         if normalization_applied:
             response_payload['raw_image_data'] = raw_img_data
@@ -1452,6 +1920,9 @@ def process_immediate():
     
     try:
         immediate_started_at = time.perf_counter()
+        while not session.progress_queue.empty():
+            session.progress_queue.get()
+
         # Quick raw path extraction
         params = session.parameters
         gray = session.image
@@ -1473,44 +1944,65 @@ def process_immediate():
                 crop_offset_row = y1
                 crop_offset_col = x1
 
+        session.progress_queue.put(
+            f"Preparing immediate extraction on {gray.shape[1]}x{gray.shape[0]} pixels "
+            f"(threshold: {float(params['dark_threshold']):.3f})..."
+        )
+
         # Always use fast extraction for immediate display
         print("Immediate extraction mode...")
         from centerline_engine import create_fast_paths
         from skimage import morphology
         
         # Quick binary conversion and skeletonization
+        session.progress_queue.put(
+            f"Skeletonizing binary mask (min object size: {int(extraction_profile['preview_min_object_size'])})..."
+        )
         binary = gray < params['dark_threshold']
         binary = morphology.remove_small_objects(binary, extraction_profile['preview_min_object_size'])
         skeleton = morphology.skeletonize(binary)
+        session.stroke_width_estimate_px = _estimate_median_stroke_width_from_masks(binary, skeleton)
+        skeleton_pixels = int(np.count_nonzero(skeleton))
+        extraction_min_length = max(1, min(8, int(round(effective_min_path_length * 0.5))))
+        session.progress_queue.put(f"Starting fast path extraction on {skeleton_pixels:,} skeleton pixels...")
         initial_paths = create_fast_paths(
             skeleton,
-            min_path_length=max(1, min(8, int(round(effective_min_path_length * 0.5)))),
+            min_path_length=extraction_min_length,
+        )
+        session.progress_queue.put(
+            f"Fast path extraction complete: {len(initial_paths)} raw paths kept "
+            f"(min length: {int(extraction_min_length)})"
         )
         
         if len(initial_paths) == 0:
             return jsonify({'error': 'No skeleton paths found. Try adjusting the dark threshold.'})
         
-        merge_gap = _effective_merge_gap(params, image_shape=session.image.shape)
+        merge_gap = _effective_merge_gap_from_stroke(
+            params,
+            image_shape=session.image.shape,
+            median_stroke_width_px=session.stroke_width_estimate_px,
+        )
         merge_angle_priority = float(params.get('merge_angle_priority', 30.0)) / 100.0
-
-        # Preserve legacy default behavior in progressive mode unless users
-        # intentionally change merge controls from defaults.
-        # If either merge_gap or merge_angle_priority changes, apply merging.
         merged_paths = initial_paths
         merge_applied = False
-        angle_priority_changed = abs(merge_angle_priority - 0.30) > 1e-9
-        merge_controls_changed = (merge_gap != 25) or angle_priority_changed
-        force_merge_preview = bool(extraction_profile.get('force_merge_preview', False))
-        if params.get('enable_optimization', True) and (merge_controls_changed or force_merge_preview):
-            merged_paths = merge_nearby_paths(
-                initial_paths,
-                max_gap=merge_gap,
-                angle_priority=merge_angle_priority,
+        merge_deferred = bool(params.get('enable_optimization', True))
+        if merge_deferred:
+            session.progress_queue.put(
+                f"Deferring nearby path merging to background optimization "
+                f"(max gap: {merge_gap} pixels, angle priority: {merge_angle_priority:.2f})..."
             )
-            merge_applied = True
+        else:
+            session.progress_queue.put("Skipping nearby path merging because optimization is disabled.")
 
         # Filter by minimum length
+        session.progress_queue.put(
+            f"Filtering extracted paths by minimum length {int(effective_min_path_length)}..."
+        )
         valid_paths = [path for path in merged_paths if len(path) >= effective_min_path_length]
+        session.progress_queue.put(
+            f"Immediate overlay ready: {len(valid_paths)} paths kept after length filtering "
+            f"(effective min length: {int(effective_min_path_length)})"
+        )
         
         if len(valid_paths) == 0:
             return jsonify({'error': 'No valid paths after filtering. Try reducing minimum path length.'})
@@ -1539,6 +2031,16 @@ def process_immediate():
         session.optimization_stopped = False
         session.optimization_generation += 1
         current_generation = session.optimization_generation
+        _clear_live_preview(session, generation=current_generation)
+        _set_merge_progress(
+            session,
+            active=False,
+            phase='idle',
+            processed=0,
+            total=0,
+            percent=0.0,
+            generation=current_generation,
+        )
         
         # Clear progress queue
         while not session.progress_queue.empty():
@@ -1549,10 +2051,13 @@ def process_immediate():
             'initial_paths_count': len(initial_paths),
             'merged_paths_count': len(merged_paths),
             'merge_applied': merge_applied,
+            'merge_deferred': merge_deferred,
             'extraction_profile': extraction_profile['profile_name'],
             'valid_paths_count': len(valid_paths),
             'paths': json_serializable_paths,  # Use JSON-serializable version
-            'optimization_started': False
+            'optimization_started': False,
+            'effective_merge_gap': int(merge_gap),
+            'median_stroke_width_px': float(session.stroke_width_estimate_px) if session.stroke_width_estimate_px is not None else None,
         }
         
         # Start optimization in background if enabled
@@ -1590,9 +2095,165 @@ def background_optimization(session, generation):
             return
 
         params = session.parameters
-        valid_paths = session.initial_paths
+        valid_paths = list(session.initial_paths or [])
         extraction_profile = _get_session_extraction_profile(session)
         effective_min_path_length = _effective_min_path_length(params, extraction_profile, image_shape=session.image.shape)
+        merge_gap = _effective_merge_gap_from_stroke(
+            params,
+            image_shape=session.image.shape,
+            median_stroke_width_px=session.stroke_width_estimate_px,
+        )
+        merge_angle_priority = float(params.get('merge_angle_priority', 30.0)) / 100.0
+        merge_metrics = {}
+        merge_progress_state = {
+            'last_seed_paths_processed': -1,
+            'last_emit_at': 0.0,
+        }
+
+        def _report_merge_progress(progress_metrics):
+            now = time.perf_counter()
+            processed = int(progress_metrics.get('seed_paths_processed', 0))
+            total = max(1, int(progress_metrics.get('seed_paths_total', 0)))
+            merges = int(progress_metrics.get('merged_pairs', 0))
+            candidates = int(progress_metrics.get('candidate_paths_scanned', 0))
+            merge_scope = str(progress_metrics.get('merge_scope', 'cheap_only') or 'cheap_only')
+            merge_phase = 'long_merge' if merge_scope == 'long_only' else 'cheap_merge'
+            _set_merge_progress(
+                session,
+                active=True,
+                phase=merge_phase,
+                processed=processed,
+                total=total,
+                percent=(processed / total) * 100.0,
+                generation=generation,
+            )
+            if (
+                processed == merge_progress_state['last_seed_paths_processed']
+                and (now - merge_progress_state['last_emit_at']) < 0.9
+            ):
+                return
+            if (
+                processed < total
+                and processed > 0
+                and (processed - merge_progress_state['last_seed_paths_processed']) < 25
+                and (now - merge_progress_state['last_emit_at']) < 0.9
+            ):
+                return
+
+            merge_progress_state['last_seed_paths_processed'] = processed
+            merge_progress_state['last_emit_at'] = now
+            session.progress_queue.put(
+                f"Merge scan: {processed}/{total} seed paths, {candidates:,} nearby candidates checked, "
+                f"{merges} merges accepted ({float(progress_metrics.get('elapsed_sec', 0.0)):.1f}s)"
+            )
+
+        def _report_merge_preview(progress_metrics, preview_paths):
+            _publish_live_preview(
+                session,
+                preview_paths,
+                kind='merge',
+                generation=generation,
+            )
+
+        def _summarize_merge_pass(label, pass_metrics):
+            session.progress_queue.put(
+                f"{label} summary: {int(pass_metrics.get('candidate_paths_scanned', 0)):,} nearby candidates, "
+                f"{int(pass_metrics.get('cheap_candidates_ranked', 0)):,} ranked bridges, "
+                f"{int(pass_metrics.get('long_fragment_candidates_skipped', 0)):,} long-fragment skips, "
+                f"{int(pass_metrics.get('endpoint_distance_checks', 0)):,} endpoint checks, "
+                f"{int(pass_metrics.get('safety_checks', 0)):,} geometry checks, "
+                f"{int(pass_metrics.get('merged_pairs', 0))} accepted, "
+                f"{int(pass_metrics.get('distance_rejections', 0)):,} distance rejects, "
+                f"{int(pass_metrics.get('angle_rejections', 0)):,} angle rejects, "
+                f"{int(pass_metrics.get('safety_rejections', 0)):,} geometry rejects."
+            )
+
+        session.progress_queue.put(
+            f"Cheap nearby-path merge pass (max gap: {merge_gap} pixels, angle priority: {merge_angle_priority:.2f})..."
+        )
+        _set_merge_progress(
+            session,
+            active=True,
+            phase='cheap_merge',
+            processed=0,
+            total=len(valid_paths),
+            percent=0.0,
+            generation=generation,
+        )
+        cheap_merge_started_at = time.perf_counter()
+        merged_paths = merge_nearby_paths(
+            valid_paths,
+            max_gap=merge_gap,
+            angle_priority=merge_angle_priority,
+            verbose=False,
+            should_continue=lambda: (not session.optimization_stopped) and generation == session.optimization_generation,
+            metrics=merge_metrics,
+            progress_callback=_report_merge_progress,
+            preview_callback=_report_merge_preview,
+            allow_long_path_merges=False,
+        )
+        merge_elapsed_sec = time.perf_counter() - cheap_merge_started_at
+        _summarize_merge_pass("Cheap merge pass", merge_metrics)
+
+        if bool(params.get('enable_long_path_merging', False)) and len(merged_paths) > 1:
+            session.progress_queue.put(
+                f"Optional long-fragment merge pass enabled (threshold: {int(merge_metrics.get('long_path_threshold', 0))} points)..."
+            )
+            _set_merge_progress(
+                session,
+                active=True,
+                phase='long_merge',
+                processed=0,
+                total=len(merged_paths),
+                percent=0.0,
+                generation=generation,
+            )
+            long_merge_metrics = {}
+            long_merge_started_at = time.perf_counter()
+            merged_paths = merge_nearby_paths(
+                merged_paths,
+                max_gap=merge_gap,
+                angle_priority=merge_angle_priority,
+                verbose=False,
+                should_continue=lambda: (not session.optimization_stopped) and generation == session.optimization_generation,
+                metrics=long_merge_metrics,
+                progress_callback=_report_merge_progress,
+                preview_callback=_report_merge_preview,
+                allow_long_path_merges=True,
+                only_long_path_merges=True,
+                long_path_threshold=int(merge_metrics.get('long_path_threshold', 0) or max(256, int(round(float(merge_gap) * 4.0)))),
+            )
+            merge_elapsed_sec += (time.perf_counter() - long_merge_started_at)
+            _summarize_merge_pass("Long-fragment pass", long_merge_metrics)
+
+        merged_valid_paths = [path for path in merged_paths if len(path) >= effective_min_path_length]
+        if merged_valid_paths:
+            valid_paths = merged_valid_paths
+            session.progress_queue.put(
+                f"Path merging complete: {len(session.initial_paths or [])} raw paths -> {len(merged_paths)} merged paths in {merge_elapsed_sec:.2f}s; "
+                f"{len(valid_paths)} paths kept (min length: {int(effective_min_path_length)})"
+            )
+        else:
+            valid_paths = [path for path in valid_paths if len(path) >= effective_min_path_length]
+            session.progress_queue.put(
+                "Merged result was empty after filtering; falling back to unmerged paths for optimization."
+            )
+
+        with session.lock:
+            if generation != session.optimization_generation:
+                return
+            session.initial_paths = valid_paths
+        _publish_live_preview(session, valid_paths, kind='merge', generation=generation)
+        _set_merge_progress(
+            session,
+            active=False,
+            phase='merge_complete',
+            processed=len(valid_paths),
+            total=len(valid_paths),
+            percent=100.0,
+            generation=generation,
+        )
+
         original_total_segments = sum(max(len(path) - 1, 0) for path in valid_paths)
         optimized_total_segments = 0
         benchmark_enabled = bool(session.benchmark_enabled)
@@ -1602,6 +2263,15 @@ def background_optimization(session, generation):
         path_optimization_ms = 0.0
         
         session.progress_queue.put("Starting optimization process...")
+        _set_merge_progress(
+            session,
+            active=False,
+            phase='optimizing',
+            processed=len(valid_paths),
+            total=len(valid_paths),
+            percent=100.0,
+            generation=generation,
+        )
         
         # Initialize circle evaluation system
         circle_init_started_at = time.perf_counter()
@@ -1644,15 +2314,15 @@ def background_optimization(session, generation):
             
             # Apply optimization using current UI parameters, including guarded simplification.
             balanced_params = {
-                'rdp_tolerance': params.get('rdp_tolerance', 4.0),
+                'rdp_tolerance': params.get('rdp_tolerance', 10.0),
                 'smoothing_factor': params.get('smoothing_factor', 0.006),
-                'simplification_strength': params.get('simplification_strength', 50.0),
+                'simplification_strength': params.get('simplification_strength', 100.0),
                 'arc_fit_strength': params.get('arc_fit_strength', 72.0),
-                'line_fit_strength': params.get('line_fit_strength', 22.0),
-                'short_path_protection': params.get('short_path_protection', 65.0),
+                'line_fit_strength': params.get('line_fit_strength', 0.0),
+                'short_path_protection': params.get('short_path_protection', 0.0),
                 'mean_closeness_px': params.get('mean_closeness_px', 1.8),
                 'peak_closeness_px': params.get('peak_closeness_px', 4.5),
-                'score_preservation': params.get('score_preservation', 80.0),
+                'score_preservation': params.get('score_preservation', 99.0),
                 'path_length': len(path),
                 'max_path_length': max_path_length,
                 'min_path_length': effective_min_path_length
@@ -1684,6 +2354,8 @@ def background_optimization(session, generation):
                 if generation != session.optimization_generation:
                     break
                 session.partial_optimized_paths.append(optimized_path)
+                session.live_preview_kind = 'optimization'
+                session.live_preview_frame_id += 1
 
             optimized_total_segments += max(len(optimized_path) - 1, 0)
             
@@ -1705,6 +2377,16 @@ def background_optimization(session, generation):
             return
 
         session.optimization_complete = True
+        _mark_live_preview_frame(session, kind='final', generation=generation)
+        _set_merge_progress(
+            session,
+            active=False,
+            phase='complete',
+            processed=len(valid_paths),
+            total=len(valid_paths),
+            percent=100.0,
+            generation=generation,
+        )
         session.progress_queue.put("Optimization complete!")
 
         elapsed_seconds = time.perf_counter() - start_time
@@ -1747,6 +2429,14 @@ def background_optimization(session, generation):
             'status': 'error',
             'error': str(e),
         })
+        _set_merge_progress(
+            session,
+            active=False,
+            phase='error',
+            processed=0,
+            total=0,
+            percent=0.0,
+        )
         session.progress_queue.put(f"Optimization error: {str(e)}")
 
 
@@ -1774,12 +2464,26 @@ def get_progress(session_id):
     # Get all available progress messages
     while not session.progress_queue.empty():
         messages.append(session.progress_queue.get())
+
+    with session.lock:
+        optimized_count = len(session.partial_optimized_paths)
+        live_preview_kind = session.live_preview_kind
+        live_preview_frame_id = int(session.live_preview_frame_id)
+        live_preview_count = optimized_count if optimized_count > 0 else len(session.live_preview_paths)
+        merge_progress = dict(session.merge_progress)
     
     return jsonify({
         'messages': messages,
         'optimization_complete': session.optimization_complete,
-        'optimized_count': len(session.partial_optimized_paths),
-        'total_paths': len(session.initial_paths) if session.initial_paths else 0
+        'optimized_count': optimized_count,
+        'total_paths': len(session.initial_paths) if session.initial_paths else 0,
+        'live_preview_kind': live_preview_kind,
+        'live_preview_frame_id': live_preview_frame_id,
+        'live_preview_count': live_preview_count,
+        'merge_progress': merge_progress,
+        'optimization_running': bool(
+            session.optimization_thread and session.optimization_thread.is_alive() and not session.optimization_complete
+        ),
     })
 
 @app.route('/stop_optimization', methods=['POST'])
@@ -1796,6 +2500,37 @@ def stop_optimization():
     session.optimization_generation += 1
     
     return jsonify({'success': True, 'message': 'Optimization stopping...'})
+
+
+@app.route('/stop_auto_detect', methods=['POST'])
+def stop_auto_detect():
+    """Cancel threshold auto-detect and keep the previous threshold unchanged."""
+    data = request.json or {}
+    session_id = data.get('session_id')
+
+    if session_id not in sessions:
+        return jsonify({'error': 'Invalid session'})
+
+    session = sessions[session_id]
+
+    with session.lock:
+        session.auto_detect_generation += 1
+        session.auto_detect_active = False
+        started_at = float(session.auto_detect_progress.get('started_at', 0.0) or 0.0)
+        elapsed_sec = float(time.perf_counter() - started_at) if started_at > 0.0 else float(session.auto_detect_progress.get('elapsed_sec', 0.0))
+        session.auto_detect_progress.update({
+            'running': False,
+            'finished': True,
+            'success': False,
+            'cancelled': True,
+            'elapsed_sec': elapsed_sec,
+            'detected_threshold': float(session.parameters.get('dark_threshold', 0.20)),
+            'best_threshold': float(session.parameters.get('dark_threshold', 0.20)),
+            'message': 'Auto-detect cancelled. Previous threshold kept.',
+            'updated_parameters': dict(session.parameters),
+        })
+
+    return jsonify({'success': True, 'message': 'Auto-detect stopping...'})
 
 
 @app.route('/stop_auto_tune', methods=['POST'])
@@ -1952,6 +2687,7 @@ def generate_svg():
     data = request.json
     session_id = data.get('session_id')
     display_mode = data.get('mode', 'final')  # 'immediate', 'progressive', or 'final'
+    persist_parameters = bool(data.get('persist_parameters', True))
     
     if session_id not in sessions:
         return jsonify({'error': 'Invalid session'})
@@ -1959,21 +2695,25 @@ def generate_svg():
     session = sessions[session_id]
     
     # Update session parameters if provided (especially important for include_image setting)
-    if 'parameters' in data:
+    if persist_parameters and 'parameters' in data:
         session.parameters.update(data['parameters'])
+
+    render_parameters = dict(session.parameters)
+    if 'parameters' in data and isinstance(data['parameters'], dict):
+        render_parameters.update(data['parameters'])
 
     curve_fit_tolerance = max(
         0.35,
-        min(8.0, float(session.parameters.get('cubic_fit_tolerance', 1.0))),
+        min(8.0, float(render_parameters.get('cubic_fit_tolerance', 1.0))),
     )
     endpoint_tangent_strictness = max(
         0.0,
-        min(100.0, float(session.parameters.get('endpoint_tangent_strictness', 85.0))),
+        min(100.0, float(render_parameters.get('endpoint_tangent_strictness', 85.0))),
     )
-    force_orthogonal_as_lines = bool(session.parameters.get('force_orthogonal_as_lines', False))
-    enable_curve_fitting = bool(session.parameters.get('enable_curve_fitting', False))
+    force_orthogonal_as_lines = bool(render_parameters.get('force_orthogonal_as_lines', False))
+    enable_curve_fitting = bool(render_parameters.get('enable_curve_fitting', False))
 
-    show_pre = session.parameters.get('show_pre_optimization', False)
+    show_pre = bool(render_parameters.get('show_pre_optimization', False))
     
     detected_paths_count = len(session.initial_paths) if session.initial_paths else 0
 
@@ -1991,9 +2731,12 @@ def generate_svg():
         with session.lock:
             # Make a thread-safe copy of the paths to avoid issues during iteration
             optimized_paths = list(session.partial_optimized_paths)
+            live_preview_paths = list(session.live_preview_paths)
         
         _log_debug(f"Generating progressive SVG with {len(optimized_paths)} optimized paths")
         paths_to_show = session.initial_paths
+        if not optimized_paths and live_preview_paths:
+            optimized_paths = live_preview_paths
         circle_system = None  # Could add this later
         pre_optimization_paths = paths_to_show if show_pre else []
         
@@ -2021,6 +2764,8 @@ def generate_svg():
     try:
         svg_started_at = time.perf_counter()
         background_image = session.display_image if session.display_image is not None else session.image
+        is_view_render = str(display_mode) in {'immediate', 'progressive', 'final'}
+        render_enable_curve_fitting = True if is_view_render else enable_curve_fitting
         svg_content, suppressed, cache_hit = _render_svg_content(
             session,
             f"view:{display_mode}",
@@ -2031,10 +2776,14 @@ def generate_svg():
             curve_fit_tolerance,
             endpoint_tangent_strictness,
             force_orthogonal_as_lines,
-            enable_curve_fitting,
-            bool(session.parameters.get('include_image', False)),
+            render_enable_curve_fitting,
+            bool(render_parameters.get('include_image', False)),
             show_pre,
             suppress_paths_in_view=suppress_paths_in_view,
+            fit_optimized_paths=True,
+            combine_optimized_paths=is_view_render,
+            combine_pre_optimization_paths=is_view_render,
+            coordinate_precision=2,
         )
         _log_debug(f"SVG content ready, size: {len(svg_content)} characters (cache_hit={cache_hit})")
         _record_benchmark_svg(

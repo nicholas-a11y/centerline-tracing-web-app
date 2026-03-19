@@ -4,11 +4,17 @@ import centerline_core
 from centerline_core import (
     AUTO_TUNE_RANDOM_TILE_DIM,
     _build_random_tile_mosaic,
+    auto_detect_dark_threshold,
     auto_tune_extraction_parameters,
     resolve_auto_tune_sampling_plan,
     resolve_parameter_scale,
 )
-from centerline_web_app import _effective_merge_gap, _effective_min_path_length
+from centerline_web_app import (
+    _effective_merge_gap,
+    _effective_merge_gap_from_stroke,
+    _effective_min_path_length,
+    _estimate_median_stroke_width_from_masks,
+)
 
 
 def test_resolution_scale_is_neutral_for_typical_images():
@@ -21,6 +27,38 @@ def test_effective_parameters_expand_for_large_images():
 
     assert _effective_min_path_length(params, extraction_profile, image_shape=(3200, 2400)) == 6
     assert _effective_merge_gap(params, image_shape=(3200, 2400)) == 50
+
+
+def test_stroke_width_can_reduce_merge_gap_for_large_thin_lines():
+    params = {'merge_gap': 25}
+
+    assert _effective_merge_gap_from_stroke(
+        params,
+        image_shape=(3200, 2400),
+        median_stroke_width_px=2.0,
+    ) == 17
+
+
+def test_stroke_factor_mode_uses_merge_gap_as_stroke_multiplier():
+    params = {'merge_gap': 2, 'merge_gap_mode': 'stroke_factor'}
+
+    assert _effective_merge_gap_from_stroke(
+        params,
+        image_shape=(3200, 2400),
+        median_stroke_width_px=2.5,
+    ) == 5
+
+
+def test_mask_based_stroke_width_estimate_uses_skeleton_distance():
+    binary = np.zeros((9, 9), dtype=bool)
+    binary[3:6, 1:8] = True
+    skeleton = np.zeros_like(binary)
+    skeleton[4, 1:8] = True
+
+    estimate = _estimate_median_stroke_width_from_masks(binary, skeleton)
+
+    assert estimate is not None
+    assert 2.0 <= estimate <= 4.0
 
 
 def test_profile_cap_applies_before_resolution_scaling():
@@ -110,3 +148,54 @@ def test_random_tile_mosaic_scatter_coverage_tiles_away_from_perimeter_only():
 
     assert coverage_origins
     assert any(0 < origin[0] < max_x and 0 < origin[1] < max_y for origin in coverage_origins)
+
+
+def test_auto_detect_dark_threshold_uses_preview_sampling_for_large_images(monkeypatch):
+    gray = np.ones((2400, 2400), dtype=np.float32)
+    called_shapes = []
+
+    def fake_extract(sample_image, threshold, min_object_size=3):
+        called_shapes.append(tuple(sample_image.shape))
+        if abs(float(threshold) - 0.33) <= 0.06:
+            return [[(0, 0)] * 24 for _ in range(8)]
+        if abs(float(threshold) - 0.33) <= 0.14:
+            return [[(0, 0)] * 14 for _ in range(4)]
+        return []
+
+    monkeypatch.setattr(centerline_core, 'extract_skeleton_paths', fake_extract)
+    monkeypatch.setattr(centerline_core, 'merge_nearby_paths', lambda paths, **kwargs: list(paths))
+
+    result = auto_detect_dark_threshold(
+        gray,
+        num_thresholds=8,
+        preview_max_dim=512,
+        parameter_scale=resolve_parameter_scale(gray.shape),
+        confidence_target=0.90,
+    )
+
+    assert result['best_score'] > 0
+    assert result['sample_metadata']['sampling_mode'] == 'random_tiles_mosaic'
+    assert result['thresholds_evaluated'] < 8
+    assert called_shapes
+    assert all(max(shape) <= 512 for shape in called_shapes)
+
+
+def test_auto_detect_dark_threshold_respects_cancellation_before_work(monkeypatch):
+    gray = np.ones((256, 256), dtype=np.float32)
+    extract_calls = {'count': 0}
+
+    def fake_extract(*args, **kwargs):
+        extract_calls['count'] += 1
+        return []
+
+    monkeypatch.setattr(centerline_core, 'extract_skeleton_paths', fake_extract)
+
+    result = auto_detect_dark_threshold(
+        gray,
+        num_thresholds=6,
+        should_continue=lambda: False,
+    )
+
+    assert result['cancelled'] is True
+    assert result['thresholds_evaluated'] == 0
+    assert extract_calls['count'] == 0

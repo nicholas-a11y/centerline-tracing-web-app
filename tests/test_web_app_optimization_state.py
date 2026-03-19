@@ -1,4 +1,5 @@
 import os
+import time
 import numpy as np
 from io import BytesIO
 
@@ -202,6 +203,258 @@ def test_progress_reports_failed_optimization(monkeypatch):
         sessions.pop(session.session_id, None)
 
 
+def test_progress_reports_live_preview_metadata():
+    session = CenterlineSession("live-preview-progress")
+    session.initial_paths = [
+        [[0, 0], [0, 1], [0, 2]],
+        [[1, 0], [1, 1], [1, 2]],
+    ]
+    session.live_preview_paths = [
+        [[0, 0], [0, 2]],
+    ]
+    session.live_preview_kind = "merge"
+    session.live_preview_frame_id = 4
+
+    sessions[session.session_id] = session
+    try:
+        client = app.test_client()
+        response = client.get(f"/progress/{session.session_id}")
+
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload["live_preview_kind"] == "merge"
+        assert payload["live_preview_frame_id"] == 4
+        assert payload["live_preview_count"] == 1
+    finally:
+        sessions.pop(session.session_id, None)
+
+
+def test_progress_reports_merge_progress_metadata():
+    session = CenterlineSession("merge-progress-state")
+    session.initial_paths = [
+        [[0, 0], [0, 1], [0, 2]],
+        [[1, 0], [1, 1], [1, 2]],
+        [[2, 0], [2, 1], [2, 2]],
+    ]
+    session.merge_progress = {
+        'active': True,
+        'phase': 'cheap_merge',
+        'processed': 2,
+        'total': 3,
+        'percent': 66.7,
+    }
+
+    sessions[session.session_id] = session
+    try:
+        client = app.test_client()
+        response = client.get(f"/progress/{session.session_id}")
+
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload["merge_progress"] == {
+            'active': True,
+            'phase': 'cheap_merge',
+            'processed': 2,
+            'total': 3,
+            'percent': 66.7,
+        }
+    finally:
+        sessions.pop(session.session_id, None)
+
+
+def test_auto_tune_progress_allows_running_state_past_90_seconds():
+    session = CenterlineSession("auto-tune-running-90s")
+    session.auto_tune_active = True
+    session.auto_tune_progress.update({
+        'running': True,
+        'started_at': 0.0,
+        'finished': False,
+        'elapsed_sec': 91.2,
+        'timed_out': False,
+        'cancelled': False,
+        'message': 'Still evaluating candidates',
+    })
+
+    sessions[session.session_id] = session
+    try:
+        client = app.test_client()
+        response = client.get(f"/auto_tune_progress/{session.session_id}")
+
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload['running'] is True
+        assert payload['finished'] is False
+        assert payload['active'] is True
+        assert payload['elapsed_sec'] == 91.2
+        assert payload['timed_out'] is False
+    finally:
+        sessions.pop(session.session_id, None)
+
+
+def test_auto_tune_progress_reports_terminal_timeout_from_server_state():
+    session = CenterlineSession("auto-tune-timeout-finished")
+    session.auto_tune_active = False
+    session.auto_tune_progress.update({
+        'running': False,
+        'started_at': 0.0,
+        'finished': True,
+        'success': False,
+        'elapsed_sec': 90.4,
+        'timed_out': True,
+        'cancelled': False,
+        'message': 'Auto-tune completed within server time budget handling.',
+    })
+
+    sessions[session.session_id] = session
+    try:
+        client = app.test_client()
+        response = client.get(f"/auto_tune_progress/{session.session_id}")
+
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload['running'] is False
+        assert payload['finished'] is True
+        assert payload['active'] is False
+        assert payload['timed_out'] is True
+        assert payload['elapsed_sec'] == 90.4
+    finally:
+        sessions.pop(session.session_id, None)
+
+
+def test_auto_tune_sets_merge_gap_to_two_times_stroke_factor(monkeypatch):
+    session = CenterlineSession("auto-tune-merge-gap")
+    session.image = np.ones((32, 32), dtype=np.float32)
+
+    monkeypatch.setattr(
+        'centerline_web_app.auto_tune_extraction_parameters',
+        lambda *args, **kwargs: {
+            'best_threshold': 0.24,
+            'best_min_length': 5,
+            'confidence_score': 0.93,
+            'quality_score': 0.88,
+            'recommendation': 'good fit',
+            'preview_shape': [32, 32],
+            'preview_scale': 1.0,
+            'longest_path': 21,
+            'valid_paths': 8,
+            'sample_metadata': {'sampled': False, 'source_shape': [32, 32]},
+            'timed_out': False,
+            'elapsed_sec': 0.11,
+        },
+    )
+    monkeypatch.setattr('centerline_web_app._estimate_median_stroke_width', lambda *args, **kwargs: 2.5)
+
+    sessions[session.session_id] = session
+    try:
+        client = app.test_client()
+        response = client.post('/auto_tune_extraction', json={'session_id': session.session_id})
+
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload['success'] is True
+        assert payload['updated_parameters']['merge_gap'] == 2
+        assert payload['updated_parameters']['merge_gap_mode'] == 'stroke_factor'
+        assert session.parameters['merge_gap'] == 2
+        assert session.parameters['merge_gap_mode'] == 'stroke_factor'
+    finally:
+        sessions.pop(session.session_id, None)
+
+
+class _ImmediateThread:
+    def __init__(self, target=None, args=(), daemon=None):
+        self._target = target
+        self._args = args
+        self._alive = False
+
+    def start(self):
+        self._alive = True
+        try:
+            if self._target is not None:
+                self._target(*self._args)
+        finally:
+            self._alive = False
+
+    def is_alive(self):
+        return self._alive
+
+
+def test_auto_detect_threshold_start_runs_background_job_and_updates_session(monkeypatch):
+    session = CenterlineSession("auto-detect-start-session")
+    session.image = np.ones((32, 32), dtype=np.float32)
+
+    monkeypatch.setattr('centerline_web_app.threading.Thread', _ImmediateThread)
+    monkeypatch.setattr(
+        'centerline_web_app.auto_detect_dark_threshold',
+        lambda *args, **kwargs: {
+            'best_threshold': 0.31,
+            'best_score': 0.72,
+            'recommendation': 'high confidence',
+            'elapsed_sec': 0.08,
+            'thresholds_evaluated': 4,
+            'preview_shape': [32, 32],
+            'preview_scale': 1.0,
+            'sample_metadata': {'sampled': False, 'source_shape': [32, 32]},
+            'cancelled': False,
+        },
+    )
+
+    sessions[session.session_id] = session
+    try:
+        client = app.test_client()
+        response = client.post('/auto_detect_threshold_start', json={'session_id': session.session_id})
+
+        assert response.status_code == 200
+        assert response.get_json()['success'] is True
+        assert session.parameters['dark_threshold'] == 0.31
+
+        progress_response = client.get(f'/auto_detect_threshold_progress/{session.session_id}')
+        assert progress_response.status_code == 200
+        payload = progress_response.get_json()
+        assert payload['finished'] is True
+        assert payload['success'] is True
+        assert payload['cancelled'] is False
+        assert payload['detected_threshold'] == 0.31
+        assert payload['updated_parameters']['dark_threshold'] == 0.31
+    finally:
+        sessions.pop(session.session_id, None)
+
+
+def test_stop_auto_detect_marks_progress_cancelled_without_overwriting_threshold():
+    session = CenterlineSession("auto-detect-stop-session")
+    session.parameters['dark_threshold'] = 0.27
+    session.auto_detect_active = True
+    session.auto_detect_generation = 3
+    session.auto_detect_progress.update({
+        'running': True,
+        'started_at': float(time.perf_counter() - 0.25),
+        'finished': False,
+        'cancelled': False,
+        'message': 'Auto-detect started. Evaluating threshold candidates...',
+    })
+
+    sessions[session.session_id] = session
+    try:
+        client = app.test_client()
+        response = client.post('/stop_auto_detect', json={'session_id': session.session_id})
+
+        assert response.status_code == 200
+        assert response.get_json()['success'] is True
+        assert session.auto_detect_active is False
+        assert session.auto_detect_generation == 4
+        assert session.parameters['dark_threshold'] == 0.27
+
+        progress_response = client.get(f'/auto_detect_threshold_progress/{session.session_id}')
+        assert progress_response.status_code == 200
+        payload = progress_response.get_json()
+        assert payload['finished'] is True
+        assert payload['cancelled'] is True
+        assert payload['success'] is False
+        assert payload['detected_threshold'] == 0.27
+        assert payload['active'] is False
+    finally:
+        sessions.pop(session.session_id, None)
+
+
 def test_background_optimization_records_optimizer_phase_metrics(monkeypatch):
     session = CenterlineSession("benchmark-opt-session")
     session.benchmark_enabled = True
@@ -214,6 +467,7 @@ def test_background_optimization_records_optimizer_phase_metrics(monkeypatch):
     session.optimization_generation = 1
 
     monkeypatch.setattr("centerline_web_app.CircleEvaluationSystem", _StubCircleSystem)
+    monkeypatch.setattr("centerline_web_app.merge_nearby_paths", lambda paths, **kwargs: list(paths))
 
     def _diagnostic_optimizer(path, circle_system, params, initial_score=None, return_diagnostics=False):
         assert return_diagnostics is True
@@ -336,6 +590,42 @@ def test_generate_svg_live_preview_includes_blue_when_under_limit():
         sessions.pop(session.session_id, None)
 
 
+def test_generate_svg_progressive_uses_live_merge_preview_before_optimization():
+    session = CenterlineSession("svg-merge-preview-session")
+    session.image = np.ones((8, 8), dtype=np.float32)
+    session.display_image = session.image
+    session.initial_paths = [
+        [[0, 0], [0, 1], [0, 2]],
+    ]
+    session.live_preview_paths = [
+        [[1, 1], [1, 2], [1, 3]],
+    ]
+    session.live_preview_kind = "merge"
+    session.live_preview_frame_id = 1
+    session.parameters['enable_optimization'] = True
+    session.parameters['show_pre_optimization'] = True
+
+    sessions[session.session_id] = session
+    try:
+        client = app.test_client()
+
+        progressive_response = client.post(
+            "/generate_svg",
+            json={
+                "session_id": session.session_id,
+                "mode": "progressive",
+                "parameters": session.parameters,
+            },
+        )
+        assert progressive_response.status_code == 200
+        progressive_payload = progressive_response.get_json()
+        assert "svg" in progressive_payload
+        assert 'stroke="magenta"' in progressive_payload["svg"]
+        assert 'stroke="#0066CC"' in progressive_payload["svg"]
+    finally:
+        sessions.pop(session.session_id, None)
+
+
 def test_download_svg_includes_completed_blue_and_selected_magenta_and_image():
     session = CenterlineSession("download-svg-session")
     session.image = np.ones((8, 8), dtype=np.float32)
@@ -430,11 +720,8 @@ def test_generate_svg_reuses_cached_output_for_identical_request(monkeypatch):
     render_calls = {'count': 0}
 
     def _stub_create_svg_output(*args, **kwargs):
-        import centerline_engine as engine
-
         render_calls['count'] += 1
-        with open(engine.OUTPUT_PATH, 'w') as file_handle:
-            file_handle.write('<svg xmlns="http://www.w3.org/2000/svg"></svg>')
+        return '<svg xmlns="http://www.w3.org/2000/svg"></svg>'
 
     monkeypatch.setattr('centerline_web_app.create_svg_output', _stub_create_svg_output)
 
@@ -476,11 +763,9 @@ def test_generate_svg_defaults_curve_fitting_off(monkeypatch):
     captured = {}
 
     def _stub_create_svg_output(*args, **kwargs):
-        import centerline_engine as engine
-
         captured['enable_curve_fitting'] = kwargs.get('enable_curve_fitting')
-        with open(engine.OUTPUT_PATH, 'w') as file_handle:
-            file_handle.write('<svg xmlns="http://www.w3.org/2000/svg"></svg>')
+        captured['fit_optimized_paths'] = kwargs.get('fit_optimized_paths')
+        return '<svg xmlns="http://www.w3.org/2000/svg"></svg>'
 
     monkeypatch.setattr('centerline_web_app.create_svg_output', _stub_create_svg_output)
 
@@ -497,12 +782,13 @@ def test_generate_svg_defaults_curve_fitting_off(monkeypatch):
         )
 
         assert response.status_code == 200
-        assert captured['enable_curve_fitting'] is False
+        assert captured['enable_curve_fitting'] is True
+        assert captured['fit_optimized_paths'] is True
     finally:
         sessions.pop(session.session_id, None)
 
 
-def test_generate_svg_cache_key_changes_when_curve_fitting_toggles(monkeypatch):
+def test_generate_svg_preview_cache_is_reused_when_curve_fitting_toggles(monkeypatch):
     session = CenterlineSession("svg-curve-fit-cache-toggle")
     session.image = np.ones((8, 8), dtype=np.float32)
     session.display_image = session.image
@@ -520,11 +806,8 @@ def test_generate_svg_cache_key_changes_when_curve_fitting_toggles(monkeypatch):
     render_calls = {'count': 0}
 
     def _stub_create_svg_output(*args, **kwargs):
-        import centerline_engine as engine
-
         render_calls['count'] += 1
-        with open(engine.OUTPUT_PATH, 'w') as file_handle:
-            file_handle.write('<svg xmlns="http://www.w3.org/2000/svg"></svg>')
+        return '<svg xmlns="http://www.w3.org/2000/svg"></svg>'
 
     monkeypatch.setattr('centerline_web_app.create_svg_output', _stub_create_svg_output)
 
@@ -548,6 +831,6 @@ def test_generate_svg_cache_key_changes_when_curve_fitting_toggles(monkeypatch):
 
         assert first_response.status_code == 200
         assert second_response.status_code == 200
-        assert render_calls['count'] == 2
+        assert render_calls['count'] == 1
     finally:
         sessions.pop(session.session_id, None)

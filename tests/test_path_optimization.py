@@ -170,3 +170,88 @@ def test_merge_nearby_paths_rejects_self_intersecting_bridge():
     merged = engine.merge_nearby_paths([path_a, path_b], max_gap=3.5, verbose=False)
 
     assert len(merged) == 2
+
+
+def test_merge_nearby_paths_reports_metrics_and_progress():
+    path_a = [(0, 0), (1, 0), (2, 0)]
+    path_b = [(3, 0), (4, 0), (5, 0)]
+    metrics = {}
+    progress_updates = []
+
+    merged = engine.merge_nearby_paths(
+        [path_a, path_b],
+        max_gap=1.5,
+        verbose=False,
+        metrics=metrics,
+        progress_callback=lambda payload: progress_updates.append(dict(payload)),
+    )
+
+    assert len(merged) == 1
+    assert metrics['merged_pairs'] == 1
+    assert metrics['candidate_paths_scanned'] >= 1
+    assert metrics['cheap_candidates_ranked'] >= 1
+    assert metrics['endpoint_distance_checks'] >= 1
+    assert metrics['safety_checks'] >= 1
+    assert metrics['seed_paths_processed'] >= 1
+    assert metrics['elapsed_sec'] >= 0.0
+    assert progress_updates
+
+
+def test_merge_nearby_paths_skips_any_long_candidate_in_cheap_pass():
+    path_a = [(0, idx) for idx in range(8)]
+    path_b = [(0, idx) for idx in range(8, 10)]
+    metrics = {}
+
+    merged = engine.merge_nearby_paths(
+        [path_a, path_b],
+        max_gap=2.0,
+        verbose=False,
+        metrics=metrics,
+        allow_long_path_merges=False,
+        long_path_threshold=5,
+    )
+
+    assert len(merged) == 2
+    assert metrics['merged_pairs'] == 0
+    assert metrics['long_fragment_candidates_skipped'] >= 1
+    assert metrics['merge_scope'] == 'cheap_only'
+
+
+def test_merge_nearby_paths_skips_long_long_candidates_in_cheap_pass():
+    path_a = [(0, idx) for idx in range(8)]
+    path_b = [(0, idx) for idx in range(8, 16)]
+    metrics = {}
+
+    merged = engine.merge_nearby_paths(
+        [path_a, path_b],
+        max_gap=2.0,
+        verbose=False,
+        metrics=metrics,
+        allow_long_path_merges=False,
+        long_path_threshold=5,
+    )
+
+    assert len(merged) == 2
+    assert metrics['merged_pairs'] == 0
+    assert metrics['long_fragment_candidates_skipped'] >= 1
+    assert metrics['merge_scope'] == 'cheap_only'
+
+
+def test_merge_nearby_paths_long_only_pass_can_merge_long_fragments():
+    path_a = [(0, idx) for idx in range(8)]
+    path_b = [(0, idx) for idx in range(8, 10)]
+    metrics = {}
+
+    merged = engine.merge_nearby_paths(
+        [path_a, path_b],
+        max_gap=2.0,
+        verbose=False,
+        metrics=metrics,
+        allow_long_path_merges=True,
+        only_long_path_merges=True,
+        long_path_threshold=5,
+    )
+
+    assert len(merged) == 1
+    assert metrics['merged_pairs'] == 1
+    assert metrics['merge_scope'] == 'long_only'

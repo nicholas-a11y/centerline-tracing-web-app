@@ -615,69 +615,281 @@ def auto_detect_min_path_length(gray_image, dark_threshold, test_lengths=None, m
     }
 
 
-def auto_detect_dark_threshold(gray_image, sample_size=1000, threshold_range=(0.05, 0.8), num_thresholds=15,
-                               min_object_size=3, max_gap=25, parameter_scale=1.0):
-    """Automatically detect the best dark threshold by sampling the image."""
+def auto_detect_dark_threshold(gray_image, sample_size=1000, threshold_range=(0.05, 0.8), num_thresholds=8,
+                               min_object_size=3, max_gap=25, parameter_scale=1.0,
+                               preview_max_dim=900, confidence_target=0.92,
+                               should_continue=None, on_progress=None):
+    """Automatically detect the best dark threshold on a reduced preview or tile mosaic."""
+    started_at = time.perf_counter()
     height, width = gray_image.shape
-    sample_indices = np.random.choice(height * width, min(sample_size, height * width), replace=False)
-    sample_coords = [(idx // width, idx % width) for idx in sample_indices]
-    sample_values = [gray_image[y, x] for y, x in sample_coords]
+    cancelled = False
 
-    thresholds = np.linspace(threshold_range[0], threshold_range[1], num_thresholds)
-    best_threshold = threshold_range[0]
-    best_score = 0
-    threshold_results = []
+    if should_continue is None:
+        def should_continue():
+            return True
+
+    sample_metadata = {
+        'sampled': False,
+        'sample_shape': gray_image.shape,
+        'sample_origin': [0, 0],
+        'source_shape': gray_image.shape,
+        'sampling_mode': 'full_image',
+        'overlay_supported': True,
+    }
+    sample_image = gray_image
+    if max(height, width) > int(max(1, preview_max_dim)):
+        sample_image, sample_metadata = _build_random_tile_mosaic(gray_image)
+
+    scale = 1.0
+    preview_image = sample_image
+    if max(sample_image.shape) > int(max(1, preview_max_dim)):
+        scale = preview_max_dim / float(max(sample_image.shape))
+        preview_size = (
+            max(1, int(round(sample_image.shape[1] * scale))),
+            max(1, int(round(sample_image.shape[0] * scale))),
+        )
+        resample_filter = Image.Resampling.BILINEAR if hasattr(Image, 'Resampling') else Image.BILINEAR
+        preview_pil = Image.fromarray((sample_image * 255).astype(np.uint8)).resize(preview_size, resample_filter)
+        preview_image = np.asarray(preview_pil).astype(np.float32) / 255.0
+
+    preview_values = preview_image.reshape(-1)
+    if preview_values.size > int(sample_size):
+        rng_seed = int((height << 16) ^ width ^ int(preview_values.size)) & 0xFFFFFFFF
+        rng = np.random.default_rng(rng_seed)
+        preview_values = preview_values[rng.choice(preview_values.size, size=int(sample_size), replace=False)]
+
     effective_min_path_length = scale_length_parameter(3, parameter_scale=parameter_scale)
+    preview_min_path_length = max(1, int(round(effective_min_path_length * scale)))
+    preview_merge_gap = max(6, int(round(float(max_gap) * max(1.0, float(parameter_scale)) * scale)))
+    threshold_min = float(min(threshold_range[0], threshold_range[1]))
+    threshold_max = float(max(threshold_range[0], threshold_range[1]))
+    max_threshold_evals = max(3, int(num_thresholds))
 
-    print(f"Auto-detecting dark threshold from {len(sample_values)} sample pixels...")
+    best_result = None
+    second_best_score = 0.0
+    threshold_results = []
+    tested_thresholds = []
+    tested_threshold_keys = set()
 
-    for threshold in thresholds:
-        try:
-            initial_paths = extract_skeleton_paths(gray_image, threshold, min_object_size=min_object_size)
+    mean_intensity = float(np.mean(preview_values)) if preview_values.size else float(np.mean(preview_image))
+    dark_ratio_high = float(np.mean(preview_image < 0.80))
 
-            if len(initial_paths) == 0:
-                score = 0
+    print(
+        f"Auto-detecting dark threshold on {preview_image.shape[1]}x{preview_image.shape[0]} preview "
+        f"({sample_metadata.get('sampling_mode', 'full_image')}, max {max_threshold_evals} thresholds)..."
+    )
+
+    def _threshold_key(value):
+        return int(round(float(value) * 1_000_000))
+
+    def _pick_next_threshold():
+        mid = (threshold_min + threshold_max) * 0.5
+        seed_thresholds = [mid, (threshold_min + mid) * 0.5, (mid + threshold_max) * 0.5]
+        for candidate in seed_thresholds:
+            if _threshold_key(candidate) not in tested_threshold_keys:
+                return float(candidate)
+
+        if best_result is not None and threshold_results:
+            best_t = float(best_result['threshold'])
+            sorted_results = sorted(threshold_results, key=lambda item: float(item.get('threshold', 0.0)))
+            left_neighbor = None
+            right_neighbor = None
+            for item in sorted_results:
+                threshold_value = float(item.get('threshold', 0.0))
+                if threshold_value < best_t:
+                    left_neighbor = threshold_value
+                elif threshold_value > best_t and right_neighbor is None:
+                    right_neighbor = threshold_value
+                    break
+
+            local_candidates = []
+            if left_neighbor is not None:
+                local_candidates.append((abs(best_t - left_neighbor), (best_t + left_neighbor) * 0.5))
             else:
-                merged_paths = merge_nearby_paths(initial_paths, max_gap=max_gap)
-                valid_paths = [path for path in merged_paths if len(path) >= effective_min_path_length]
+                local_candidates.append((abs(best_t - threshold_min), (best_t + threshold_min) * 0.5))
+            if right_neighbor is not None:
+                local_candidates.append((abs(right_neighbor - best_t), (best_t + right_neighbor) * 0.5))
+            else:
+                local_candidates.append((abs(threshold_max - best_t), (best_t + threshold_max) * 0.5))
 
-                if len(valid_paths) == 0:
-                    score = 0
-                else:
-                    total_length = sum(len(path) for path in valid_paths)
+            local_candidates.sort(key=lambda item: item[0], reverse=True)
+            for _, candidate in local_candidates:
+                if _threshold_key(candidate) not in tested_threshold_keys:
+                    return float(candidate)
+
+        anchors = [threshold_min] + sorted(tested_thresholds) + [threshold_max]
+        widest_gap = None
+        widest_candidate = None
+        for left, right in zip(anchors[:-1], anchors[1:]):
+            if right <= left:
+                continue
+            candidate = (left + right) * 0.5
+            if _threshold_key(candidate) in tested_threshold_keys:
+                continue
+            gap = right - left
+            if widest_gap is None or gap > widest_gap:
+                widest_gap = gap
+                widest_candidate = candidate
+
+        if widest_candidate is not None:
+            return float(widest_candidate)
+        return None
+
+    def _current_confidence_score():
+        if best_result is None or float(best_result.get('score', 0.0)) <= 0.0:
+            return 0.0
+        return max(
+            0.0,
+            min(1.0, (float(best_result['score']) - second_best_score) / max(float(best_result['score']), 1e-6)),
+        )
+
+    def _emit_progress(current_threshold=None, current_score=0.0):
+        if on_progress is None:
+            return
+        on_progress({
+            'elapsed_sec': float(time.perf_counter() - started_at),
+            'thresholds_evaluated': int(len(threshold_results)),
+            'thresholds_planned': int(max_threshold_evals),
+            'current_threshold': float(current_threshold) if current_threshold is not None else None,
+            'current_score': float(current_score),
+            'best_threshold': float(best_result['threshold']) if best_result is not None else None,
+            'best_score': float(best_result['score']) if best_result is not None else 0.0,
+            'confidence_score': float(_current_confidence_score()),
+            'preview_shape': preview_image.shape,
+            'preview_scale': float(scale),
+            'sample_metadata': sample_metadata,
+            'cancelled': bool(cancelled),
+        })
+
+    while len(threshold_results) < max_threshold_evals:
+        if not should_continue():
+            cancelled = True
+            break
+
+        threshold = _pick_next_threshold()
+        if threshold is None:
+            break
+
+        threshold_key = _threshold_key(threshold)
+        tested_threshold_keys.add(threshold_key)
+        tested_thresholds.append(float(threshold))
+
+        initial_paths = []
+        valid_paths = []
+        dark_ratio = float(np.mean(preview_image < threshold)) if preview_image.size else 0.0
+        score = 0.0
+
+        try:
+            initial_paths = extract_skeleton_paths(preview_image, threshold, min_object_size=min_object_size)
+            if initial_paths:
+                merged_paths = merge_nearby_paths(initial_paths, max_gap=preview_merge_gap)
+                valid_paths = [path for path in merged_paths if len(path) >= preview_min_path_length]
+                if valid_paths:
+                    total_length = float(sum(len(path) for path in valid_paths))
                     path_count_score = min(len(valid_paths) / 10.0, 1.0)
-                    length_score = min(total_length / 1000.0, 1.0)
-                    score = path_count_score * length_score
+                    length_score = min(total_length / max(250.0, float(preview_image.size) * 0.012), 1.0)
+                    density_penalty = 1.0 - float(np.clip((dark_ratio - max(dark_ratio_high * 1.7, 0.72)) / 0.22, 0.0, 0.55))
+                    sparse_bonus = 1.0 + float(np.clip((mean_intensity - 0.70) / 0.18, 0.0, 0.18))
+                    score = path_count_score * length_score * density_penalty * sparse_bonus
+                    if len(valid_paths) <= 1 and total_length < float(preview_min_path_length * 4):
+                        score *= 0.5
 
-            threshold_results.append({
-                'threshold': threshold,
-                'score': score,
-                'path_count': len(initial_paths) if 'initial_paths' in locals() else 0,
-                'valid_count': len(valid_paths) if 'valid_paths' in locals() else 0
-            })
+            result = {
+                'threshold': float(threshold),
+                'score': float(score),
+                'path_count': int(len(initial_paths)),
+                'valid_count': int(len(valid_paths)),
+                'dark_ratio': float(dark_ratio),
+            }
+            threshold_results.append(result)
 
-            if score > best_score:
-                best_score = score
-                best_threshold = threshold
+            if best_result is None or score > best_result['score']:
+                if best_result is not None:
+                    second_best_score = max(second_best_score, float(best_result['score']))
+                best_result = result
+            else:
+                second_best_score = max(second_best_score, float(score))
 
-            print(f"  Threshold {threshold:.3f}: {len(initial_paths) if 'initial_paths' in locals() else 0} paths, score: {score:.3f}")
+            print(f"  Threshold {threshold:.3f}: {len(valid_paths)} valid paths, score: {score:.3f}")
+            _emit_progress(current_threshold=threshold, current_score=score)
+
+            if best_result is not None and len(threshold_results) >= 4:
+                confidence_score = _current_confidence_score()
+                if confidence_score >= float(confidence_target):
+                    break
+
+            if len(threshold_results) >= 6:
+                top_results = sorted(threshold_results, key=lambda item: float(item.get('score', 0.0)), reverse=True)[:3]
+                if len(top_results) == 3 and float(top_results[0]['score']) > 0.0:
+                    top_score = float(top_results[0]['score'])
+                    third_score = float(top_results[-1]['score'])
+                    top_thresholds = [float(item['threshold']) for item in top_results]
+                    threshold_span = max(top_thresholds) - min(top_thresholds)
+                    if third_score >= top_score * 0.96 and threshold_span <= max(0.08, (threshold_max - threshold_min) * 0.18):
+                        break
         except Exception as e:
             print(f"  Threshold {threshold:.3f}: Failed - {e}")
             threshold_results.append({
-                'threshold': threshold,
-                'score': 0,
+                'threshold': float(threshold),
+                'score': 0.0,
                 'path_count': 0,
-                'valid_count': 0
+                'valid_count': 0,
+                'dark_ratio': float(dark_ratio),
             })
+            _emit_progress(current_threshold=threshold, current_score=0.0)
 
-    print(f"Best threshold: {best_threshold:.3f} (score: {best_score:.3f})")
+    if cancelled:
+        return {
+            'best_threshold': float(best_result['threshold']) if best_result is not None else float(threshold_min),
+            'best_score': float(best_result['score']) if best_result is not None else 0.0,
+            'all_results': threshold_results,
+            'effective_min_path_length': int(effective_min_path_length),
+            'recommendation': 'cancelled',
+            'preview_shape': preview_image.shape,
+            'preview_scale': float(scale),
+            'thresholds_evaluated': int(len(threshold_results)),
+            'elapsed_sec': float(time.perf_counter() - started_at),
+            'sample_metadata': sample_metadata,
+            'cancelled': True,
+        }
+
+    if best_result is None or best_result['score'] <= 0:
+        return {
+            'best_threshold': float(threshold_min),
+            'best_score': 0.0,
+            'all_results': threshold_results,
+            'effective_min_path_length': int(effective_min_path_length),
+            'recommendation': 'manual adjustment needed',
+            'preview_shape': preview_image.shape,
+            'preview_scale': float(scale),
+            'thresholds_evaluated': int(len(threshold_results)),
+            'elapsed_sec': float(time.perf_counter() - started_at),
+            'sample_metadata': sample_metadata,
+            'cancelled': False,
+        }
+
+    confidence_score = _current_confidence_score()
+    if confidence_score >= 0.18:
+        recommendation = 'high confidence'
+    elif confidence_score >= 0.08:
+        recommendation = 'moderate confidence'
+    else:
+        recommendation = 'low confidence - manual adjustment may still help'
+
+    print(f"Best threshold: {best_result['threshold']:.3f} (score: {best_result['score']:.3f})")
 
     return {
-        'best_threshold': best_threshold,
-        'best_score': best_score,
+        'best_threshold': float(best_result['threshold']),
+        'best_score': float(best_result['score']),
         'all_results': threshold_results,
-        'effective_min_path_length': effective_min_path_length,
-        'recommendation': 'auto-detected' if best_score > 0 else 'manual adjustment needed'
+        'effective_min_path_length': int(effective_min_path_length),
+        'recommendation': recommendation,
+        'preview_shape': preview_image.shape,
+        'preview_scale': float(scale),
+        'thresholds_evaluated': int(len(threshold_results)),
+        'elapsed_sec': float(time.perf_counter() - started_at),
+        'sample_metadata': sample_metadata,
+        'cancelled': False,
     }
 
 
