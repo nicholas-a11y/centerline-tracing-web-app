@@ -1479,6 +1479,13 @@
                         </label>
                         <small style="color: #666; font-size: 0.8em;">Apply smoothing and SVG line/curve fitting.</small>
                     </div>
+                    <div class="parameter">
+                        <label>
+                            <input type="checkbox" id="showPreOptimization" checked>
+                            Show Magenta Paths
+                        </label>
+                        <small style="color: #666; font-size: 0.8em;">Show raw magenta centerlines.</small>
+                    </div>
                     <div class="parameter" id="sourceSmoothingWrap">
                         <label>Source Smoothing <span class="range-value" id="sourceSmoothingValue">95</span></label>
                         <input type="range" id="sourceSmoothing" min="0" max="100" step="1" value="95">
@@ -1576,13 +1583,6 @@
                             Enable Path Optimisation
                         </label>
                         <small style="color: #666; font-size: 0.8em;">Fits a smooth path with options</small>
-                    </div>
-                    <div class="parameter">
-                        <label>
-                            <input type="checkbox" id="showPreOptimization" checked>
-                            Include Unoptimised Paths
-                        </label>
-                        <small style="color: #666; font-size: 0.8em;">Include the magenta paths in the SVG</small>
                     </div>
                     <div class="parameter">
                         <label>
@@ -1751,6 +1751,10 @@
                         <div class="help-control-item">
                             <p class="help-control-name">Enable Optimisation</p>
                             <p class="help-control-desc">Turns on smoothing and fitted SVG export. When it is off, the viewer and download stay with the raw magenta extraction only (use LightBurn Optimisation to smooth and simplify).</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Show Magenta Paths</p>
+                            <p class="help-control-desc">Shows or hides the raw magenta centerlines while you compare them against the fitted blue output. When optimisation is off, this stays on because the magenta extraction is the only visible result.</p>
                         </div>
                         <div class="help-control-item">
                             <p class="help-control-name">Source Smoothing</p>
@@ -2565,6 +2569,13 @@
         function renderMagentaSkeletonOverlay() {
             if (tileTuneReviewState.active) {
                 clearMagentaSkeletonOverlay();
+                return;
+            }
+
+            const showPreOptimization = document.getElementById('showPreOptimization');
+            if (showPreOptimization && !showPreOptimization.checked) {
+                clearMagentaSkeletonOverlay();
+                clearSelectablePruningOverlay();
                 return;
             }
 
@@ -5469,6 +5480,7 @@
 
                     // These toggles only affect SVG visibility/layers, not optimization results.
                     if (isDisplayOnlyToggle(this.id)) {
+                        rerenderCurrentImageOverlays();
                         refreshSvgForDisplayToggles();
                         return;
                     }
@@ -5517,25 +5529,21 @@
                 if (advancedToggleBtn && !autoDebugFileMode) {
                     advancedToggleBtn.textContent = '⚙️ Advanced settings ▼';
                 }
-
-                // When optimization is off, force show unoptimized paths to be checked and disabled
-                showPreOptimization.checked = true;
-                showPreOptimization.disabled = true;
-                showPreOptimization.parentElement.style.opacity = '0.6';
                 
                 // Hide overlap controls since no merging will occur
                 if (overlapSection) {
                     overlapSection.style.display = 'none';
                 }
             } else {
-                // When optimization is on, enable the show unoptimized paths checkbox
-                showPreOptimization.disabled = false;
-                showPreOptimization.parentElement.style.opacity = '1';
-                
                 // Show overlap controls
                 if (overlapSection) {
                     overlapSection.style.display = 'block';
                 }
+            }
+
+            if (showPreOptimization && showPreOptimization.parentElement) {
+                showPreOptimization.disabled = false;
+                showPreOptimization.parentElement.style.opacity = '1';
             }
 
             handleCurveFittingToggle();
@@ -6563,7 +6571,7 @@
                 min_path_length: parseInt(document.getElementById('minPathLength').value),
                 enable_pruning: document.getElementById('enablePruning').checked,
                 enable_optimization: false,
-                show_pre_optimization: true,
+                show_pre_optimization: document.getElementById('showPreOptimization').checked,
                 include_image: document.getElementById('includeImage').checked,
                 normalization_mode: document.getElementById('normalizationMode').value,
                 normalization_sensitivity: document.getElementById('normalizationSensitivity').value
