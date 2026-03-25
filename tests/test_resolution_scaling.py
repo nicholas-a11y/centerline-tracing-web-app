@@ -10,6 +10,7 @@ from centerline_core import (
     resolve_parameter_scale,
 )
 from centerline_web_app import (
+    _effective_min_object_size,
     _effective_merge_gap,
     _effective_merge_gap_from_stroke,
     _effective_min_path_length,
@@ -66,6 +67,20 @@ def test_profile_cap_applies_before_resolution_scaling():
     params = {'min_path_length': 8, 'merge_gap': 25}
 
     assert _effective_min_path_length(params, extraction_profile, image_shape=(3200, 2400)) == 4
+
+
+def test_effective_min_object_size_is_capped_by_logical_min_path_length():
+    extraction_profile = {'max_min_path_length': None}
+    params = {'min_path_length': 2}
+
+    assert _effective_min_object_size(5, params, extraction_profile, image_shape=(1200, 900)) == 1
+
+
+def test_effective_min_object_size_relaxes_for_large_images():
+    extraction_profile = {'max_min_path_length': None}
+    params = {'min_path_length': 3}
+
+    assert _effective_min_object_size(2, params, extraction_profile, image_shape=(3200, 2400)) == 1
 
 
 def test_auto_tune_returns_logical_min_length_with_scaled_effective_length(monkeypatch):

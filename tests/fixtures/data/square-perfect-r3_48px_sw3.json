@@ -1,0 +1,17 @@
+{
+  "id": "square-perfect-r3",
+  "description": "Perfect square loop rotated 3 degrees clockwise",
+  "category": "line",
+  "size": 48,
+  "stroke_width": 3,
+  "tolerance_px": 1.6,
+  "expected_segment_types": [
+    "line"
+  ],
+  "png_file": "square-perfect-r3_48px_sw3.png",
+  "stats": {
+    "total_pixels": 2304,
+    "stroke_pixels": 336,
+    "coverage": 0.1458
+  }
+}

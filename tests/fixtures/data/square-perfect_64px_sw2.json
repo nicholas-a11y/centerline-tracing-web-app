@@ -1,0 +1,17 @@
+{
+  "id": "square-perfect",
+  "description": "Perfect axis-aligned square loop",
+  "category": "line",
+  "size": 64,
+  "stroke_width": 2,
+  "tolerance_px": 1.5,
+  "expected_segment_types": [
+    "line"
+  ],
+  "png_file": "square-perfect_64px_sw2.png",
+  "stats": {
+    "total_pixels": 4096,
+    "stroke_pixels": 312,
+    "coverage": 0.0762
+  }
+}

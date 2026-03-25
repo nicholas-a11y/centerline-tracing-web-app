@@ -1,0 +1,17 @@
+{
+  "id": "corner-l-shape",
+  "description": "L-shaped corner \u2014 two perpendicular lines meeting",
+  "category": "corner",
+  "size": 48,
+  "stroke_width": 3,
+  "tolerance_px": 1.5,
+  "expected_segment_types": [
+    "line"
+  ],
+  "png_file": "corner-l-shape_48px_sw3.png",
+  "stats": {
+    "total_pixels": 2304,
+    "stroke_pixels": 200,
+    "coverage": 0.0868
+  }
+}

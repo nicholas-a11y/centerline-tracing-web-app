@@ -258,11 +258,23 @@
         <button id="runGoldenBtn" class="secondary">Run + Update Goldens</button>
       </div>
 
-      <h2>Fitting Controls</h2>
+      <h2>Analysis Controls</h2>
       <div class="control-stack" style="margin-bottom: 12px;">
         <div class="control-card">
+          <label for="analysisMode">Pipeline</label>
+          <select id="analysisMode">
+            <option value="main_app">Main App Pipeline</option>
+            <option value="curve_fitter">Curve Fitter Only</option>
+          </select>
+          <div class="small-note">Main App Pipeline runs fixture analysis through the production processing path. Curve Fitter Only keeps the older extraction-plus-fit harness.</div>
+        </div>
+        <div class="control-card">
+          <label class="checkbox-label"><input type="checkbox" id="mainAppEnableOptimization"> Enable Main App Optimization</label>
+          <div class="small-note">Only applies in Main App Pipeline mode. Off matches the simplified production flow; on also runs scoring and path optimization.</div>
+        </div>
+        <div class="control-card">
           <label class="checkbox-label"><input type="checkbox" id="enableCurveFitting"> Enable Curve Fitting</label>
-          <div class="small-note">Applies to both pytest fixture fitting and the stored inspection artifacts for this run.</div>
+          <div class="small-note">Applies to curve-fitter runs and to the optimized output rendering when Main App Optimization is enabled.</div>
         </div>
         <div class="control-card">
           <label for="cubicFitTolerance">Cubic Fit Tolerance <span class="inline-value" id="cubicFitToleranceValue">1.00 px</span></label>
@@ -398,6 +410,8 @@
     const canvas = document.getElementById('scene');
     const ctx = canvas.getContext('2d');
     const fittingInputs = {
+      analysis_mode: document.getElementById('analysisMode'),
+      main_app_enable_optimization: document.getElementById('mainAppEnableOptimization'),
       enable_curve_fitting: document.getElementById('enableCurveFitting'),
       cubic_fit_tolerance: document.getElementById('cubicFitTolerance'),
       endpoint_tangent_strictness: document.getElementById('endpointTangentStrictness'),
@@ -412,6 +426,8 @@
 
     function getFittingParameters() {
       return {
+        analysis_mode: String(fittingInputs.analysis_mode.value || 'main_app'),
+        main_app_enable_optimization: !!fittingInputs.main_app_enable_optimization.checked,
         enable_curve_fitting: !!fittingInputs.enable_curve_fitting.checked,
         cubic_fit_tolerance: Number(fittingInputs.cubic_fit_tolerance.value),
         endpoint_tangent_strictness: Number(fittingInputs.endpoint_tangent_strictness.value),
@@ -429,9 +445,11 @@
         fittingSummary.textContent = '';
         return;
       }
+      const pipelineMode = params.analysis_mode === 'main_app' ? 'main app pipeline' : 'curve fitter only';
+      const appOptimization = params.main_app_enable_optimization ? 'main app optimization on' : 'main app optimization off';
       const curveMode = params.enable_curve_fitting ? 'curves enabled' : 'line-only output';
       const orthMode = params.force_orthogonal_as_lines ? 'orthogonal paths forced to lines' : 'orthogonal paths may curve';
-      fittingSummary.textContent = `${curveMode} | tolerance ${Number(params.cubic_fit_tolerance).toFixed(2)} px | tangents ${Math.round(Number(params.endpoint_tangent_strictness))}% | ${orthMode}`;
+      fittingSummary.textContent = `${pipelineMode} | ${appOptimization} | ${curveMode} | tolerance ${Number(params.cubic_fit_tolerance).toFixed(2)} px | tangents ${Math.round(Number(params.endpoint_tangent_strictness))}% | ${orthMode}`;
     }
 
     function applyFittingParameters(params) {
@@ -439,6 +457,8 @@
         ...fittingDefaults,
         ...(params || {}),
       };
+      fittingInputs.analysis_mode.value = String(next.analysis_mode || 'main_app');
+      fittingInputs.main_app_enable_optimization.checked = !!next.main_app_enable_optimization;
       fittingInputs.enable_curve_fitting.checked = !!next.enable_curve_fitting;
       fittingInputs.cubic_fit_tolerance.value = Number(next.cubic_fit_tolerance);
       fittingInputs.endpoint_tangent_strictness.value = Number(next.endpoint_tangent_strictness);
@@ -871,7 +891,19 @@
         });
       }
       if (L.vertices.enabled) {
-        (layers.optimized_vertices || []).forEach(v => drawPoints(v, L.vertices.color, L.vertices.opacity, 2.4));
+        const vertexPaths = layers.optimized_vertices || [];
+        const provenancePaths = layers.optimized_vertex_provenance || [];
+        vertexPaths.forEach((v, pathIndex) => {
+          const provenance = Array.isArray(provenancePaths[pathIndex]) ? provenancePaths[pathIndex] : [];
+          const preserved = [];
+          const inferred = [];
+          v.forEach((pt, index) => {
+            if (String(provenance[index] || 'preserved').toLowerCase() === 'inferred') inferred.push(pt);
+            else preserved.push(pt);
+          });
+          drawPoints(preserved, L.vertices.color, L.vertices.opacity, 2.4);
+          drawPoints(inferred, '#f59e0b', Math.min(1, L.vertices.opacity + 0.05), 3.1);
+        });
       }
       if (L.handles.enabled) {
         drawHandles(layers.cubic_handles || [], L.handles.color, L.handles.opacity);
@@ -944,6 +976,7 @@
         `description: ${detail.description}`,
         `raw paths: ${detail.raw_path_count}, non-empty: ${detail.non_empty_path_count}`,
         `segment count: ${detail.segment_count}, segment types: ${(detail.segment_types || []).join(', ')}`,
+        `pipeline: ${fitting.analysis_mode === 'main_app' ? 'main app' : 'curve fitter only'}, main app optimization ${fitting.main_app_enable_optimization ? 'on' : 'off'}`,
         `fitting: curves ${fitting.enable_curve_fitting ? 'on' : 'off'}, tolerance ${Number(fitting.cubic_fit_tolerance || 0).toFixed(2)} px, tangents ${Math.round(Number(fitting.endpoint_tangent_strictness || 0))}%, orth-lines ${fitting.force_orthogonal_as_lines ? 'on' : 'off'}`,
         `mean dev: ${(dev.mean_deviation_px || 0).toFixed(3)} px`,
         `max dev: ${(dev.max_deviation_px || 0).toFixed(3)} px`,
@@ -1070,6 +1103,8 @@
     document.getElementById('prevFixture').addEventListener('click', () => fixtureStep(-1));
     document.getElementById('nextFixture').addEventListener('click', () => fixtureStep(1));
     queueFixtureSelect.addEventListener('change', () => updateQueueSummary());
+    fittingInputs.analysis_mode.addEventListener('input', () => renderFittingSummary(getFittingParameters()));
+    fittingInputs.main_app_enable_optimization.addEventListener('input', () => renderFittingSummary(getFittingParameters()));
     fittingInputs.enable_curve_fitting.addEventListener('input', () => renderFittingSummary(getFittingParameters()));
     fittingInputs.cubic_fit_tolerance.addEventListener('input', () => {
       updateFittingLabels();

@@ -78,12 +78,16 @@
             display: grid;
             grid-template-columns: 350px 1fr;
             min-height: 600px;
+            align-items: start;
         }
 
         .sidebar {
             background: #f8f9fa;
             border-right: 1px solid #e9ecef;
             padding: 30px;
+            position: sticky;
+            top: 20px;
+            max-height: calc(100vh - 40px);
             overflow-y: auto;
         }
 
@@ -92,6 +96,21 @@
             display: flex;
             flex-direction: column;
             gap: 20px;
+        }
+
+        .image-view-panel {
+            position: sticky;
+            top: 20px;
+            z-index: 12;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 12px;
+            margin: -12px;
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.94);
+            backdrop-filter: blur(8px);
+            box-shadow: 0 6px 18px rgba(31, 52, 73, 0.08);
         }
 
         .upload-area {
@@ -265,8 +284,9 @@
             border: 2px solid #e9ecef;
             border-radius: 10px;
             background: #f8f9fa;
-            min-height: 300px;
-            max-height: 400px;
+            min-height: 600px;
+            height: 600px;
+            max-height: 600px;
             position: relative;
             display: flex;
             align-items: center;
@@ -639,7 +659,7 @@
 
         .image-display img {
             max-width: 100%;
-            max-height: 400px;
+            max-height: 100%;
             border-radius: 8px;
             cursor: pointer;
             object-fit: contain;
@@ -778,6 +798,215 @@
             font-size: 0.9em;
             color: #666;
             margin-top: 5px;
+        }
+
+        .pruning-debug-panel {
+            margin-top: 18px;
+            padding: 16px;
+            border: 1px solid #d7e3ef;
+            border-radius: 10px;
+            background: white;
+        }
+
+        .pruning-debug-summary {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 10px 0 14px;
+        }
+
+        .pruning-debug-chip {
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: #eef5fb;
+            color: #35516b;
+            font-size: 0.82em;
+            font-weight: 600;
+        }
+
+        .pruning-debug-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 14px;
+        }
+
+        .pruning-debug-card {
+            border: 1px solid #e1e8ef;
+            border-radius: 10px;
+            padding: 12px;
+            background: #fbfdff;
+        }
+
+        .pruning-debug-card h4 {
+            font-size: 0.95em;
+            color: #22384c;
+            margin-bottom: 8px;
+        }
+
+        .pruning-debug-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+
+        .pruning-debug-meta span {
+            font-size: 0.75em;
+            color: #557089;
+            background: #edf3f9;
+            border-radius: 999px;
+            padding: 4px 8px;
+        }
+
+        .pruning-debug-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 8px;
+            font-size: 0.74em;
+            color: #536b80;
+        }
+
+        .pruning-debug-legend span {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .pruning-debug-swatch {
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            display: inline-block;
+        }
+
+        .pruning-debug-empty {
+            font-size: 0.84em;
+            color: #6b7f91;
+        }
+
+        .pruning-debug-inspector {
+            margin: 0 0 14px;
+            padding: 12px 14px;
+            border: 1px solid #d8e5f2;
+            border-radius: 10px;
+            background: linear-gradient(180deg, #f8fbfe 0%, #f3f8fc 100%);
+        }
+
+        .pruning-debug-inspector h4 {
+            margin: 0 0 8px;
+            font-size: 0.9em;
+            color: #21374b;
+        }
+
+        .pruning-debug-inspector-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin: 10px 0 8px;
+        }
+
+        .pruning-debug-inspector-meta span,
+        .pruning-debug-reason-list span {
+            font-size: 0.75em;
+            color: #47627b;
+            background: #e8f0f8;
+            border-radius: 999px;
+            padding: 4px 8px;
+        }
+
+        .pruning-debug-reason-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .pruning-debug-drop-summary {
+            margin: 8px 0 10px;
+            font-size: 0.78em;
+            color: #5b748b;
+        }
+
+        .pruning-debug-vertex {
+            cursor: pointer;
+            pointer-events: auto;
+            transition: transform 120ms ease, opacity 120ms ease;
+        }
+
+        .pruning-debug-vertex:hover {
+            opacity: 0.88;
+        }
+
+        .pruning-debug-vertex.is-selected {
+            filter: drop-shadow(0 0 0.45px rgba(0, 0, 0, 0.35));
+        }
+
+        .pruning-debug-hint {
+            font-size: 0.8em;
+            color: #617a91;
+        }
+
+        .pruning-debug-direction-chip {
+            background: #fff1db;
+            color: #9a5b00;
+        }
+
+        .pruning-debug-direction-chip.is-end {
+            background: #e6f5ea;
+            color: #1f7a42;
+        }
+
+        .pruning-vertex-list {
+            margin-top: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .pruning-vertex-item {
+            padding: 10px 12px;
+            border: 1px solid #dce6f0;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.82);
+            cursor: pointer;
+            transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+        }
+
+        .pruning-vertex-item:hover {
+            border-color: #9db8d4;
+            background: #ffffff;
+        }
+
+        .pruning-vertex-item.is-selected {
+            border-color: #2f9d5b;
+            background: #f1fbf5;
+            box-shadow: 0 0 0 1px rgba(47, 157, 91, 0.12);
+        }
+
+        .pruning-vertex-id-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-top: 8px;
+            flex-wrap: wrap;
+        }
+
+        .pruning-vertex-id {
+            flex: 1 1 280px;
+            min-width: 220px;
+            padding: 7px 9px;
+            border: 1px solid #cfdae5;
+            border-radius: 8px;
+            background: #fff;
+            color: #274057;
+            font-size: 0.76em;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        .pruning-vertex-copy-btn {
+            padding: 7px 10px;
+            font-size: 0.75em;
         }
 
         .loading {
@@ -1041,11 +1270,31 @@
             }
             
             .sidebar {
+                position: static;
+                top: auto;
+                max-height: none;
                 border-right: none;
                 border-bottom: 1px solid #e9ecef;
+                overflow-y: visible;
+            }
+
+            .image-view-panel {
+                position: static;
+                top: auto;
+                margin: 0;
+                padding: 0;
+                background: transparent;
+                backdrop-filter: none;
+                box-shadow: none;
             }
             
             .image-display img {
+                max-height: 60vh;
+            }
+
+            .image-display {
+                min-height: 60vh;
+                height: 60vh;
                 max-height: 60vh;
             }
             
@@ -1137,7 +1386,7 @@
         <div class="header">
             <div class="header-inner">
                 <h1>🎯 Centerline Extraction Tool</h1>
-                <p>Interactive centerline extraction v1.84 Nicholas Leqeta</p>
+                <p>Interactive centerline extraction v1.9 Nicholas Leqeta</p>
                 <button type="button" class="header-help-btn" id="helpBtn">? Help</button>
             </div>
         </div>
@@ -1180,10 +1429,21 @@
                         <small style="color: #666; font-size: 0.8em;">Sensitivity of the detection.</small>
                     </div>
                     <div class="parameter" style="margin-top: 10px;">
-                        <label>Min Path Length (px) <span class="range-value" id="minPathLengthValue">3</span></label>
-                        <input type="range" id="minPathLength" min="1" max="20" step="1" value="3">
+                        <label>Min Path Length (px) <span class="range-value" id="minPathLengthValue">2</span></label>
+                        <input type="range" id="minPathLength" min="1" max="20" step="1" value="2">
                         <button class="btn btn-secondary" id="autoDetectMinLengthBtn" onclick="autoDetectMinPathLength()" style="margin-top: 8px; padding: 6px 12px; font-size: 14px; display: none;" disabled>🎯 Auto-Detect</button>
                         <small style="color: #666; font-size: 0.8em;">Increase to ignore shorter paths (dots).</small>
+                    </div>
+                    <div class="parameter" style="margin-top: 10px;">
+                        <label>
+                            <input type="checkbox" id="enablePruning">
+                            Path Simplification
+                        </label>
+                        <small style="color: #666; font-size: 0.8em;">When enabled, prune redundant vertices after length filtering to simplify extracted centerlines.(Probably not helpful if you are going to use 'Enable Optimisation')</small>
+                    </div>
+                    <div class="parameter" style="margin-top: 10px;">
+                        <button class="btn btn-secondary" id="autoTuneBtn" onclick="autoTuneExtractionParameters()" style="padding: 6px 12px; font-size: 14px;" disabled>⚡ Auto-Tune</button>
+                        <small style="display:block; color: #666; font-size: 0.8em; margin-top: 6px;">Samples the current image or crop region to set threshold and minimum path length.</small>
                     </div>
                     <div style="margin-top: 10px;">
                         <button type="button" id="detectionAdvancedToggleBtn" onclick="toggleDetectionAdvancedSettings()" style="background: none; border: none; color: #4facfe; cursor: pointer; font-size: 0.85em; padding: 0;">⚙️ Advanced settings ▼</button>
@@ -1210,7 +1470,42 @@
                     </div>
                 </div>
 
-                <div class="parameter-group" id="optimizationParametersGroup">
+                <div class="parameter-group" id="exportFittingGroup">
+                    <h3>New Optimisation</h3>
+                    <div class="parameter">
+                        <label>
+                            <input type="checkbox" id="enablePostFitExport">
+                            Enable Optimisation
+                        </label>
+                        <small style="color: #666; font-size: 0.8em;">Apply smoothing and SVG line/curve fitting.</small>
+                    </div>
+                    <div class="parameter" id="sourceSmoothingWrap">
+                        <label>Source Smoothing <span class="range-value" id="sourceSmoothingValue">95</span></label>
+                        <input type="range" id="sourceSmoothing" min="0" max="100" step="1" value="95">
+                        <small style="color: #666; font-size: 0.8em;">Smoothing to remove staircase kinks before SVG line/curve fitting.</small>
+                    </div>
+                    <div class="parameter" id="enableCurveFittingWrap">
+                        <label>
+                            <input type="checkbox" id="enableCurveFitting" checked>
+                            Enable Curve Fitting
+                        </label>
+                        <small style="color: #666; font-size: 0.8em;">Enable to emit fitted curves</small>
+                    </div>
+                    <div class="parameter" id="cubicFitToleranceWrap">
+                        <label>Cubic Fit Tolerance (px) <span class="range-value" id="cubicFitToleranceValue">1.0</span></label>
+                        <input type="range" id="cubicFitTolerance" min="0.35" max="4.0" step="0.05" value="1.0">
+                        <small style="color: #666; font-size: 0.8em;">Lower values keep tighter curves; higher values reduce cubic segment count for smaller SVGs.</small>
+                    </div>
+                    <div class="parameter" id="forceOrthogonalAsLinesWrap">
+                        <label>
+                            <input type="checkbox" id="forceOrthogonalAsLines">
+                            Force Orthogonal Paths As Lines
+                        </label>
+                        <small style="color: #666; font-size: 0.8em;">When enabled, axis-aligned and corner-like paths are always output as straight line segments instead of cubic curves.</small>
+                    </div>
+                </div>
+
+                <div class="parameter-group" id="optimizationParametersGroup" style="display: none;" aria-hidden="true">
                     <h3>🎨 Optimisation</h3>
                     <div class="parameter">
                         <label>Merge Gap (px) <span class="range-value" id="mergeGapValue">25</span></label>
@@ -1260,47 +1555,31 @@
                             <input type="range" id="shortPathProtection" min="0" max="100" step="1" value="0">
                             <small style="color: #666; font-size: 0.8em;">Higher values keep more vertices on short jagged paths.</small>
                         </div>
+                        <div style="margin: 14px 0 10px; font-size: 0.75em; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #5a7087;">Debug</div>
                         <div class="parameter">
                             <label>
-                                <input type="checkbox" id="enableCurveFitting">
-                                Enable Curve Fitting
+                                <input type="checkbox" id="showPruningDebugGrid">
+                                Show Pruning Debug Bitmap
                             </label>
-                            <small style="color: #666; font-size: 0.8em;">Enable to emit fitted curves, still needs work so you may get a few crazy loops!</small>
-                        </div>
-                        <div class="parameter" id="cubicFitToleranceWrap">
-                            <label>Cubic Fit Tolerance (px) <span class="range-value" id="cubicFitToleranceValue">1.0</span></label>
-                            <input type="range" id="cubicFitTolerance" min="0.35" max="4.0" step="0.05" value="1.0">
-                            <small style="color: #666; font-size: 0.8em;">Lower values keep tighter curves; higher values reduce cubic segment count for smaller SVGs.</small>
-                        </div>
-                        <div class="parameter" id="endpointTangentStrictnessWrap">
-                            <label>Endpoint Tangent Strictness (%) <span class="range-value" id="endpointTangentStrictnessValue">85</span></label>
-                            <input type="range" id="endpointTangentStrictness" min="0" max="100" step="1" value="85">
-                            <small style="color: #666; font-size: 0.8em;">Higher values force start/end cubic handles to follow the extracted path direction more strongly (no golden/fixture data used).</small>
-                        </div>
-                        <div class="parameter" id="forceOrthogonalAsLinesWrap">
-                            <label>
-                                <input type="checkbox" id="forceOrthogonalAsLines">
-                                Force Orthogonal Paths As Lines
-                            </label>
-                            <small style="color: #666; font-size: 0.8em;">When enabled, axis-aligned and corner-like paths are always output as straight line segments instead of cubic curves.</small>
+                            <small style="color: #666; font-size: 0.8em;">Debug only. Renders a color-coded bitmap of kept and dropped pruning pixels in the results area.</small>
                         </div>
                     </div>
                 </div>
 
 
 
-                <div class="parameter-group">
+                <div class="parameter-group" style="display: none;" aria-hidden="true">
                     <h3>�📊 Output Options</h3>
                     <div class="parameter">
                         <label>
-                            <input type="checkbox" id="enableOptimization" checked>
+                            <input type="checkbox" id="enableOptimization">
                             Enable Path Optimisation
                         </label>
                         <small style="color: #666; font-size: 0.8em;">Fits a smooth path with options</small>
                     </div>
                     <div class="parameter">
                         <label>
-                            <input type="checkbox" id="showPreOptimization">
+                            <input type="checkbox" id="showPreOptimization" checked>
                             Include Unoptimised Paths
                         </label>
                         <small style="color: #666; font-size: 0.8em;">Include the magenta paths in the SVG</small>
@@ -1315,24 +1594,25 @@
                 </div>
 
                 <div class="action-buttons">
-                    <button class="btn" id="processBtn" onclick="processImage()" disabled>🚀 Process</button>
-                    <button class="btn btn-secondary" id="autoProcessBtn" onclick="toggleAutoProcess()">🔄 Auto</button>
                     <button class="btn btn-secondary" id="resetBtn" onclick="resetApplicationState()">↺ Reset</button>
                     <button class="btn btn-warning" id="stopOptBtn" onclick="stopOptimization()" style="display: none;">⏹️ Stop Optimization</button>
                 </div>
             </div>
 
             <div class="content-area">
+                <div class="image-view-panel">
                 <div class="image-display-meta" id="imageDisplayMeta"></div>
                 <div class="image-view-actions">
+                    <button class="image-view-reset-btn" id="zoomToCropBtn" onclick="focusImageViewportOnActiveCrop()">✂ Zoom to Crop</button>
                     <button class="image-view-reset-btn" id="resetImageViewBtn" onclick="resetImageViewport()">🔍 Reset View</button>
                 </div>
                 
                 <div class="image-display" id="imageDisplay">
-                    <div style="text-align: center; color: #999;">
-                        <div style="font-size: 3em; margin-bottom: 10px;">🖼️</div>
-                        <div>Upload an image to start</div>
+                    <div id="emptyImageState" style="text-align: center; color: #999;">
+                        <div id="emptyImageStateIcon" style="font-size: 3em; margin-bottom: 10px;">🖼️</div>
+                        <div id="emptyImageStateText">Upload an image to start</div>
                     </div>
+                </div>
                 </div>
 
                 <!-- Modal for full-size image viewing -->
@@ -1346,7 +1626,7 @@
                     <div id="loadingText">Processing centerlines...</div>
                     <div id="loadingDetails" style="font-size: 0.9em; color: #666; margin-top: 10px;"></div>
                     <div class="action-buttons" id="loadingActionButtons" style="display: none; margin-top: 12px; justify-content: center;">
-                        <button class="btn btn-warning" id="stopAutoTuneBtn" onclick="stopAutoTune()">Skip Auto-Tune</button>
+                        <button class="btn btn-warning" id="stopAutoTuneBtn" onclick="stopAutoTune()">Cancel Auto-Tune</button>
                     </div>
                     <div class="auto-tune-progress" id="autoTuneProgressWrap">
                         <div class="auto-tune-progress-track">
@@ -1366,23 +1646,19 @@
                         <button class="btn btn-secondary" id="resampleTileTuneBtn" onclick="resampleTileTuning()">🔁 Resample</button>
                     </div>
                     <div class="tile-tune-actions">
-                        <button class="btn" id="acceptTileTuneBtn" onclick="acceptTileTuningAndContinue()">✅ Accept and Continue</button>
+                        <button class="btn" id="acceptTileTuneBtn" onclick="acceptTileTuningAndContinue()">✅ Ok</button>
                     </div>
                 </div>
 
                 <div class="results-panel" id="resultsPanel" style="display: none;">
                     <div class="results-grid" id="resultsGrid"></div>
+                    <div class="pruning-debug-panel" id="pruningDebugPanel" style="display: none;"></div>
                 </div>
 
                 <div class="svg-display" id="svgDisplay" style="display: none;"></div>
 
-                <div class="action-buttons" id="svgActionButtons">
-                    <button class="btn btn-secondary" id="downloadBtn" onclick="downloadSVG()" style="display: none;">💾 Download SVG</button>
-                    <a class="btn btn-secondary drag-export-chip" id="dragSvgBtn" style="display: none;" href="#" download draggable="true">🧲 Drag SVG File</a>
-                    <button class="btn btn-secondary" id="resetSvgViewBtn" onclick="resetSvgViewport()" style="display: none;">🔍 Reset View</button>
-                </div>
+                <div class="action-buttons" id="svgActionButtons" style="display: none;"></div>
 
-                <div class="opt-status-panel" id="optStatusPanel" style="display: none;"></div>
             </div>
         </div>
     </div>
@@ -1397,8 +1673,8 @@
         <div class="help-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle">
             <div class="help-modal-header">
                 <div>
-                    <h2 class="help-modal-title" id="helpModalTitle">Control Reference</h2>
-                    <p class="help-modal-subtitle">Detailed guidance for the main controls and workflow steps in the current UI.</p>
+                    <h2 class="help-modal-title" id="helpModalTitle">Quick Guide</h2>
+                    <p class="help-modal-subtitle">How the current single-view workflow, crop tools, tuning, and SVG export behave.</p>
                 </div>
                 <button type="button" class="help-modal-close" id="helpModalClose" aria-label="Close help">&times;</button>
             </div>
@@ -1411,12 +1687,30 @@
                             <p class="help-control-desc">Upload the source image or PDF you want to trace. Drag-and-drop onto the upload area works the same as using the file picker.</p>
                         </div>
                         <div class="help-control-item">
-                            <p class="help-control-name">Show Raw Image</p>
-                            <p class="help-control-desc">Switches the preview between the untouched upload and the normalized image used for detection. Use it to compare whether preprocessing is helping or harming the trace.</p>
-                        </div>
-                        <div class="help-control-item">
                             <p class="help-control-name">Image Opacity</p>
                             <p class="help-control-desc">Fades the background image without changing the traced paths. Lower values make the magenta and blue overlays easier to inspect.</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="help-section">
+                    <h3 class="help-section-title">Viewer And Crop</h3>
+                    <div class="help-control-list">
+                        <div class="help-control-item">
+                            <p class="help-control-name">Single Viewer</p>
+                            <p class="help-control-desc">The main viewer shows everything in one place: the image, the raw magenta centerlines, and the blue fitted export overlay when optimisation is enabled.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Crop</p>
+                            <p class="help-control-desc">Turn Crop on from the viewer header to place an editable crop frame immediately. If you are already zoomed into a region, the crop starts from the current view.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Zoom To Crop</p>
+                            <p class="help-control-desc">Centers and zooms the viewer on the active crop box. Useful for checking a crop region before running detection or export.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Reset View</p>
+                            <p class="help-control-desc">Restores the default viewer framing after panning or zooming. Turning Crop off also clears the crop and resets the image view.</p>
                         </div>
                     </div>
                 </section>
@@ -1427,10 +1721,6 @@
                         <div class="help-control-item">
                             <p class="help-control-name">Dark Threshold</p>
                             <p class="help-control-desc">Controls how dark a pixel must be before it is treated as part of a line. Raise it to ignore faint background texture; lower it to recover lighter strokes.</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Auto-Detect Threshold</p>
-                            <p class="help-control-desc">Asks the app to estimate a useful threshold from the uploaded image. It is a starting point, not a final answer, so fine tuning may still be needed.</p>
                         </div>
                         <div class="help-control-item">
                             <p class="help-control-name">Normalization Mode</p>
@@ -1445,8 +1735,12 @@
                             <p class="help-control-desc">Filters out short detected paths before optimization. Raise it to drop dots and tiny fragments; lower it only when genuine short strokes are being lost.</p>
                         </div>
                         <div class="help-control-item">
-                            <p class="help-control-name">Auto-Detect Min Path Length</p>
-                            <p class="help-control-desc">Lets the app suggest a minimum path length based on the current image. Useful when noise level changes a lot between jobs.</p>
+                            <p class="help-control-name">Path Simplification</p>
+                            <p class="help-control-desc">Enables the pruning pass that removes redundant vertices after minimum-length filtering. Turn it off if you want to inspect the rawer detected centerlines before simplification.</p>
+                        </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Auto-Tune</p>
+                            <p class="help-control-desc">Samples the current image or crop region and suggests threshold and minimum path length settings. Use it when the input quality changes from file to file.</p>
                         </div>
                     </div>
                 </section>
@@ -1455,70 +1749,24 @@
                     <h3 class="help-section-title">Optimisation</h3>
                     <div class="help-control-list">
                         <div class="help-control-item">
-                            <p class="help-control-name">Merge Gap</p>
-                            <p class="help-control-desc">Maximum endpoint distance for bridging nearby path ends during the merge stage. Increase it when lines have small interruptions; decrease it if separate features start joining together.</p>
+                            <p class="help-control-name">Enable Optimisation</p>
+                            <p class="help-control-desc">Turns on smoothing and fitted SVG export. When it is off, the viewer and download stay with the raw magenta extraction only (use LightBurn Optimisation to smooth and simplify).</p>
                         </div>
                         <div class="help-control-item">
-                            <p class="help-control-name">Angle Priority</p>
-                            <p class="help-control-desc">Biases the merge stage toward endpoints that continue in a similar direction. Higher values favor smoother continuation over pure nearest-gap bridging.</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Enable Long Fragment Merge Pass</p>
-                            <p class="help-control-desc">Adds a slower second merge pass that can connect already-long fragments after the fast pass finishes. Leave it off for speed; turn it on only when obvious long breaks are still not joining.</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Tolerance</p>
-                            <p class="help-control-desc">Sets the overall simplification looseness. Higher values allow bigger geometric shortcuts and usually produce fewer segments.</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Simplification Strength</p>
-                            <p class="help-control-desc">Controls how hard the optimizer tries to reduce vertices overall. It affects how aggressively the blue output departs from the raw magenta path.</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Line Fit Strength</p>
-                            <p class="help-control-desc">Controls how strongly the optimizer prefers long straight segments. Raise it when staircase-like lines should collapse to cleaner segments.</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Short Path Protection</p>
-                            <p class="help-control-desc">Preserves detail on short or jagged paths that would otherwise collapse too hard. Higher values keep more vertices on small features.</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Score Preservation</p>
-                            <p class="help-control-desc">Minimum retained path score for accepting a simplification. Higher values make the optimizer more conservative and less willing to reshape the path.</p>
+                            <p class="help-control-name">Source Smoothing</p>
+                            <p class="help-control-desc">Smooths the detected path before SVG fitting. Raise it to reduce staircase jitter; lower it if corners start rounding more than you want.</p>
                         </div>
                         <div class="help-control-item">
                             <p class="help-control-name">Enable Curve Fitting</p>
-                            <p class="help-control-desc">Turns cubic fitting back on for SVG output. Leave it off while tuning line quality, then enable it if you want smoother bezier-style export.</p>
+                            <p class="help-control-desc">Allows the fitted export to use cubic curves. It is only active when optimisation is enabled.</p>
                         </div>
                         <div class="help-control-item">
                             <p class="help-control-name">Cubic Fit Tolerance</p>
-                            <p class="help-control-desc">Controls how tightly cubic segments must follow the optimized path. Lower values preserve more shape detail, while higher values reduce cubic count.</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Endpoint Tangent Strictness</p>
-                            <p class="help-control-desc">Controls how strongly fitted cubic handles follow the local direction of the extracted path at the start and end. Higher values keep endpoints aligned more literally.</p>
+                            <p class="help-control-desc">Controls how tightly cubic segments follow the smoothed path. Lower values preserve more detail; higher values reduce segment count and file size.</p>
                         </div>
                         <div class="help-control-item">
                             <p class="help-control-name">Force Orthogonal Paths As Lines</p>
-                            <p class="help-control-desc">Keeps axis-aligned and corner-like paths as line segments instead of curves. Useful for technical drawings, grids, and anything that should stay crisp and geometric.</p>
-                        </div>
-                    </div>
-                </section>
-
-                <section class="help-section">
-                    <h3 class="help-section-title">Output Options</h3>
-                    <div class="help-control-list">
-                        <div class="help-control-item">
-                            <p class="help-control-name">Enable Path Optimisation</p>
-                            <p class="help-control-desc">Toggles the blue-path optimization stage. When disabled, the app keeps the raw detected paths and forces the unoptimized layer to stay visible.</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Include Unoptimised Paths</p>
-                            <p class="help-control-desc">Adds the magenta pre-optimization paths to the SVG. It is mainly a debugging and comparison aid when checking what the optimizer changed.</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Include Original Image</p>
-                            <p class="help-control-desc">Embeds the source bitmap in the SVG export. Leave it on for review documents; turn it off for cleaner production vector output.</p>
+                            <p class="help-control-desc">Keeps axis-aligned and corner-like features as straight line segments instead of curves. Useful for technical drawings and rectilinear geometry.</p>
                         </div>
                     </div>
                 </section>
@@ -1527,24 +1775,8 @@
                     <h3 class="help-section-title">Actions</h3>
                     <div class="help-control-list">
                         <div class="help-control-item">
-                            <p class="help-control-name">Process</p>
-                            <p class="help-control-desc">Runs detection and starts optimization using the current settings. Use this when Auto is off or when you want a deliberate rerun after several changes.</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Auto</p>
-                            <p class="help-control-desc">Automatically reprocesses after parameter changes. Keep it on for quick iteration and turn it off when you want to batch several adjustments first.</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Skip Auto-Tune</p>
-                            <p class="help-control-desc">Stops the upload-time auto-tune pass and keeps the best detection settings found so far. Use it if the suggested settings are already good enough or you want to take over manually.</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Reset</p>
-                            <p class="help-control-desc">Returns the session UI to its baseline state. Use it to clear the current job and undo exploratory tuning without reloading the page.</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Stop Optimization</p>
-                            <p class="help-control-desc">Stops a running optimization pass and keeps the current progressive result available in the view and download path. Useful when a job is taking too long or the intermediate result is already good enough.</p>
+                            <p class="help-control-name">Auto-Tune</p>
+                            <p class="help-control-desc">Starts a focused search for better threshold and minimum path length values using the current image or crop region.</p>
                         </div>
                     </div>
                 </section>
@@ -1554,29 +1786,21 @@
                     <div class="help-control-list">
                         <div class="help-control-item">
                             <p class="help-control-name">Auto Detection Tuning Review</p>
-                            <p class="help-control-desc">After upload, the app can open a review panel that previews threshold and minimum-length changes on sampled busy regions before the full run starts. Use it to confirm that the suggested detection settings look right.</p>
+                            <p class="help-control-desc">Auto-Tune can open a review panel that previews threshold and minimum-length changes on sampled busy regions before the full image run continues.</p>
                         </div>
                         <div class="help-control-item">
-                            <p class="help-control-name">Accept and Continue</p>
-                            <p class="help-control-desc">Closes the tuning review and starts processing the full image with the currently selected threshold and minimum path length.</p>
+                            <p class="help-control-name">Ok</p>
+                            <p class="help-control-desc">Accepts the shown tuning values and continues with full-image processing. If you do nothing, the review auto-accepts after about one second.</p>
                         </div>
                     </div>
                 </section>
 
                 <section class="help-section">
-                    <h3 class="help-section-title">SVG View And Export</h3>
+                    <h3 class="help-section-title">Export</h3>
                     <div class="help-control-list">
                         <div class="help-control-item">
                             <p class="help-control-name">Download SVG</p>
-                            <p class="help-control-desc">Downloads the current SVG render to disk using the current output settings. This is the reliable export path on every browser the app supports.</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Drag SVG File</p>
-                            <p class="help-control-desc">Lets you drag the generated SVG out of the browser, but only on Chromium-family browsers where that drag payload is supported. On other browsers, download the SVG first and drag the saved file from your file manager.</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Reset View Buttons</p>
-                            <p class="help-control-desc">The image preview and SVG preview each have their own Reset View button. Use them to restore the default framing after panning or zooming deeply into either panel.</p>
+                            <p class="help-control-desc">Exports the current result from the results panel. With optimisation off, the SVG matches the raw magenta extraction. With optimisation on, the export includes the fitted blue output.</p>
                         </div>
                     </div>
                 </section>
@@ -1604,18 +1828,28 @@
             'rdpTolerance',
             'simplificationStrength',
             'lineFitStrength',
+            'enablePostFitExport',
+            'sourceSmoothing',
             'shortPathProtection',
             'scorePreservation',
             'enableCurveFitting',
             'cubicFitTolerance',
-            'endpointTangentStrictness',
             'forceOrthogonalAsLines',
+            'showPruningDebugGrid',
             'minPathLength',
+            'enablePruning',
             'enableOptimization',
             'showPreOptimization',
             'includeImage',
             'normalizationMode',
             'normalizationSensitivity'
+        ]);
+        const svgRenderOnlyControlIds = new Set([
+            'enablePostFitExport',
+            'sourceSmoothing',
+            'enableCurveFitting',
+            'cubicFitTolerance',
+            'forceOrthogonalAsLines'
         ]);
         const defaultParameterState = getParameters();
         const initialImageDisplayMarkup = document.getElementById('imageDisplay').innerHTML;
@@ -1624,11 +1858,18 @@
         let requestEpoch = 0;
         let autoDetectProgressInterval = null;
         let autoTuneProgressInterval = null;
+        let processStageRequestInFlight = false;
+        let optimizationProgressRequestInFlight = false;
         let autoTuneOverlayLastFrameId = 0;
         let lastAutoTuneSampleMetadata = null;
         let lastLiveOverlayProgressData = null;
         let lastMagentaSkeletonPaths = null;
+        let lastPruningDebugData = null;
         let currentUploadFileName = null;
+        let autoDebugFileMode = false;
+        let selectedPruningPath = null;
+        let selectedPruningVertexIndex = null;
+        let lastPruningDebugLogSignature = null;
         let downloadSvgClickLockUntil = 0;
         let downloadSvgFrame = null;
         let lastRenderedSvgContent = null;
@@ -1710,6 +1951,7 @@
             previewToken: 0,
             previewInFlight: false,
             debounceTimer: null,
+            autoAcceptTimer: null,
             lastTileData: null,
             lastSourceShape: null,
             lastPreviewRuntimeMs: null,
@@ -1738,18 +1980,612 @@
         function clearMagentaSkeletonOverlay() {
             const existing = document.getElementById('magentaSkeletonOverlay');
             if (existing) existing.remove();
+            const selectable = document.getElementById('selectablePruningOverlay');
+            if (selectable) selectable.remove();
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function isDebugUploadFilename(filename) {
+            const cleaned = String(filename || '').trim().toLowerCase();
+            return cleaned.includes('_debug');
+        }
+
+        function setCollapsiblePanelState(panelId, buttonId, open) {
+            const panel = document.getElementById(panelId);
+            const button = document.getElementById(buttonId);
+            if (!panel || !button) {
+                return;
+            }
+            panel.style.display = open ? 'block' : 'none';
+            button.textContent = open ? '⚙️ Advanced settings ▲' : '⚙️ Advanced settings ▼';
+        }
+
+        function applyDebugFileModeToControls() {
+            autoDebugFileMode = isDebugUploadFilename(currentUploadFileName);
+
+            const showPruningDebugGrid = document.getElementById('showPruningDebugGrid');
+            if (showPruningDebugGrid && autoDebugFileMode) {
+                showPruningDebugGrid.checked = true;
+            }
+
+            if (autoDebugFileMode) {
+                setCollapsiblePanelState('detectionAdvancedSettings', 'detectionAdvancedToggleBtn', true);
+                setCollapsiblePanelState('advancedSettings', 'advancedToggleBtn', true);
+            }
+
+            handleOptimizationToggle();
+        }
+
+        function getPruningInspectorDefaultHtml() {
+            return `
+                <div class="pruning-debug-inspector" id="pruningDebugInspector">
+                    <h4>Selected Path</h4>
+                    <div class="pruning-debug-hint">Click any magenta or blue path on the main detection image to inspect how pruning evaluated that path and its vertices.</div>
+                </div>
+            `;
+        }
+
+            syncFittedSvgOverlayPosition();
+        function findPruningPathDebug(pathIndex) {
+            const paths = Array.isArray(lastPruningDebugData && lastPruningDebugData.paths) ? lastPruningDebugData.paths : [];
+            return paths.find((item) => Number(item && item.path_index) === Number(pathIndex)) || null;
+        }
+
+        function getPruningReasonLabel(reason) {
+            const labels = {
+                terminal_spurs_removed: 'terminal spurs removed',
+                no_terminal_spur_detected: 'no terminal spur detected',
+                straightened_runs_collapsed: 'straightened run collapsed',
+                no_straightened_run_detected: 'no straightened run detected',
+                rdp_reduced_non_anchor_vertices: 'RDP removed non-anchor vertices',
+                rdp_kept_all_anchors: 'RDP kept all anchors',
+                corner_stub_collapse_applied: 'corner stub collapse applied',
+                no_corner_stub_collapse: 'no corner stub collapse',
+                minimum_output_guard_prevented_reduction: 'minimum output guard prevented reduction',
+                critical_turns_preserved_shape: 'critical turns preserved the shape',
+                closed_loop_anchors_preserved_shape: 'closed-loop anchors preserved the shape',
+                pruning_thresholds_not_exceeded: 'pruning thresholds were not exceeded',
+                geometry_rejection_restored_candidate: 'geometry rejection restored the candidate',
+                terminal_spur: 'terminal spur',
+                straightened_run: 'straightened run',
+                non_anchor_reduction: 'non-anchor reduction',
+                corner_stub_collapse: 'corner stub collapse',
+                final_prune: 'final prune',
+                endpoint: 'endpoint',
+                critical_turn: 'critical turn',
+                rdp_anchor: 'RDP anchor',
+                minimum_output_anchor: 'minimum output anchor',
+                closed_loop_anchor: 'closed-loop anchor',
+                line_span_guard: 'line-span guard',
+                inferred_corner: 'inferred corner',
+                preserved_geometry: 'preserved geometry',
+                below_deviation_threshold: 'below deviation threshold',
+                above_deviation_threshold: 'above deviation threshold',
+                meets_turn_threshold: 'meets turn threshold',
+                below_turn_threshold: 'below turn threshold',
+                retained_by_rdp_anchor: 'retained by RDP anchor',
+                not_selected_as_rdp_anchor: 'not selected as RDP anchor',
+                corner_reconstruction_inserted_vertex: 'corner reconstruction inserted vertex',
+            };
+            return labels[String(reason || '')] || String(reason || '').replace(/_/g, ' ');
+        }
+
+        function getPruningPathStateLabel(state) {
+            const key = String(state || 'unknown').toLowerCase();
+            if (key === 'pruned') return 'Pruned';
+            if (key === 'unchanged') return 'Unchanged';
+            if (key === 'rejected') return 'Rejected candidate';
+            return 'Unknown';
+        }
+
+        function formatPruningVertexCoordinate(value) {
+            const numeric = Number(value || 0);
+            return Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(1);
+        }
+
+        function findPruningVertexGuard(pathDebug, vertexIndex) {
+            const guards = Array.isArray(pathDebug && pathDebug.kept_vertex_guards) ? pathDebug.kept_vertex_guards : [];
+            return guards.find((guard) => Number(guard && guard.point_index) === Number(vertexIndex)) || null;
+        }
+
+        function getDefaultPruningVertexIndex(pathDebug) {
+            const guards = Array.isArray(pathDebug && pathDebug.kept_vertex_guards) ? pathDebug.kept_vertex_guards : [];
+            if (!guards.length) {
+                return null;
+            }
+            return Number(guards[0] && guards[0].point_index);
+        }
+
+        function normalizeSelectedPruningVertexIndex(pathDebug) {
+            const guards = Array.isArray(pathDebug && pathDebug.kept_vertex_guards) ? pathDebug.kept_vertex_guards : [];
+            if (!guards.length) {
+                selectedPruningVertexIndex = null;
+                return null;
+            }
+
+            const existing = findPruningVertexGuard(pathDebug, selectedPruningVertexIndex);
+            if (existing) {
+                selectedPruningVertexIndex = Number(existing.point_index);
+                return selectedPruningVertexIndex;
+            }
+
+            selectedPruningVertexIndex = getDefaultPruningVertexIndex(pathDebug);
+            return selectedPruningVertexIndex;
+        }
+
+        function buildPruningVertexIdentifier(pathDebug, guard) {
+            const point = Array.isArray(guard && guard.point) ? guard.point : [0, 0];
+            const guards = Array.isArray(guard && guard.guards) ? guard.guards : [];
+            const criteria = Array.isArray(guard && guard.criteria_explanations) ? guard.criteria_explanations : [];
+            const pathState = String(pathDebug && pathDebug.path_state || 'unknown');
+            const guardSummary = guards.length
+                ? guards.map((label) => String(label || '')).join(',')
+                : 'preserved_geometry';
+            const criteriaSummary = criteria.length
+                ? criteria.map((label) => String(label || '')).join(',')
+                : 'none';
+            return [
+                `path=${formatIntegerValue(Number(pathDebug && pathDebug.path_index || 0) + 1)}`,
+                `vertex=${formatIntegerValue(Number(guard && guard.point_index || 0) + 1)}`,
+                `row=${formatPruningVertexCoordinate(point[0])}`,
+                `col=${formatPruningVertexCoordinate(point[1])}`,
+                `path_state=${pathState}`,
+                `provenance=${String(guard && guard.provenance || 'preserved')}`,
+                `guards=${guardSummary}`,
+                `criteria=${criteriaSummary}`,
+            ].join(' ');
+        }
+
+        function copyTextToClipboard(text, successMessage = 'Copied to clipboard.') {
+            const value = String(text || '');
+            if (!value) {
+                return Promise.resolve(false);
+            }
+
+            if (navigator.clipboard && window.isSecureContext) {
+                return navigator.clipboard.writeText(value)
+                    .then(() => {
+                        showProgressMessage(successMessage, 'success');
+                        return true;
+                    })
+                    .catch(() => false);
+            }
+
+            const textarea = document.createElement('textarea');
+            textarea.value = value;
+            textarea.setAttribute('readonly', 'readonly');
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+
+            let copied = false;
+            try {
+                copied = document.execCommand('copy');
+            } catch (_error) {
+                copied = false;
+            }
+            textarea.remove();
+
+            if (copied) {
+                showProgressMessage(successMessage, 'success');
+            } else {
+                showProgressMessage('Could not copy the vertex identifier.', 'warning');
+            }
+            return Promise.resolve(copied);
+        }
+
+        function scrollSelectedPruningVertexIntoView() {
+            const selectedItem = document.querySelector('.pruning-vertex-item.is-selected');
+            if (selectedItem && typeof selectedItem.scrollIntoView === 'function') {
+                selectedItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+        }
+
+        function selectPruningPath(pathIndex, options = {}) {
+            const { preferredVertexIndex = null, scrollVertexIntoView = false } = options;
+            const numericPathIndex = Number(pathIndex);
+            const pathChanged = Number(selectedPruningPath) !== numericPathIndex;
+            selectedPruningPath = numericPathIndex;
+
+            if (preferredVertexIndex !== null) {
+                selectedPruningVertexIndex = Number(preferredVertexIndex);
+            } else if (pathChanged) {
+                selectedPruningVertexIndex = null;
+            }
+
+            renderSelectedPruningPathInspector();
+            renderSelectablePruningOverlay();
+
+            if (scrollVertexIntoView) {
+                requestAnimationFrame(() => {
+                    scrollSelectedPruningVertexIntoView();
+                });
+            }
+        }
+
+        function selectPruningVertex(pathIndex, vertexIndex, options = {}) {
+            selectedPruningVertexIndex = Number(vertexIndex);
+            selectPruningPath(pathIndex, {
+                preferredVertexIndex: vertexIndex,
+                scrollVertexIntoView: Boolean(options.scrollVertexIntoView),
+            });
+        }
+
+        function handlePruningInspectorClick(event) {
+            const copyButton = event.target instanceof Element ? event.target.closest('[data-copy-pruning-vertex-id]') : null;
+            if (copyButton) {
+                event.preventDefault();
+                event.stopPropagation();
+                copyTextToClipboard(
+                    String(copyButton.getAttribute('data-copy-pruning-vertex-id') || ''),
+                    'Vertex identifier copied.'
+                );
+                return;
+            }
+
+            const vertexItem = event.target instanceof Element ? event.target.closest('[data-pruning-vertex-index]') : null;
+            if (!vertexItem || selectedPruningPath === null) {
+                return;
+            }
+
+            selectPruningVertex(selectedPruningPath, Number(vertexItem.getAttribute('data-pruning-vertex-index')), {
+                scrollVertexIntoView: false,
+            });
+        }
+
+        function handlePruningInspectorKeydown(event) {
+            const vertexItem = event.target instanceof Element ? event.target.closest('[data-pruning-vertex-index]') : null;
+            if (!vertexItem || selectedPruningPath === null) {
+                return;
+            }
+
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                selectPruningVertex(selectedPruningPath, Number(vertexItem.getAttribute('data-pruning-vertex-index')), {
+                    scrollVertexIntoView: false,
+                });
+            }
+        }
+
+        function buildPruningVertexListHtml(pathDebug) {
+            const guards = Array.isArray(pathDebug && pathDebug.kept_vertex_guards) ? pathDebug.kept_vertex_guards : [];
+            if (!guards.length) {
+                return '<div class="pruning-debug-hint">No kept-vertex diagnostics were recorded for this path.</div>';
+            }
+
+            const selectedVertex = normalizeSelectedPruningVertexIndex(pathDebug);
+
+            const rows = guards.map((guard) => {
+                const point = Array.isArray(guard.point) ? guard.point : [0, 0];
+                const guardLabels = Array.isArray(guard.guards) ? guard.guards : [];
+                const criteriaLabels = Array.isArray(guard.criteria_explanations) ? guard.criteria_explanations : [];
+                const guardPointIndex = Number(guard.point_index || 0);
+                const isSelected = guardPointIndex === Number(selectedVertex);
+                const isStartVertex = guardPointIndex === 0;
+                const isEndVertex = guardPointIndex === Math.max(0, guards.length - 1);
+                const vertexIdentifier = buildPruningVertexIdentifier(pathDebug, guard);
+                return `
+                    <div class="pruning-vertex-item${isSelected ? ' is-selected' : ''}" data-pruning-vertex-index="${guardPointIndex}" role="button" tabindex="0" aria-pressed="${isSelected ? 'true' : 'false'}">
+                        <div class="pruning-debug-inspector-meta">
+                            <span>vertex ${formatIntegerValue(Number(guard.point_index || 0) + 1)}</span>
+                            <span>row ${formatPixelValue(point[0])}</span>
+                            <span>col ${formatPixelValue(point[1])}</span>
+                            <span>${escapeHtml(String(guard.provenance || 'preserved'))}</span>
+                            ${isStartVertex ? '<span class="pruning-debug-direction-chip">start</span>' : ''}
+                            ${isEndVertex ? '<span>end</span>' : ''}
+                        </div>
+                        <div class="pruning-vertex-id-row">
+                            <input class="pruning-vertex-id" type="text" readonly value="${escapeHtml(vertexIdentifier)}" aria-label="Vertex identifier" onclick="this.select();">
+                            <button type="button" class="btn btn-secondary pruning-vertex-copy-btn" data-copy-pruning-vertex-id="${escapeHtml(vertexIdentifier)}">Copy ID</button>
+                        </div>
+                        <div class="pruning-debug-hint">Guards</div>
+                        <div class="pruning-debug-reason-list">${guardLabels.map((label) => `<span>${escapeHtml(getPruningReasonLabel(label))}</span>`).join('') || '<span>preserved geometry</span>'}</div>
+                        <div class="pruning-debug-hint" style="margin-top:8px;">Criteria</div>
+                        <div class="pruning-debug-reason-list">${criteriaLabels.map((label) => `<span>${escapeHtml(getPruningReasonLabel(label))}</span>`).join('') || '<span>no criteria details</span>'}</div>
+                    </div>
+                `;
+            }).join('');
+
+            return `<div style="margin-top:10px;"><h4 style="margin:0 0 6px; font-size:0.86em; color:#21374b;">Vertices</h4><div class="pruning-vertex-list">${rows}</div></div>`;
+        }
+
+        function renderSelectedPruningPathInspector() {
+            const inspector = document.getElementById('pruningDebugInspector');
+            if (!inspector) {
+                return;
+            }
+
+            const paths = Array.isArray(lastPruningDebugData && lastPruningDebugData.paths) ? lastPruningDebugData.paths : [];
+            if (!paths.length) {
+                inspector.outerHTML = getPruningInspectorDefaultHtml();
+                return;
+            }
+
+            if (selectedPruningPath === null || !findPruningPathDebug(selectedPruningPath)) {
+                const preferredPath = paths.find((item) => String(item && item.path_state || '') === 'pruned') || paths[0];
+                selectedPruningPath = Number(preferredPath && preferredPath.path_index);
+            }
+
+            const pathDebug = findPruningPathDebug(selectedPruningPath);
+            if (!pathDebug) {
+                selectedPruningPath = null;
+                selectedPruningVertexIndex = null;
+                inspector.outerHTML = getPruningInspectorDefaultHtml();
+                return;
+            }
+
+            const selectedVertex = findPruningVertexGuard(pathDebug, normalizeSelectedPruningVertexIndex(pathDebug));
+            const selectedVertexIdentifier = selectedVertex ? buildPruningVertexIdentifier(pathDebug, selectedVertex) : null;
+            const outputPoints = Array.isArray(pathDebug.output_points) ? pathDebug.output_points : [];
+            const startPoint = Array.isArray(outputPoints[0]) ? outputPoints[0] : null;
+            const endPoint = Array.isArray(outputPoints[outputPoints.length - 1]) ? outputPoints[outputPoints.length - 1] : null;
+
+            const stateReasons = Array.isArray(pathDebug.state_reasons) ? pathDebug.state_reasons : [];
+            const unchangedReasons = Array.isArray(pathDebug.unchanged_reasons) ? pathDebug.unchanged_reasons : [];
+            const droppedCountsByReason = (pathDebug && typeof pathDebug.dropped_counts_by_reason === 'object')
+                ? pathDebug.dropped_counts_by_reason
+                : {};
+            const dropSummaryEntries = Object.entries(droppedCountsByReason)
+                .filter(([, count]) => Number(count) > 0)
+                .sort((a, b) => Number(b[1]) - Number(a[1]));
+            const dropSummaryHtml = dropSummaryEntries.length
+                ? `<div class="pruning-debug-reason-list">${dropSummaryEntries.map(([reason, count]) => `<span>${escapeHtml(getPruningReasonLabel(reason))}: ${formatIntegerValue(count)}</span>`).join('')}</div>`
+                : '<div class="pruning-debug-hint">No dropped-point reason counts were recorded for this path.</div>';
+            const stateReasonHtml = stateReasons.length
+                ? `<div class="pruning-debug-reason-list">${stateReasons.map((reason) => `<span>${escapeHtml(getPruningReasonLabel(reason))}</span>`).join('')}</div>`
+                : '<div class="pruning-debug-hint">No path-level pruning reasons were recorded for this path.</div>';
+            const unchangedReasonHtml = unchangedReasons.length
+                ? `<div class="pruning-debug-reason-list">${unchangedReasons.map((reason) => `<span>${escapeHtml(getPruningReasonLabel(reason))}</span>`).join('')}</div>`
+                : '<div class="pruning-debug-hint">This path changed during pruning, so unchanged-path reasons do not apply.</div>';
+            const pruningConfig = (pathDebug && typeof pathDebug.pruning_config === 'object') ? pathDebug.pruning_config : {};
+
+            inspector.outerHTML = `
+                <div class="pruning-debug-inspector" id="pruningDebugInspector">
+                    <h4>Selected Path</h4>
+                    <div class="pruning-debug-inspector-meta">
+                        <span>path ${formatIntegerValue(Number(pathDebug.path_index || 0) + 1)}</span>
+                        <span>${escapeHtml(getPruningPathStateLabel(pathDebug.path_state))}</span>
+                        <span>${formatIntegerValue(pathDebug.input_count || 0)} input pts</span>
+                        <span>${formatIntegerValue(pathDebug.output_count || 0)} output pts</span>
+                        <span>${formatIntegerValue(pathDebug.dropped_input_count || 0)} dropped pts</span>
+                        <span>${formatIntegerValue(pathDebug.inferred_output_count || 0)} inferred output</span>
+                    </div>
+                    <div class="pruning-debug-hint">Path-level pruning evaluation</div>
+                    ${stateReasonHtml}
+                    <div class="pruning-debug-drop-summary">Path drop counts by reason</div>
+                    ${dropSummaryHtml}
+                    <div class="pruning-debug-inspector-meta">
+                        <span>deviation tol ${Number(pruningConfig.deviation_tol || 0).toFixed(2)}</span>
+                        <span>min output ${formatIntegerValue(pruningConfig.min_output_points || 0)}</span>
+                        <span>RDP epsilon ${Number(pruningConfig.rdp_epsilon || 0).toFixed(2)}</span>
+                        ${pathDebug.rejection_reason ? `<span>rejection ${escapeHtml(String(pathDebug.rejection_reason))}</span>` : ''}
+                    </div>
+                    <div class="pruning-debug-drop-summary">Path direction</div>
+                    <div class="pruning-debug-inspector-meta">
+                        <span class="pruning-debug-direction-chip">orange marker = start</span>
+                        <span class="pruning-debug-direction-chip is-end">arrowhead = direction of travel</span>
+                        ${startPoint ? `<span>start (${formatPruningVertexCoordinate(startPoint[0])}, ${formatPruningVertexCoordinate(startPoint[1])})</span>` : ''}
+                        ${endPoint ? `<span>end (${formatPruningVertexCoordinate(endPoint[0])}, ${formatPruningVertexCoordinate(endPoint[1])})</span>` : ''}
+                    </div>
+                    ${selectedVertexIdentifier ? `
+                    <div class="pruning-debug-drop-summary">Selected vertex</div>
+                    <div class="pruning-vertex-id-row" style="margin-top:0;">
+                        <input class="pruning-vertex-id" type="text" readonly value="${escapeHtml(selectedVertexIdentifier)}" aria-label="Selected vertex identifier" onclick="this.select();">
+                        <button type="button" class="btn btn-secondary pruning-vertex-copy-btn" data-copy-pruning-vertex-id="${escapeHtml(selectedVertexIdentifier)}">Copy ID</button>
+                    </div>` : ''}
+                    <div class="pruning-debug-drop-summary">Why this path stayed unchanged</div>
+                    ${unchangedReasonHtml}
+                    ${buildPruningVertexListHtml(pathDebug)}
+                </div>
+            `;
+
+            const nextInspector = document.getElementById('pruningDebugInspector');
+            if (nextInspector) {
+                nextInspector.addEventListener('click', handlePruningInspectorClick);
+                nextInspector.addEventListener('keydown', handlePruningInspectorKeydown);
+            }
+        }
+
+        function shouldRenderSelectablePruningOverlay() {
+            return Boolean(lastPruningDebugData && Array.isArray(lastPruningDebugData.paths) && lastPruningDebugData.paths.length);
+        }
+
+        function clearSelectablePruningOverlay() {
+            const existing = document.getElementById('selectablePruningOverlay');
+            if (existing) existing.remove();
+        }
+
+        function buildOverlayPathD(path, scaleX, scaleY) {
+            if (!Array.isArray(path) || path.length < 2) return '';
+            let d = '';
+            for (let index = 0; index < path.length; index += 1) {
+                const point = path[index];
+                const row = Number(point[0] || 0);
+                const col = Number(point[1] || 0);
+                const x = (col * scaleX).toFixed(1);
+                const y = (row * scaleY).toFixed(1);
+                d += `${index === 0 ? 'M' : 'L'}${x} ${y}`;
+            }
+            return d;
+        }
+
+        function logPruningDebugSummary(debugPayload) {
+            const paths = Array.isArray(debugPayload && debugPayload.paths) ? debugPayload.paths : [];
+            if (!paths.length) return;
+
+            const signature = JSON.stringify(paths.map((pathDebug) => ({
+                path_index: Number(pathDebug && pathDebug.path_index),
+                dropped_input_count: Number(pathDebug && pathDebug.dropped_input_count),
+                path_state: String(pathDebug && pathDebug.path_state || 'unknown'),
+                dropped_counts_by_reason: pathDebug && pathDebug.dropped_counts_by_reason,
+            })));
+            if (signature === lastPruningDebugLogSignature) return;
+            lastPruningDebugLogSignature = signature;
+
+            paths.forEach((pathDebug) => {
+                console.debug('Pruning path debug', {
+                    pathIndex: Number(pathDebug && pathDebug.path_index),
+                    pathState: String(pathDebug && pathDebug.path_state || 'unknown'),
+                    droppedVertexPoints: Number(pathDebug && pathDebug.dropped_input_count),
+                    droppedByReason: (pathDebug && pathDebug.dropped_counts_by_reason) || {},
+                    unchangedReasons: (pathDebug && pathDebug.unchanged_reasons) || [],
+                    outputVertices: Number(pathDebug && pathDebug.output_count),
+                });
+            });
+        }
+
+        function renderSelectablePruningOverlay() {
+            if (tileTuneReviewState.active || !shouldRenderSelectablePruningOverlay()) {
+                clearSelectablePruningOverlay();
+                return;
+            }
+
+            const mainImage = document.getElementById('mainImage');
+            const imageDisplay = document.getElementById('imageDisplay');
+            const sourceShape = currentUploadDisplayImages.shape;
+            if (!mainImage || !imageDisplay || !Array.isArray(sourceShape) || sourceShape.length < 2) {
+                clearSelectablePruningOverlay();
+                return;
+            }
+
+            const imgRect = mainImage.getBoundingClientRect();
+            const containerRect = imageDisplay.getBoundingClientRect();
+            const offsetLeft = imgRect.left - containerRect.left;
+            const offsetTop = imgRect.top - containerRect.top;
+            const srcRows = Number(sourceShape[0]);
+            const srcCols = Number(sourceShape[1]);
+            if (srcRows <= 0 || srcCols <= 0) {
+                clearSelectablePruningOverlay();
+                return;
+            }
+
+            const scaleX = imgRect.width / srcCols;
+            const scaleY = imgRect.height / srcRows;
+            let svg = document.getElementById('selectablePruningOverlay');
+            if (!svg) {
+                svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                svg.id = 'selectablePruningOverlay';
+                svg.style.cssText = 'position:absolute;pointer-events:none;overflow:visible;z-index:3.5;';
+                svg.addEventListener('click', (event) => {
+                    const vertexTarget = event.target instanceof Element ? event.target.closest('[data-pruning-vertex-index]') : null;
+                    if (vertexTarget) {
+                        selectPruningVertex(
+                            Number(vertexTarget.getAttribute('data-pruning-path-index')),
+                            Number(vertexTarget.getAttribute('data-pruning-vertex-index')),
+                            { scrollVertexIntoView: true }
+                        );
+                        return;
+                    }
+
+                    const target = event.target instanceof Element ? event.target.closest('[data-pruning-path-index]') : null;
+                    if (!target) return;
+                    selectPruningPath(Number(target.dataset.pruningPathIndex), { scrollVertexIntoView: true });
+                    const selected = findPruningPathDebug(selectedPruningPath);
+                    if (selected) {
+                        console.debug('Selected pruning path', {
+                            pathIndex: Number(selected.path_index),
+                            pathState: selected.path_state,
+                            droppedByReason: selected.dropped_counts_by_reason || {},
+                            unchangedReasons: selected.unchanged_reasons || [],
+                        });
+                    }
+                });
+                imageDisplay.appendChild(svg);
+            }
+            svg.style.left = `${offsetLeft}px`;
+            svg.style.top = `${offsetTop}px`;
+            svg.style.width = `${imgRect.width}px`;
+            svg.style.height = `${imgRect.height}px`;
+
+            const paths = Array.isArray(lastPruningDebugData && lastPruningDebugData.paths) ? lastPruningDebugData.paths : [];
+            let html = '';
+            html += `
+                <defs>
+                    <marker id="pruningSelectedPathArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                        <path d="M 0 1 L 9 5 L 0 9 z" fill="#1f7a42"></path>
+                    </marker>
+                    <marker id="pruningUnselectedPathArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                        <path d="M 0 1 L 9 5 L 0 9 z" fill="#2b7fff"></path>
+                    </marker>
+                </defs>
+            `;
+            for (const pathDebug of paths) {
+                const pathIndex = Number(pathDebug && pathDebug.path_index);
+                const inputPoints = Array.isArray(pathDebug && pathDebug.input_points) ? pathDebug.input_points : [];
+                const outputPoints = Array.isArray(pathDebug && pathDebug.output_points) ? pathDebug.output_points : [];
+                const outputProvenance = Array.isArray(pathDebug && pathDebug.output_point_provenance) ? pathDebug.output_point_provenance : [];
+                const inputD = buildOverlayPathD(inputPoints, scaleX, scaleY);
+                const outputD = buildOverlayPathD(outputPoints, scaleX, scaleY);
+                const selected = Number(selectedPruningPath) === pathIndex;
+                const changed = Boolean(pathDebug && pathDebug.changed);
+                const groupOpacity = selected ? 1 : 0.92;
+                const selectedVertex = selected ? normalizeSelectedPruningVertexIndex(pathDebug) : null;
+
+                html += `<g data-pruning-path-index="${pathIndex}" data-pruning-path-state="${escapeHtml(String(pathDebug && pathDebug.path_state || 'unknown'))}">`;
+                if (inputD) {
+                    html += `<path d="${inputD}" fill="none" stroke="transparent" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" style="pointer-events:stroke;cursor:pointer;"/>`;
+                    html += `<path d="${inputD}" fill="none" stroke="rgba(255,0,220,${selected ? '0.70' : changed ? '0.34' : '0.50'})" stroke-width="${selected ? '2.2' : '1.4'}" stroke-linecap="round" stroke-linejoin="round" style="pointer-events:none;" opacity="${groupOpacity}"/>`;
+                }
+                if (outputD) {
+                    html += `<path d="${outputD}" fill="none" stroke="transparent" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" style="pointer-events:stroke;cursor:pointer;"/>`;
+                    html += `<path d="${outputD}" fill="none" stroke="rgba(${selected ? '40,180,90' : '43,127,255'},${selected ? '0.95' : '0.86'})" stroke-width="${selected ? '3.0' : '2.0'}" stroke-linecap="round" stroke-linejoin="round" style="pointer-events:none;" opacity="${groupOpacity}" marker-end="url(#${selected ? 'pruningSelectedPathArrow' : 'pruningUnselectedPathArrow'})"/>`;
+                    if (selected) {
+                        html += `<path d="${outputD}" fill="none" stroke="rgba(31,122,66,0.24)" stroke-width="6.0" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 16" style="pointer-events:none;" marker-end="url(#pruningSelectedPathArrow)"/>`;
+                    }
+                }
+                outputPoints.forEach((point, index) => {
+                    if (!Array.isArray(point) || point.length < 2) {
+                        return;
+                    }
+                    const x = (Number(point[1] || 0) * scaleX).toFixed(1);
+                    const y = (Number(point[0] || 0) * scaleY).toFixed(1);
+                    const isSelectedVertex = selected && Number(selectedVertex) === Number(index);
+                    const isStartVertex = Number(index) === 0;
+                    const provenance = String(outputProvenance[index] || 'preserved').toLowerCase();
+                    const fill = isStartVertex ? '#f97316' : (provenance === 'inferred' ? '#f6c453' : '#ffffff');
+                    const stroke = isSelectedVertex ? '#1f7a42' : (selected ? '#28a745' : '#2b7fff');
+                    const radius = isSelectedVertex ? 4.3 : (isStartVertex ? 3.5 : 2.8);
+                    const strokeWidth = isSelectedVertex ? 2.2 : 1.5;
+                    html += `<circle cx="${x}" cy="${y}" r="8" fill="transparent" data-pruning-path-index="${pathIndex}" data-pruning-vertex-index="${index}" style="pointer-events:all;cursor:pointer;"/>`;
+                    html += `<circle class="pruning-debug-vertex${isSelectedVertex ? ' is-selected' : ''}" cx="${x}" cy="${y}" r="${radius}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" data-pruning-path-index="${pathIndex}" data-pruning-vertex-index="${index}" style="pointer-events:all;cursor:pointer;" opacity="${selected || isStartVertex ? '1' : '0.9'}"/>`;
+                });
+                html += '</g>';
+            }
+            svg.innerHTML = html;
         }
 
         function renderMagentaSkeletonOverlay() {
+            if (tileTuneReviewState.active) {
+                clearMagentaSkeletonOverlay();
+                return;
+            }
+
+            if (shouldRenderSelectablePruningOverlay()) {
+                const existing = document.getElementById('magentaSkeletonOverlay');
+                if (existing) existing.remove();
+                renderSelectablePruningOverlay();
+                return;
+            }
+
+            clearSelectablePruningOverlay();
             const paths = lastMagentaSkeletonPaths;
             const mainImage = document.getElementById('mainImage');
             const imageDisplay = document.getElementById('imageDisplay');
             const sourceShape = currentUploadDisplayImages.shape;
-            if (!paths || !paths.length || !mainImage || !imageDisplay ||
-                    !Array.isArray(sourceShape) || sourceShape.length < 2) {
+            if (!paths || !paths.length || !mainImage || !imageDisplay || !Array.isArray(sourceShape) || sourceShape.length < 2) {
                 clearMagentaSkeletonOverlay();
                 return;
             }
+
             const imgRect = mainImage.getBoundingClientRect();
             const containerRect = imageDisplay.getBoundingClientRect();
             const offsetLeft = imgRect.left - containerRect.left;
@@ -1757,6 +2593,7 @@
             const srcRows = Number(sourceShape[0]);
             const srcCols = Number(sourceShape[1]);
             if (srcRows <= 0 || srcCols <= 0) return;
+
             const scaleX = imgRect.width / srcCols;
             const scaleY = imgRect.height / srcRows;
             let svg = document.getElementById('magentaSkeletonOverlay');
@@ -1766,15 +2603,15 @@
                 svg.style.cssText = 'position:absolute;pointer-events:none;overflow:visible;z-index:3;';
                 imageDisplay.appendChild(svg);
             }
-            svg.style.left = offsetLeft + 'px';
-            svg.style.top = offsetTop + 'px';
-            svg.style.width = imgRect.width + 'px';
-            svg.style.height = imgRect.height + 'px';
+            svg.style.left = `${offsetLeft}px`;
+            svg.style.top = `${offsetTop}px`;
+            svg.style.width = `${imgRect.width}px`;
+            svg.style.height = `${imgRect.height}px`;
             let html = '';
             for (const path of paths) {
                 if (!path || path.length < 2) continue;
                 let d = '';
-                for (let i = 0; i < path.length; i++) {
+                for (let i = 0; i < path.length; i += 1) {
                     const r = path[i][0];
                     const c = path[i][1];
                     const x = (c * scaleX).toFixed(1);
@@ -1786,8 +2623,33 @@
             svg.innerHTML = html;
         }
 
+        function clearFittedSvgOverlay() {
+            const overlay = document.getElementById('fittedSvgOverlay');
+            if (overlay) {
+                overlay.remove();
+            }
+        }
+
+        function syncFittedSvgOverlayPosition() {
+            const overlay = document.getElementById('fittedSvgOverlay');
+            const mainImage = document.getElementById('mainImage');
+            const imageDisplay = document.getElementById('imageDisplay');
+            if (!overlay || !mainImage || !imageDisplay) {
+                return;
+            }
+
+            overlay.style.left = `${mainImage.offsetLeft}px`;
+            overlay.style.top = `${mainImage.offsetTop}px`;
+            overlay.style.width = `${mainImage.clientWidth}px`;
+            overlay.style.height = `${mainImage.clientHeight}px`;
+            overlay.style.transformOrigin = mainImage.style.transformOrigin || 'center center';
+            overlay.style.transform = mainImage.style.transform || 'none';
+        }
+
         function rerenderCurrentImageOverlays() {
             if (tileTuneReviewState.active) {
+                clearMagentaSkeletonOverlay();
+                clearSelectablePruningOverlay();
                 renderSampleBoundingBox(tileTuneReviewState.sampleMetadata, 0);
                 renderTilePreviewOverlay(
                     tileTuneReviewState.lastTileData || [],
@@ -1810,6 +2672,7 @@
             }
 
             renderMagentaSkeletonOverlay();
+            syncFittedSvgOverlayPosition();
             renderCropOverlay();
         }
 
@@ -1830,11 +2693,16 @@
         }
 
         function updateImageViewResetButtonVisibility() {
-            const btn = document.getElementById('resetImageViewBtn');
-            if (!btn) return;
-
             const hasImage = Boolean(document.getElementById('mainImage'));
-            btn.style.display = (hasImage && isImageViewportChanged()) ? 'inline-block' : 'none';
+            const resetBtn = document.getElementById('resetImageViewBtn');
+            if (resetBtn) {
+                resetBtn.style.display = (hasImage && isImageViewportChanged()) ? 'inline-block' : 'none';
+            }
+
+            const zoomToCropBtn = document.getElementById('zoomToCropBtn');
+            if (zoomToCropBtn) {
+                zoomToCropBtn.style.display = (hasImage && Boolean(getCropParams())) ? 'inline-block' : 'none';
+            }
         }
 
         function applyImageViewportTransform() {
@@ -1854,12 +2722,41 @@
             imageViewportState.translateX = 0;
             imageViewportState.translateY = 0;
             imageViewportState.isDragging = false;
-            imageViewportState.dragStartX = 0;
-            imageViewportState.dragStartY = 0;
-            imageViewportState.dragOriginX = 0;
-            imageViewportState.dragOriginY = 0;
             imageViewportState.dragMoved = false;
             imageViewportState.suppressClick = false;
+            applyImageViewportTransform();
+        }
+
+        function focusImageViewportOnActiveCrop() {
+            const mainImage = document.getElementById('mainImage');
+            const imageDisplay = document.getElementById('imageDisplay');
+            const crop = getCropParams();
+            if (!mainImage || !imageDisplay || !crop) {
+                return;
+            }
+
+            const baseWidth = Math.max(1, mainImage.clientWidth || mainImage.offsetWidth || 1);
+            const baseHeight = Math.max(1, mainImage.clientHeight || mainImage.offsetHeight || 1);
+            const cropWidth = Math.max(1, baseWidth * (crop.right - crop.left));
+            const cropHeight = Math.max(1, baseHeight * (crop.bottom - crop.top));
+            const targetWidth = Math.max(1, imageDisplay.clientWidth || baseWidth);
+            const targetHeight = Math.max(1, imageDisplay.clientHeight || baseHeight);
+            const nextScale = Math.max(1, Math.min(targetWidth / cropWidth, targetHeight / cropHeight) * 0.92);
+            const cropCenterX = ((crop.left + crop.right) * 0.5 - 0.5) * baseWidth;
+            const cropCenterY = ((crop.top + crop.bottom) * 0.5 - 0.5) * baseHeight;
+
+            imageViewportState.scale = nextScale;
+            imageViewportState.translateX = -cropCenterX * nextScale;
+            imageViewportState.translateY = -cropCenterY * nextScale;
+            imageViewportState.isDragging = false;
+            imageViewportState.dragMoved = false;
+            imageViewportState.suppressClick = false;
+
+            const allowedOffsetX = Math.max(0, ((baseWidth * nextScale) - targetWidth) * 0.5);
+            const allowedOffsetY = Math.max(0, ((baseHeight * nextScale) - targetHeight) * 0.5);
+            imageViewportState.translateX = Math.max(-allowedOffsetX, Math.min(allowedOffsetX, imageViewportState.translateX));
+            imageViewportState.translateY = Math.max(-allowedOffsetY, Math.min(allowedOffsetY, imageViewportState.translateY));
+
             applyImageViewportTransform();
         }
 
@@ -2080,10 +2977,7 @@
                 `<span class="meta-text">Detection image: ${shape[1]} \u00d7 ${shape[0]} px. Wheel to zoom. Middle-drag / Space-drag to pan.${cropLabel}</span>` +
                 `<button class="crop-toggle-btn${cropActive ? ' active' : ''}" onclick="toggleCropMode()" title="Toggle crop frame">` +
                     (cropActive ? '✂ Crop On' : '✂ Crop') +
-                `</button>` +
-                (cropActive
-                    ? `<button class="crop-reset-btn" onclick="resetCrop()" title="Reset crop to full image">↩ Reset</button>`
-                    : '');
+                `</button>`;
             meta.classList.add('visible');
         }
 
@@ -2091,12 +2985,26 @@
             const before = getEffectiveCropSnapshot();
             cropState.enabled = !cropState.enabled;
             if (!cropState.enabled) {
+                cropState.left = 0;
+                cropState.top = 0;
+                cropState.right = 1;
+                cropState.bottom = 1;
                 cropState.draggingEdge = null;
+                cropState.dragStartSnapshot = null;
                 clearCropOverlay();
+                resetImageViewport();
             } else {
+                const viewportCrop = isImageViewportChanged() ? getCurrentViewportCropSnapshot() : null;
+                if (viewportCrop) {
+                    cropState.left = viewportCrop.left;
+                    cropState.top = viewportCrop.top;
+                    cropState.right = viewportCrop.right;
+                    cropState.bottom = viewportCrop.bottom;
+                }
                 renderCropOverlay();
             }
             updateImageDisplayMeta();
+            updateImageViewResetButtonVisibility();
             restartDetectionIfCropChanged(before, getEffectiveCropSnapshot());
         }
 
@@ -2107,8 +3015,10 @@
             cropState.right = 1;
             cropState.bottom = 1;
             cropState.draggingEdge = null;
-            renderCropOverlay();
+            cropState.dragStartSnapshot = null;
+            resetImageViewport();
             updateImageDisplayMeta();
+            updateImageViewResetButtonVisibility();
             restartDetectionIfCropChanged(before, getEffectiveCropSnapshot());
         }
 
@@ -2221,6 +3131,32 @@
             };
         }
 
+        function getCurrentViewportCropSnapshot() {
+            const mainImage = document.getElementById('mainImage');
+            const imageDisplay = document.getElementById('imageDisplay');
+            if (!mainImage || !imageDisplay) {
+                return null;
+            }
+
+            const imageRect = mainImage.getBoundingClientRect();
+            const containerRect = imageDisplay.getBoundingClientRect();
+            if (!(imageRect.width > 0 && imageRect.height > 0 && containerRect.width > 0 && containerRect.height > 0)) {
+                return null;
+            }
+
+            const left = Math.max(0, Math.min(1, (containerRect.left - imageRect.left) / imageRect.width));
+            const top = Math.max(0, Math.min(1, (containerRect.top - imageRect.top) / imageRect.height));
+            const right = Math.max(0, Math.min(1, (containerRect.right - imageRect.left) / imageRect.width));
+            const bottom = Math.max(0, Math.min(1, (containerRect.bottom - imageRect.top) / imageRect.height));
+            const minSize = 0.02;
+
+            if ((right - left) < minSize || (bottom - top) < minSize) {
+                return null;
+            }
+
+            return { left, top, right, bottom };
+        }
+
         function cropSnapshotChanged(a, b) {
             if (!a || !b) return true;
             const EPS = 0.002;
@@ -2247,7 +3183,9 @@
             signalOptimizationStop(currentSessionId);
             stopAutoTuneProgressPolling();
             showProgressMessage('Crop updated. Restarting detection phase inside the selected area...', 'info');
-            startUploadAutoTune(autoProcessEnabled);
+            if (autoProcessEnabled) {
+                scheduleAutoProcess();
+            }
         }
 
         function renderDisplayedUploadImage() {
@@ -2282,8 +3220,16 @@
             }
 
             renderMagentaSkeletonOverlay();
+            renderCropOverlay();
             updateImageDisplayMeta();
             applyDetectionImageOpacity();
+            updateImageViewResetButtonVisibility();
+
+            if (cropState.enabled) {
+                requestAnimationFrame(() => {
+                    focusImageViewportOnActiveCrop();
+                });
+            }
         }
 
         function updateRawPreviewToggleVisibility() {
@@ -2298,35 +3244,92 @@
             }
         }
 
-        function buildTileOverlayPathsSvg(tileData, scaleX, scaleY) {
-            let html = '';
-            // rank 0 = longest path (brightest/thickest), higher ranks = dimmer/thinner
-            const rankStyles = [
-                { stroke: 'rgba(255,82,82,0.92)', width: '2.2' },
-                { stroke: 'rgba(255,130,50,0.70)', width: '1.5' },
-                { stroke: 'rgba(255,185,50,0.52)', width: '1.2' },
-            ];
-            const defaultStyle = { stroke: 'rgba(255,185,50,0.38)', width: '1.0' };
+        function buildTileOverlayPathData(points, scaleX, scaleY) {
+            let d = '';
+            points.forEach((pt, idx) => {
+                const y = Number(pt[0] || 0);
+                const x = Number(pt[1] || 0);
+                const sx = (x * scaleX).toFixed(1);
+                const sy = (y * scaleY).toFixed(1);
+                d += (idx === 0 ? 'M' : 'L') + sx + ' ' + sy;
+            });
+            return d;
+        }
 
-            tileData.forEach(tile => {
+        function syncTileOverlayPaths(svg, tileData, scaleX, scaleY) {
+            const svgNs = 'http://www.w3.org/2000/svg';
+            const finalPathStyle = {
+                stroke: 'rgba(214,51,132,0.82)',
+                width: '1.7',
+            };
+            const existingTileGroups = new Map();
+            Array.from(svg.querySelectorAll('g[data-tile-id]')).forEach(group => {
+                existingTileGroups.set(String(group.getAttribute('data-tile-id') || ''), group);
+            });
+            const nextTileIds = new Set();
+
+            (Array.isArray(tileData) ? tileData : []).forEach(tile => {
+                const tileId = String((tile && tile.tile_id) || '');
                 const paths = Array.isArray(tile && tile.paths) ? tile.paths : [];
-                paths.forEach(pathItem => {
-                    const points = Array.isArray(pathItem && pathItem.points) ? pathItem.points : [];
-                    if (points.length < 2) return;
-                    const style = rankStyles[Number(pathItem.rank || 0)] || defaultStyle;
-                    let d = '';
-                    points.forEach((pt, idx) => {
-                        const y = Number(pt[0] || 0);
-                        const x = Number(pt[1] || 0);
-                        const sx = (x * scaleX).toFixed(1);
-                        const sy = (y * scaleY).toFixed(1);
-                        d += (idx === 0 ? 'M' : 'L') + sx + ' ' + sy;
-                    });
-                    html += `<path d="${d}" fill="none" stroke="${style.stroke}" stroke-width="${style.width}" stroke-linecap="round" stroke-linejoin="round"/>`;
+                if (!tileId || paths.length === 0) {
+                    return;
+                }
+
+                nextTileIds.add(tileId);
+                let tileGroup = existingTileGroups.get(tileId);
+                if (!tileGroup) {
+                    tileGroup = document.createElementNS(svgNs, 'g');
+                    tileGroup.setAttribute('data-tile-id', tileId);
+                    svg.appendChild(tileGroup);
+                }
+
+                const existingPaths = new Map();
+                Array.from(tileGroup.querySelectorAll('path[data-path-id]')).forEach(pathEl => {
+                    existingPaths.set(String(pathEl.getAttribute('data-path-id') || ''), pathEl);
                 });
+                const nextPathIds = new Set();
+
+                paths.forEach(pathItem => {
+                    const pathId = String((pathItem && pathItem.path_id) || '');
+                    const points = Array.isArray(pathItem && pathItem.points) ? pathItem.points : [];
+                    if (!pathId || points.length < 2) {
+                        return;
+                    }
+
+                    nextPathIds.add(pathId);
+                    let pathEl = existingPaths.get(pathId);
+                    if (!pathEl) {
+                        pathEl = document.createElementNS(svgNs, 'path');
+                        pathEl.setAttribute('data-path-id', pathId);
+                        pathEl.setAttribute('fill', 'none');
+                        pathEl.setAttribute('stroke-linecap', 'round');
+                        pathEl.setAttribute('stroke-linejoin', 'round');
+                        tileGroup.appendChild(pathEl);
+                    }
+
+                    const d = buildTileOverlayPathData(points, scaleX, scaleY);
+                    if (pathEl.getAttribute('d') !== d) {
+                        pathEl.setAttribute('d', d);
+                    }
+                    pathEl.setAttribute('stroke', finalPathStyle.stroke);
+                    pathEl.setAttribute('stroke-width', finalPathStyle.width);
+                    tileGroup.appendChild(pathEl);
+                });
+
+                existingPaths.forEach((pathEl, pathId) => {
+                    if (!nextPathIds.has(pathId)) {
+                        pathEl.remove();
+                    }
+                });
+
+                svg.appendChild(tileGroup);
             });
 
-            return html;
+            existingTileGroups.forEach((tileGroup, tileId) => {
+                if (!nextTileIds.has(tileId)) {
+                    tileGroup.remove();
+                }
+            });
         }
 
         function hideTileTunePanel() {
@@ -2576,7 +3579,7 @@
                 svg.style.height = `${imgRect.height}px`;
             }
 
-            svg.innerHTML = buildTileOverlayPathsSvg(tileData, scaleX, scaleY);
+            syncTileOverlayPaths(svg, tileData, scaleX, scaleY);
         }
 
         function renderTilePreviewOverlayModal(tileData, sourceShape) {
@@ -2624,13 +3627,17 @@
                 svg.style.height = `${imgRect.height}px`;
             }
 
-            svg.innerHTML = buildTileOverlayPathsSvg(tileData, scaleX, scaleY);
+            syncTileOverlayPaths(svg, tileData, scaleX, scaleY);
         }
 
         function exitTileTuneReview(options = {}) {
             if (tileTuneReviewState.debounceTimer) {
                 clearTimeout(tileTuneReviewState.debounceTimer);
                 tileTuneReviewState.debounceTimer = null;
+            }
+            if (tileTuneReviewState.autoAcceptTimer) {
+                clearTimeout(tileTuneReviewState.autoAcceptTimer);
+                tileTuneReviewState.autoAcceptTimer = null;
             }
             tileTuneReviewState.previewToken += 1;
             tileTuneReviewState.previewInFlight = false;
@@ -2649,6 +3656,7 @@
                 clearLivePathsOverlay();
                 clearModalLivePathsOverlay();
             }
+            rerenderCurrentImageOverlays();
         }
 
         function enterTileTuneReview(sampleMetadata, shouldProcessAfter = false) {
@@ -2656,8 +3664,14 @@
             tileTuneReviewState.sampleMetadata = sampleMetadata || null;
             tileTuneReviewState.shouldProcessAfter = Boolean(shouldProcessAfter);
             tileTuneReviewState.previewToken += 1;
+            if (tileTuneReviewState.autoAcceptTimer) {
+                clearTimeout(tileTuneReviewState.autoAcceptTimer);
+                tileTuneReviewState.autoAcceptTimer = null;
+            }
             tileTuneReviewState.lastPreviewRuntimeMs = null;
             tileTuneReviewState.fullImagePreviewMode = false;
+
+            clearMagentaSkeletonOverlay();
 
             clearTileTuneConsole();
             const panel = document.getElementById('tileTunePanel');
@@ -2677,11 +3691,23 @@
 
             renderSampleBoundingBox(sampleMetadata, 0);
             requestTileOnlyPreview();
+            tileTuneReviewState.autoAcceptTimer = setTimeout(() => {
+                tileTuneReviewState.autoAcceptTimer = null;
+                if (!tileTuneReviewState.active) {
+                    return;
+                }
+                acceptTileTuningAndContinue();
+            }, 1000);
         }
 
         function requestTileOnlyPreview(options = {}) {
             if (!tileTuneReviewState.active || !currentSessionId) {
                 return;
+            }
+
+            if (options.debounce && tileTuneReviewState.autoAcceptTimer) {
+                clearTimeout(tileTuneReviewState.autoAcceptTimer);
+                tileTuneReviewState.autoAcceptTimer = null;
             }
 
             const runFetch = () => {
@@ -2757,22 +3783,28 @@
                     const noiseClass = noiseRatio < 0.15 ? 'noise-good' : (noiseRatio < 0.35 ? 'noise-mid' : 'noise-bad');
                     const noiseIcon = noiseRatio < 0.15 ? '🟢' : (noiseRatio < 0.35 ? '🟡' : '🔴');
                     const runtimeMs = Math.round(tileTuneReviewState.lastPreviewRuntimeMs || 0);
+                    const cachedTiles = Number(data.cached_tile_count || stats.cached_tile_count || 0);
+                    const computedTiles = Number(data.computed_tile_count || stats.computed_tile_count || 0);
                     const previewScopeLabel = tileTuneReviewState.fullImagePreviewMode
                         ? 'full image'
                         : `${Math.max(1, Number((tileTuneReviewState.sampleMetadata && tileTuneReviewState.sampleMetadata.tile_count) || 0))} tiles`;
+                    const cacheSummary = cachedTiles > 0 || computedTiles > 0
+                        ? ` — reuse ${cachedTiles} cached, ${computedTiles} recomputed`
+                        : '';
                     tileTuneLog(
-                        `${noiseIcon} Preview [${previewScopeLabel}]: ${validPaths} paths, ${coverageFmt}px coverage, ${noisePct}% noise (${orphanPaths} orphans), ${runtimeMs}ms` +
-                        ` — thresh ${Number(data.dark_threshold || 0).toFixed(3)}, min ${Math.round(Number(data.min_path_length || 0))}`,
+                        `${noiseIcon} Detected result [${previewScopeLabel}]: ${validPaths} kept paths, ${coverageFmt}px coverage, ${noisePct}% noise (${orphanPaths} filtered orphans), ${runtimeMs}ms` +
+                        ` — thresh ${Number(data.dark_threshold || 0).toFixed(3)}, min ${Math.round(Number(data.min_path_length || 0))}${cacheSummary}`,
                         noiseRatio < 0.15 ? 'success' : (noiseRatio < 0.35 ? '' : 'error')
                     );
                     setTileTuneDetails(
                         `<div class="tile-score-card">` +
                         `<span class="tile-score-stat">🧭 <strong>${previewScopeLabel}</strong> scope</span>` +
                         `<span class="tile-score-stat">📏 <strong>${coverageFmt} px</strong> coverage</span>` +
-                        `<span class="tile-score-stat">✅ <strong>${validPaths}</strong> paths</span>` +
-                        `<span class="tile-score-stat ${noiseClass}">${noiseIcon} <strong>${noisePct}%</strong> noise (${orphanPaths} orphans)</span>` +
+                        `<span class="tile-score-stat">✅ <strong>${validPaths}</strong> kept paths</span>` +
+                        `<span class="tile-score-stat">♻️ <strong>${cachedTiles}</strong> cached, <strong>${computedTiles}</strong> recomputed</span>` +
+                        `<span class="tile-score-stat ${noiseClass}">${noiseIcon} <strong>${noisePct}%</strong> noise (${orphanPaths} filtered orphans)</span>` +
                         `</div>` +
-                        `<div class="tile-score-params">thresh ${Number(data.dark_threshold || 0).toFixed(3)} — min len ${Math.round(Number(data.min_path_length || 0))} — preview ${runtimeMs}ms</div>`
+                        `<div class="tile-score-params">thresh ${Number(data.dark_threshold || 0).toFixed(3)} — min len ${Math.round(Number(data.min_path_length || 0))} — detected tile refresh ${runtimeMs}ms</div>`
                     );
                 })
                 .catch(error => {
@@ -2817,6 +3849,11 @@
         function resampleTileTuning() {
             if (!tileTuneReviewState.active || !currentSessionId) {
                 return;
+            }
+
+            if (tileTuneReviewState.autoAcceptTimer) {
+                clearTimeout(tileTuneReviewState.autoAcceptTimer);
+                tileTuneReviewState.autoAcceptTimer = null;
             }
 
             tileTuneLog('🔁 Resampling tile set...', 'start');
@@ -3222,6 +4259,8 @@
             touchedParameterIds = new Set();
             updateParameters(defaultParameterState);
             resetAdvancedPanels();
+            currentUploadFileName = null;
+            autoDebugFileMode = false;
 
             currentSessionId = null;
             currentPreprocessingInfo = null;
@@ -3235,6 +4274,7 @@
             fileInput.value = '';
             autoProcessEnabled = true;
             setAutoProcessButtonState();
+            setAutoTuneButtonState(true);
             updateRawPreviewToggleVisibility();
 
             clearResults();
@@ -3243,6 +4283,10 @@
             const resetImageViewBtn = document.getElementById('resetImageViewBtn');
             if (resetImageViewBtn) {
                 resetImageViewBtn.style.display = 'none';
+            }
+            const zoomToCropBtn = document.getElementById('zoomToCropBtn');
+            if (zoomToCropBtn) {
+                zoomToCropBtn.style.display = 'none';
             }
             document.getElementById('svgDisplay').classList.remove('space-pan', 'is-dragging');
             resetSvgViewport();
@@ -3256,7 +4300,6 @@
             cropState.left = 0; cropState.top = 0;
             cropState.right = 1; cropState.bottom = 1;
             cropState.draggingEdge = null;
-            document.getElementById('processBtn').disabled = true;
             setAutoDetectControls(false);
             document.getElementById('autoDetectMinLengthBtn').disabled = true;
 
@@ -3477,6 +4520,7 @@
                 document.querySelectorAll('.crop-edge-handle.dragging').forEach(el => el.classList.remove('dragging'));
                 cropState.draggingEdge = null;
                 cropState.dragStartSnapshot = null;
+                focusImageViewportOnActiveCrop();
                 updateImageDisplayInteractionState();
                 restartDetectionIfCropChanged(before, after);
                 return;
@@ -3531,19 +4575,19 @@
         document.addEventListener('drop', handleWindowDrop);
 
         function handleWindowDragEnter(e) {
-            if (!isFileDrag(e)) return;
+            if (!isUploadDrag(e)) return;
             dragCounter += 1;
             dragOverlay.classList.add('active');
         }
 
         function handleWindowDragOver(e) {
-            if (!isFileDrag(e)) return;
+            if (!isUploadDrag(e)) return;
             e.preventDefault();
             e.dataTransfer.dropEffect = 'copy';
         }
 
         function handleWindowDragLeave(e) {
-            if (!isFileDrag(e)) return;
+            if (!isUploadDrag(e)) return;
             dragCounter = Math.max(0, dragCounter - 1);
             if (dragCounter === 0) {
                 dragOverlay.classList.remove('active');
@@ -3551,49 +4595,116 @@
         }
 
         function handleWindowDrop(e) {
-            if (!isFileDrag(e)) return;
+            if (!isUploadDrag(e)) return;
             e.preventDefault();
+            dismissDragOverlay();
+            handleTransferUpload(e.dataTransfer);
+        }
+
+        function dismissDragOverlay() {
             dragCounter = 0;
             dragOverlay.classList.remove('active');
             uploadArea.classList.remove('dragover');
-            assignFirstSupportedFileAndUpload(e.dataTransfer.files);
         }
 
-        function isFileDrag(e) {
+        function isUploadDrag(e) {
             if (!e || !e.dataTransfer || !e.dataTransfer.types) return false;
             const types = e.dataTransfer.types;
 
-            if (typeof types.includes === 'function') {
-                return types.includes('Files');
+            const supportsType = (expectedType) => {
+                if (typeof types.includes === 'function') {
+                    return types.includes(expectedType);
+                }
+                if (typeof types.contains === 'function') {
+                    return types.contains(expectedType);
+                }
+                if (typeof types.indexOf === 'function') {
+                    return types.indexOf(expectedType) !== -1;
+                }
+
+                try {
+                    return Array.from(types).includes(expectedType);
+                } catch (_) {
+                    return false;
+                }
+            };
+
+            if (supportsType('Files')) {
+                return true;
             }
-            if (typeof types.contains === 'function') {
-                return types.contains('Files');
+            if (supportsType('text/uri-list')) {
+                return true;
             }
-            if (typeof types.indexOf === 'function') {
-                return types.indexOf('Files') !== -1;
+            return supportsType('text/html');
+        }
+
+        function extractDroppedRemoteUrl(transfer) {
+            if (!transfer || typeof transfer.getData !== 'function') {
+                return null;
             }
 
-            try {
-                return Array.from(types).includes('Files');
-            } catch (_) {
-                return false;
+            const uriList = String(transfer.getData('text/uri-list') || '')
+                .split('\n')
+                .map((line) => line.trim())
+                .filter((line) => line && !line.startsWith('#'));
+            const directUri = uriList.find((line) => /^https?:\/\//i.test(line));
+            if (directUri) {
+                return directUri;
             }
+
+            const html = String(transfer.getData('text/html') || '').trim();
+            if (html) {
+                try {
+                    const doc = new DOMParser().parseFromString(html, 'text/html');
+                    const mediaNode = doc.querySelector('img[src], a[href]');
+                    const candidate = mediaNode?.getAttribute('src') || mediaNode?.getAttribute('href') || '';
+                    if (/^https?:\/\//i.test(candidate)) {
+                        return candidate;
+                    }
+                } catch (_) {
+                    // Ignore malformed HTML drags.
+                }
+            }
+
+            const plainText = String(transfer.getData('text/plain') || '').trim();
+            if (/^https?:\/\//i.test(plainText)) {
+                return plainText;
+            }
+
+            return null;
+        }
+
+        function handleTransferUpload(transfer) {
+            if (assignFirstSupportedFileAndUpload(transfer?.files)) {
+                return;
+            }
+
+            const remoteUrl = extractDroppedRemoteUrl(transfer);
+            if (remoteUrl) {
+                uploadRemoteSource(remoteUrl);
+                return;
+            }
+
+            showMessage('Please drop an image file, PDF, or a direct image URL.', 'warning');
         }
 
         function handleDragOver(e) {
             e.preventDefault();
+            e.stopPropagation();
             uploadArea.classList.add('dragover');
         }
 
         function handleDragLeave(e) {
             e.preventDefault();
+            e.stopPropagation();
             uploadArea.classList.remove('dragover');
         }
 
         function handleDrop(e) {
             e.preventDefault();
-            uploadArea.classList.remove('dragover');
-            assignFirstSupportedFileAndUpload(e.dataTransfer.files);
+            e.stopPropagation();
+            dismissDragOverlay();
+            handleTransferUpload(e.dataTransfer);
         }
 
         function handlePaste(e) {
@@ -3628,7 +4739,7 @@
         }
 
         function assignFirstSupportedFileAndUpload(files) {
-            if (!files || files.length === 0) return;
+            if (!files || files.length === 0) return false;
 
             for (let i = 0; i < files.length; i++) {
                 if (!isSupportedUploadFile(files[i])) continue;
@@ -3642,10 +4753,10 @@
                 }
 
                 uploadSelectedFile(files[i]);
-                return;
+                return true;
             }
 
-            showMessage('Please drop an image or PDF file.', 'warning');
+            return false;
         }
 
         function handleFileSelect() {
@@ -3655,9 +4766,9 @@
             uploadSelectedFile(file);
         }
 
-        function uploadSelectedFile(file) {
-            if (!file) return;
-            currentUploadFileName = file.name || null;
+        function beginUploadRequest(displayName) {
+            currentUploadFileName = displayName || null;
+            applyDebugFileModeToControls();
 
             const previousSessionId = currentSessionId;
             const uploadEpoch = invalidateRequestEpoch();
@@ -3665,12 +4776,52 @@
             cancelActiveUiWork();
             signalOptimizationStop(previousSessionId);
 
-            // New upload should always start from a clean UI state.
             clearResults();
             setThresholdAutoDetectInfo(null);
             autoTuneState.token += 1;
             autoTuneState.active = false;
             autoTuneState.shouldProcessAfter = false;
+            setAutoTuneButtonState(true);
+
+            return uploadEpoch;
+        }
+
+        function handleUploadResponsePayload(data, uploadEpoch) {
+            if (isRequestStale(uploadEpoch)) {
+                return;
+            }
+
+            if (data.success) {
+                autoTuneState.token += 1;
+                autoTuneState.active = false;
+                currentSessionId = data.session_id;
+                currentPreprocessingInfo = data.preprocessing || null;
+                displayImage(
+                    data.raw_image_data || data.image_data,
+                    data.normalized_image_data || data.image_data,
+                    data.image_shape,
+                    Boolean(data.normalization_applied)
+                );
+                renderPreprocessingStatus(currentPreprocessingInfo);
+                updateParameters(data.parameters, { preserveTouched: true });
+                applyDebugFileModeToControls();
+                setAutoDetectControls(false);
+                document.getElementById('autoDetectMinLengthBtn').disabled = false;
+                setAutoTuneButtonState(false);
+                showMessage(`File loaded: ${data.image_shape[0]}x${data.image_shape[1]} pixels`, 'success');
+                if (autoProcessEnabled) {
+                    scheduleAutoProcess();
+                }
+            } else {
+                showLoading(false);
+                showMessage(data.error, 'error');
+            }
+        }
+
+        function uploadSelectedFile(file) {
+            if (!file) return;
+            dismissDragOverlay();
+            const uploadEpoch = beginUploadRequest(file.name || null);
 
             const formData = new FormData();
             formData.append('file', file);
@@ -3685,34 +4836,7 @@
                 body: formData
             })
             .then(response => response.json())
-            .then(data => {
-                if (isRequestStale(uploadEpoch)) {
-                    return;
-                }
-
-                if (data.success) {
-                    autoTuneState.token += 1;
-                    autoTuneState.active = false;
-                    currentSessionId = data.session_id;
-                    currentPreprocessingInfo = data.preprocessing || null;
-                    displayImage(
-                        data.raw_image_data || data.image_data,
-                        data.normalized_image_data || data.image_data,
-                        data.image_shape,
-                        Boolean(data.normalization_applied)
-                    );
-                    renderPreprocessingStatus(currentPreprocessingInfo);
-                    updateParameters(data.parameters, { preserveTouched: true });
-                    document.getElementById('processBtn').disabled = false;
-                    setAutoDetectControls(false);
-                    document.getElementById('autoDetectMinLengthBtn').disabled = false;
-                    showMessage(`File loaded: ${data.image_shape[0]}x${data.image_shape[1]} pixels`, 'success');
-                    startUploadAutoTune(autoProcessEnabled);
-                } else {
-                    showLoading(false);
-                    showMessage(data.error, 'error');
-                }
-            })
+            .then(data => handleUploadResponsePayload(data, uploadEpoch))
             .catch(error => {
                 if (isAbortError(error) || isRequestStale(uploadEpoch)) {
                     return;
@@ -3720,6 +4844,45 @@
 
                 showLoading(false);
                 showMessage(`Upload error: ${error.message}`, 'error');
+            });
+        }
+
+        function uploadRemoteSource(remoteUrl) {
+            if (!remoteUrl) return;
+
+            let displayName = remoteUrl;
+            try {
+                const parsed = new URL(remoteUrl);
+                const pathBits = parsed.pathname.split('/').filter(Boolean);
+                displayName = decodeURIComponent(pathBits[pathBits.length - 1] || parsed.hostname || remoteUrl);
+            } catch (_) {
+                // Leave displayName as the raw URL if parsing fails.
+            }
+
+            const uploadEpoch = beginUploadRequest(displayName);
+            showMessage('Fetching dropped image...', 'info');
+            showLoading(true, 'Loading dropped image...', 'Fetching the dropped webpage image through the app and preparing the first preview.');
+
+            trackedFetch('/upload_remote', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    url: remoteUrl,
+                    normalization_mode: document.getElementById('normalizationMode').value,
+                    normalization_sensitivity: document.getElementById('normalizationSensitivity').value,
+                })
+            })
+            .then(response => response.json())
+            .then(data => handleUploadResponsePayload(data, uploadEpoch))
+            .catch(error => {
+                if (isAbortError(error) || isRequestStale(uploadEpoch)) {
+                    return;
+                }
+
+                showLoading(false);
+                showMessage(`Remote upload error: ${error.message}`, 'error');
             });
         }
 
@@ -3733,13 +4896,22 @@
             if (!show) {
                 actionWrap.style.display = 'none';
                 stopAutoTuneBtn.disabled = false;
-                stopAutoTuneBtn.textContent = 'Skip Auto-Tune';
+                stopAutoTuneBtn.textContent = 'Cancel Auto-Tune';
                 return;
             }
 
             actionWrap.style.display = 'flex';
             stopAutoTuneBtn.disabled = false;
-            stopAutoTuneBtn.textContent = text || 'Skip Auto-Tune';
+            stopAutoTuneBtn.textContent = text || 'Cancel Auto-Tune';
+        }
+
+        function setAutoTuneButtonState(disabled) {
+            const autoTuneBtn = document.getElementById('autoTuneBtn');
+            if (!autoTuneBtn) {
+                return;
+            }
+
+            autoTuneBtn.disabled = Boolean(disabled) || !currentSessionId;
         }
 
         function signalAutoTuneStop(sessionId) {
@@ -3765,10 +4937,19 @@
             const stopAutoTuneBtn = document.getElementById('stopAutoTuneBtn');
             if (stopAutoTuneBtn) {
                 stopAutoTuneBtn.disabled = true;
-                stopAutoTuneBtn.textContent = 'Stopping...';
+                stopAutoTuneBtn.textContent = 'Cancelling Auto-Tune...';
             }
 
             signalAutoTuneStop(currentSessionId);
+        }
+
+        function autoTuneExtractionParameters() {
+            if (!currentSessionId) {
+                showMessage('Please upload an image first', 'error');
+                return;
+            }
+
+            startUploadAutoTune(false);
         }
 
         function setAutoTuneLoadingProgress(show, percent = 0, labelText = '') {
@@ -3795,12 +4976,15 @@
                 return;
             }
 
+            hideResultsPanel();
+
             const requestToken = autoTuneState.token + 1;
             const autoTuneEpoch = requestEpoch;
             autoTuneState.token = requestToken;
             autoTuneState.active = true;
             autoTuneState.shouldProcessAfter = shouldProcessAfter;
             lastAutoTuneSampleMetadata = null;
+            setAutoTuneButtonState(true);
 
             showLoading(true, 'Sampling image and auto-setting detection parameters...', 'Auto-setting best threshold and minimum path length (max 90s).');
             setLoadingActionButton(true);
@@ -3938,6 +5122,7 @@
                             autoTuneState.active = false;
                             stopAutoTuneProgressPolling();
                             setLoadingActionButton(false);
+                            setAutoTuneButtonState(false);
                             setAutoTuneLoadingProgress(true, 100, '90.0 / 90.0s');
                             showLoading(false);
 
@@ -3980,6 +5165,7 @@
                             autoTuneState.active = false;
                             stopAutoTuneProgressPolling();
                             setLoadingActionButton(false);
+                            setAutoTuneButtonState(false);
                             showLoading(false);
                             clearSampleBoundingBox();
                             exitTileTuneReview({ clearOverlays: true });
@@ -4002,6 +5188,7 @@
                 autoTuneState.active = false;
                 stopAutoTuneProgressPolling();
                 setLoadingActionButton(false);
+                setAutoTuneButtonState(false);
                 showLoading(false);
                 clearSampleBoundingBox();
                 exitTileTuneReview({ clearOverlays: true });
@@ -4213,6 +5400,10 @@
         function updateParameters(params, options = {}) {
             const preserveTouched = options.preserveTouched || false;
             Object.keys(params).forEach(key => {
+                if (key === 'enable_optimization' || key === 'show_pre_optimization') {
+                    return;
+                }
+
                 // Convert snake_case parameter names to camelCase element IDs
                 const elementId = snakeToCamel(key);
                 const element = document.getElementById(elementId);
@@ -4234,18 +5425,6 @@
             handleOptimizationToggle();
         }
 
-        function getOptimizationStatusText(optimizationEnabled, optimizationStarted) {
-            if (!optimizationEnabled) {
-                return 'Disabled (enable Path Optimisation to start)';
-            }
-
-            if (optimizationStarted) {
-                return 'Running in background...';
-            }
-
-            return 'Enabled. Preparing background optimisation...';
-        }
-
         // Parameter change handling
         document.addEventListener('DOMContentLoaded', function() {
             // Add event listeners to all range inputs
@@ -4262,6 +5441,10 @@
 
                     if (tileTuneReviewState.active && (this.id === 'darkThreshold' || this.id === 'minPathLength')) {
                         requestTileOnlyPreview({ debounce: true });
+                        return;
+                    }
+                    if (isSvgRenderOnlyControl(this.id)) {
+                        refreshSvgForDisplayToggles();
                         return;
                     }
                     if (autoProcessEnabled) {
@@ -4301,6 +5484,15 @@
                         handleCurveFittingToggle();
                     }
 
+                    if (this.id === 'enablePostFitExport') {
+                        handleCurveFittingToggle();
+                    }
+
+                    if (isSvgRenderOnlyControl(this.id)) {
+                        refreshSvgForDisplayToggles();
+                        return;
+                    }
+
                     // These toggles only affect SVG visibility/layers, not optimization results.
                     if (isDisplayOnlyToggle(this.id)) {
                         refreshSvgForDisplayToggles();
@@ -4330,21 +5522,25 @@
             const optimizationParametersGroup = document.getElementById('optimizationParametersGroup');
             const advancedSettings = document.getElementById('advancedSettings');
             const advancedToggleBtn = document.getElementById('advancedToggleBtn');
+            const debugControlIds = new Set(['showPruningDebugGrid', 'advancedToggleBtn']);
+
+            enableOptimization.checked = false;
 
             if (optimizationParametersGroup) {
                 const controls = optimizationParametersGroup.querySelectorAll('input, select, button, textarea');
                 controls.forEach(control => {
-                    control.disabled = !enableOptimization.checked;
+                    control.disabled = !debugControlIds.has(control.id);
                 });
 
-                optimizationParametersGroup.style.display = enableOptimization.checked ? 'block' : 'none';
+                optimizationParametersGroup.style.display = autoDebugFileMode ? 'block' : 'none';
+                optimizationParametersGroup.setAttribute('aria-hidden', autoDebugFileMode ? 'false' : 'true');
             }
             
             if (!enableOptimization.checked) {
-                if (advancedSettings) {
+                if (advancedSettings && !autoDebugFileMode) {
                     advancedSettings.style.display = 'none';
                 }
-                if (advancedToggleBtn) {
+                if (advancedToggleBtn && !autoDebugFileMode) {
                     advancedToggleBtn.textContent = '⚙️ Advanced settings ▼';
                 }
 
@@ -4373,28 +5569,59 @@
 
         function handleCurveFittingToggle() {
             const enableOptimization = document.getElementById('enableOptimization');
+            const enablePostFitExport = document.getElementById('enablePostFitExport');
             const enableCurveFitting = document.getElementById('enableCurveFitting');
-            const curveControlConfigs = [
+            const enableCurveFittingWrap = document.getElementById('enableCurveFittingWrap');
+            const fitControlsEnabled = Boolean(
+                (enableOptimization && enableOptimization.checked) ||
+                (enablePostFitExport && enablePostFitExport.checked)
+            );
+            const fitControlConfigs = [
+                {
+                    input: document.getElementById('sourceSmoothing'),
+                    wrap: document.getElementById('sourceSmoothingWrap')
+                },
                 {
                     input: document.getElementById('cubicFitTolerance'),
                     wrap: document.getElementById('cubicFitToleranceWrap')
-                },
-                {
-                    input: document.getElementById('endpointTangentStrictness'),
-                    wrap: document.getElementById('endpointTangentStrictnessWrap')
                 },
                 {
                     input: document.getElementById('forceOrthogonalAsLines'),
                     wrap: document.getElementById('forceOrthogonalAsLinesWrap')
                 }
             ];
+            const curveOnlyControlConfigs = [
+            ];
 
             const curveControlsEnabled = Boolean(
-                enableOptimization && enableOptimization.checked &&
+                fitControlsEnabled &&
                 enableCurveFitting && enableCurveFitting.checked
             );
 
-            curveControlConfigs.forEach(({ input, wrap }) => {
+            const shouldShowFitControls = Boolean(
+                (enableOptimization && enableOptimization.checked) ||
+                (enablePostFitExport && enablePostFitExport.checked)
+            );
+
+            if (enableCurveFitting) {
+                enableCurveFitting.disabled = !fitControlsEnabled;
+            }
+            if (enableCurveFittingWrap) {
+                enableCurveFittingWrap.style.opacity = fitControlsEnabled ? '1' : '0.55';
+                enableCurveFittingWrap.style.display = shouldShowFitControls ? 'block' : 'none';
+            }
+
+            fitControlConfigs.forEach(({ input, wrap }) => {
+                if (!input || !wrap) {
+                    return;
+                }
+
+                input.disabled = !fitControlsEnabled;
+                wrap.style.opacity = fitControlsEnabled ? '1' : '0.55';
+                wrap.style.display = shouldShowFitControls ? 'block' : 'none';
+            });
+
+            curveOnlyControlConfigs.forEach(({ input, wrap }) => {
                 if (!input || !wrap) {
                     return;
                 }
@@ -4413,16 +5640,61 @@
             return toggleId === 'showPreOptimization' || toggleId === 'includeImage' || toggleId === 'showRawPreview';
         }
 
+        function isSvgRenderOnlyControl(controlId) {
+            return svgRenderOnlyControlIds.has(controlId);
+        }
+
+        function getPreferredSvgRenderMode() {
+            if (progressInterval || finalSvgRenderPending || progressiveSvgRenderInFlight) {
+                return 'progressive';
+            }
+            if (lastRenderedSvgMode === 'final') {
+                return 'final';
+            }
+            return 'progressive';
+        }
+
+        function isPostFitExportEnabled() {
+            const checkbox = document.getElementById('enablePostFitExport');
+            return Boolean(checkbox && checkbox.checked);
+        }
+
+        function hideFittedSvgPreviewUi() {
+            clearFittedSvgOverlay();
+            lastRenderedSvgContent = null;
+            lastRenderedSvgMode = null;
+
+            const svgActionButtons = document.getElementById('svgActionButtons');
+            if (svgActionButtons) {
+                svgActionButtons.style.display = 'none';
+            }
+        }
+
+        function ensureSvgActionButtons() {
+            const svgActionButtons = document.getElementById('svgActionButtons');
+            if (svgActionButtons) {
+                svgActionButtons.style.display = 'none';
+            }
+        }
+
         function refreshSvgForDisplayToggles() {
-            if (!currentSessionId) return;
+            if (!currentSessionId) {
+                return Promise.resolve(null);
+            }
 
-            const svgDisplay = document.getElementById('svgDisplay');
-            if (!svgDisplay || svgDisplay.style.display === 'none') return;
+            if (!isPostFitExportEnabled()) {
+                hideFittedSvgPreviewUi();
+                return Promise.resolve(null);
+            }
 
-            // Re-render in the same mode currently shown so display-only toggles
-            // (like includeImage) update the browser preview immediately.
-            const mode = lastRenderedSvgMode || (optimizationReached100 ? 'final' : 'progressive');
-            generateSVG(mode);
+            const hasRenderablePaths = Array.isArray(lastMagentaSkeletonPaths) && lastMagentaSkeletonPaths.length > 0;
+            if (!hasRenderablePaths && !lastRenderedSvgContent && !document.getElementById('fittedSvgOverlay')) {
+                return Promise.resolve(null);
+            }
+
+            return generateSVG(getPreferredSvgRenderMode(), {
+                silent: true,
+            });
         }
 
         function updateRangeValue(inputId) {
@@ -4445,35 +5717,7 @@
         }
 
         function setAutoProcessButtonState() {
-            const btn = document.getElementById('autoProcessBtn');
-            if (!btn) return;
-
-            if (autoProcessEnabled) {
-                btn.textContent = '⏸️ Auto';
-                btn.style.background = 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)';
-            } else {
-                btn.textContent = '🔄 Auto';
-                btn.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
-            }
-        }
-
-        function toggleAutoProcess() {
-            autoProcessEnabled = !autoProcessEnabled;
-            if (!autoProcessEnabled) {
-                if (autoProcessTimeout) {
-                    clearTimeout(autoProcessTimeout);
-                    autoProcessTimeout = null;
-                }
-
-                // If a progressive optimization run is active, stop it immediately
-                // when Auto mode is paused.
-                if (progressInterval && currentSessionId) {
-                    stopOptimization('Auto paused. Optimization stopped.', 'Stopped (Auto paused)');
-                } else if (currentSessionId) {
-                    signalOptimizationStop(currentSessionId);
-                }
-            }
-            setAutoProcessButtonState();
+            autoProcessEnabled = true;
         }
 
         function autoDetectThreshold() {
@@ -4716,10 +5960,12 @@
 
             const parameters = getParameters();
             const cropParams = getCropParams();
+            const immediateRequestStartedAt = performance.now();
             
             // Always use progressive mode for better user experience
             console.log('Starting progressive processing mode...');
-            showLoading(true, 'Detecting centerline candidates...', 'Thresholding the image, skeletonizing the strokes, and preparing the first overlay.');
+            showLoading(true, 'Detecting centerline candidates...', 'Thresholding the image, extracting the skeleton, and building the first overlay.');
+            setAutoTuneLoadingProgress(false);
             showProgressMessage('Starting progressive processing...', 'info');
             startProcessStagePolling(processEpoch);
             
@@ -4744,15 +5990,16 @@
 
                 console.log('Progressive processing response:', data);
                 if (data.success) {
+                    const immediateRoundTripMs = Math.max(0, performance.now() - immediateRequestStartedAt);
+                    const serverProcessingMs = Number(data.processing_elapsed_ms || 0);
+                    data.client_round_trip_ms = immediateRoundTripMs;
+                    data.transport_and_ui_gap_ms = Math.max(0, immediateRoundTripMs - serverProcessingMs);
+                    setAutoTuneLoadingProgress(true, 100, '100%');
                     showLoading(false);
 
                     const enableOptimizationToggle = document.getElementById('enableOptimization');
-                    if (
-                        enableOptimizationToggle &&
-                        typeof data.optimization_enabled === 'boolean' &&
-                        enableOptimizationToggle.checked !== data.optimization_enabled
-                    ) {
-                        enableOptimizationToggle.checked = data.optimization_enabled;
+                    if (enableOptimizationToggle) {
+                        enableOptimizationToggle.checked = false;
                         handleOptimizationToggle();
                     }
                     
@@ -4763,9 +6010,11 @@
                     // Overlay magenta skeleton paths on the image preview
                     lastMagentaSkeletonPaths = Array.isArray(data.paths) ? data.paths : null;
                     renderMagentaSkeletonOverlay();
-                    
-                    // Generate immediate SVG (magenta only)
-                    generateSVG('immediate');
+                    if (isPostFitExportEnabled()) {
+                        generateSVG('progressive', { silent: true });
+                    } else {
+                        hideFittedSvgPreviewUi();
+                    }
                     
                     if (data.optimization_started) {
                         // Start progress monitoring
@@ -4797,47 +6046,143 @@
             const resultsPanel = document.getElementById('resultsPanel');
             const resultsGrid = document.getElementById('resultsGrid');
             const fragmentCount = Number(data.merged_paths_count ?? data.initial_paths_count ?? 0);
-            const summaryText = data.merge_deferred
-                ? `${formatIntegerValue(data.valid_paths_count)} centerline paths extracted and ${formatIntegerValue(fragmentCount)} fragments queued for background merging`
-                : `${formatIntegerValue(data.valid_paths_count)} centerline paths extracted and ${formatIntegerValue(fragmentCount)} fragments after endpoint merging`;
+            const logicalMinPathLength = Number(data.logical_min_path_length ?? (document.getElementById('minPathLength')?.value || 0));
+            const effectiveMinPathLength = Math.round(Number(data.effective_min_path_length || logicalMinPathLength));
+            const processingElapsedSec = Number(data.processing_elapsed_sec || 0);
+            const timingBreakdown = (data && typeof data.timing_breakdown_ms === 'object') ? data.timing_breakdown_ms : {};
+            const extractionMs = Number(timingBreakdown.extraction || 0);
+            const postExtractionMs = Number(timingBreakdown.post_extraction || 0);
+            const responseAssemblyMs = Number(timingBreakdown.response_assembly || 0);
+            const totalServerMs = Number(timingBreakdown.total_server || data.processing_elapsed_ms || 0);
+            const clientRoundTripMs = Number(data.client_round_trip_ms || 0);
+            const transportGapMs = Number(data.transport_and_ui_gap_ms || 0);
+            const pruningTiming = (data && typeof data.pruning_timing_breakdown_ms === 'object') ? data.pruning_timing_breakdown_ms : {};
+            const pruningStageTiming = (pruningTiming && typeof pruningTiming.stage_ms === 'object') ? pruningTiming.stage_ms : {};
+            const postDetailParts = [];
+            const postDetailTimingKeys = [
+                ['preview1', 'initial_preview_publish'],
+                ['filter', 'length_filter'],
+                ['prune', 'pruning'],
+                ['serialize', 'final_path_serialization'],
+                ['hints', 'hint_generation'],
+                ['preview2', 'final_preview_publish'],
+                ['queue', 'progress_queue_clear'],
+            ];
+            postDetailTimingKeys.forEach(([label, key]) => {
+                const value = Number(timingBreakdown[key] || 0);
+                if (value > 0) {
+                    postDetailParts.push(`${label}=${Math.round(value)}ms`);
+                }
+            });
+            const pruneDetailParts = [];
+            const pruneDetailTimingKeys = [
+                ['trim', 'terminal_trim'],
+                ['straighten', 'straighten'],
+                ['anchors', 'anchor_selection'],
+                ['collapse', 'corner_collapse'],
+                ['min', 'minimum_output_guard'],
+                ['geometry', 'geometry_rejection'],
+                ['finalize', 'finalize'],
+            ];
+            pruneDetailTimingKeys.forEach(([label, key]) => {
+                const value = Number(pruningStageTiming[key] || 0);
+                if (value > 0) {
+                    pruneDetailParts.push(`${label}=${Math.round(value)}ms`);
+                }
+            });
+            const elapsedText = processingElapsedSec > 0
+                ? ` &nbsp;|&nbsp; elapsed=${processingElapsedSec.toFixed(2)}s`
+                : '';
+            const summaryText = `${formatIntegerValue(data.valid_paths_count)} centerline paths kept from ${formatIntegerValue(fragmentCount)} raw fragments`;
+            const timingSummary = totalServerMs > 0
+                ? `extract=${Math.round(extractionMs)}ms &nbsp;|&nbsp; post=${Math.round(postExtractionMs)}ms &nbsp;|&nbsp; assemble=${Math.round(responseAssemblyMs)}ms &nbsp;|&nbsp; server=${Math.round(totalServerMs)}ms &nbsp;|&nbsp; roundtrip=${Math.round(clientRoundTripMs)}ms &nbsp;|&nbsp; gap=${Math.round(transportGapMs)}ms`
+                : '';
+            const postDetailSummary = postDetailParts.length > 0
+                ? postDetailParts.join(' &nbsp;|&nbsp; ')
+                : '';
+            const pruneDetailSummary = pruneDetailParts.length > 0
+                ? `${pruneDetailParts.join(' &nbsp;|&nbsp; ')} &nbsp;|&nbsp; total=${Math.round(Number(pruningTiming.total_ms || 0))}ms &nbsp;|&nbsp; avg=${Math.round(Number(pruningTiming.avg_path_ms || 0))}ms/path &nbsp;|&nbsp; slowest=${Math.round(Number(pruningTiming.slowest_path_ms || 0))}ms`
+                : '';
             
             resultsGrid.innerHTML = `
                 <div class="result-item" style="display:flex; flex-direction:column; gap:8px; align-items:flex-start;">
                     <p style="margin:0; font-weight:600; color:#2f3d4f;">${summaryText}</p>
-                    <p style="font-size:0.8em; color:#888; margin-top:4px;">gap=${document.getElementById('mergeGap').value}px logical &nbsp;|&nbsp; effective=${Math.round(Number(data.effective_merge_gap || document.getElementById('mergeGap').value))}px &nbsp;|&nbsp; stroke=${Number(data.median_stroke_width_px || 0) > 0 ? formatPixelValue(data.median_stroke_width_px) : 'n/a'} &nbsp;|&nbsp; angle priority=${document.getElementById('mergeAnglePriority').value}% &nbsp;|&nbsp; long pass=${document.getElementById('enableLongPathMerging').checked ? 'on' : 'off'}${data.merge_deferred ? ' &nbsp;|&nbsp; deferred for faster first overlay' : ''}</p>
+                    <p style="font-size:0.8em; color:#888; margin-top:4px;">min length=${formatIntegerValue(logicalMinPathLength)}px logical &nbsp;|&nbsp; effective=${formatIntegerValue(effectiveMinPathLength)}px &nbsp;|&nbsp; stroke=${Number(data.median_stroke_width_px || 0) > 0 ? formatPixelValue(data.median_stroke_width_px) : 'n/a'}${elapsedText} &nbsp;|&nbsp; fast ${data.path_simplification_enabled === false ? 'unsimplified' : 'simplified'} skeleton output</p>
+                    ${timingSummary ? `<p style="font-size:0.78em; color:#7a8794; margin:0;">timing: ${timingSummary}</p>` : ''}
+                    ${postDetailSummary ? `<p style="font-size:0.76em; color:#8b96a2; margin:0;">post detail: ${postDetailSummary}</p>` : ''}
+                    ${pruneDetailSummary ? `<p style="font-size:0.76em; color:#8b96a2; margin:0;">prune detail: ${pruneDetailSummary}</p>` : ''}
                     <label style="font-size:0.85em; color:#555; display:flex; align-items:center; gap:6px;">
                         <input type="checkbox" id="initialResultsIncludeImage" checked>
                         Include source image
                     </label>
                     <button class="btn download-btn-magenta" id="downloadInitialSvgBtn" onclick="downloadInitialSkeletonSVG()">Download SVG</button>
-                    <p style="font-size:0.8em; color:#888; margin:0;">Downloads the current magenta skeleton paths immediately, without waiting for optimization.</p>
                 </div>
             `;
 
-            const optStatusPanel = document.getElementById('optStatusPanel');
-            if (optStatusPanel) {
-                const optimizationEnabled = data.optimization_enabled !== false;
-                const optimizationStarted = Boolean(data.optimization_started);
-                lastOptimizationTotalPaths = Number(data.valid_paths_count || 0);
-                optStatusPanel.innerHTML = `
-                    <h3 style="margin: 0 0 8px; font-size: 0.95em; color: #444;">Optimisation Status</h3>
-                    <p id="optimization-status" style="margin: 0 0 6px;">${getOptimizationStatusText(optimizationEnabled, optimizationStarted)}</p>
-                    ${optimizationStarted ? `
-                    <div class="opt-progress-wrap" id="opt-progress-wrap">
-                        <div class="opt-progress-bar-track">
-                            <div class="opt-progress-bar-fill" id="opt-progress-bar"></div>
-                        </div>
-                        <div class="opt-progress-label" id="opt-progress-label">0 / ${data.valid_paths_count} paths optimised</div>
-                    </div>` : ''}
-                    <div id="progress-container" style="margin-top: 10px;">
-                        <div id="progress-messages" style="max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.8em; background: #f5f5f5; padding: 8px; border-radius: 4px;"></div>
-                    </div>
-                `;
-                optStatusPanel.style.display = 'block';
-            }
+            lastPruningDebugData = data.pruning_debug || null;
+            selectedPruningPath = null;
+            selectedPruningVertexIndex = null;
+            lastPruningDebugLogSignature = null;
+            logPruningDebugSummary(lastPruningDebugData);
+            renderPruningDebugPanel(lastPruningDebugData);
 
             resultsPanel.style.display = 'block';
             console.log('Results panel should now be visible');
+        }
+
+        function renderPruningDebugPanel(debugPayload) {
+            const panel = document.getElementById('pruningDebugPanel');
+            if (!panel) return;
+
+            const paths = Array.isArray(debugPayload && debugPayload.paths) ? debugPayload.paths : [];
+            const summary = (debugPayload && typeof debugPayload.summary === 'object') ? debugPayload.summary : null;
+            if (!summary || !paths.length) {
+                selectedPruningPath = null;
+                selectedPruningVertexIndex = null;
+                panel.innerHTML = '';
+                panel.style.display = 'none';
+                return;
+            }
+
+            if (selectedPruningPath === null || !findPruningPathDebug(selectedPruningPath)) {
+                const preferredPath = paths.find((item) => String(item && item.path_state || '') === 'pruned') || paths[0];
+                selectedPruningPath = Number(preferredPath && preferredPath.path_index);
+            }
+
+            const reasonSummary = (summary && typeof summary.dropped_counts_by_reason === 'object')
+                ? Object.entries(summary.dropped_counts_by_reason)
+                    .filter(([, count]) => Number(count) > 0)
+                    .sort((a, b) => Number(b[1]) - Number(a[1]))
+                : [];
+            const reasonSummaryHtml = reasonSummary.length
+                ? `<div class="pruning-debug-reason-list">${reasonSummary.map(([reason, count]) => `<span>${escapeHtml(getPruningReasonLabel(reason))}: ${formatIntegerValue(count)}</span>`).join('')}</div>`
+                : '';
+            const stateCounts = (summary && typeof summary.path_state_counts === 'object') ? summary.path_state_counts : {};
+
+            const summaryHtml = `
+                <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap;">
+                    <div>
+                        <h3 style="margin:0; font-size:1em; color:#21374b;">Pruning Debug Overlay</h3>
+                        <p style="margin:6px 0 0; font-size:0.84em; color:#60778c;">Magenta shows original candidate paths, blue shows pruned output, and the selected path is highlighted in green on the main detection image.</p>
+                    </div>
+                    <div style="font-size:0.76em; color:#6a7f92;">Select any path on the image to inspect it here.</div>
+                </div>
+                <div class="pruning-debug-summary">
+                    <div class="pruning-debug-chip">paths: ${formatIntegerValue(summary.path_count || 0)}</div>
+                    <div class="pruning-debug-chip">changed: ${formatIntegerValue(summary.changed_path_count || 0)}</div>
+                    <div class="pruning-debug-chip">unchanged: ${formatIntegerValue(summary.unchanged_path_count || stateCounts.unchanged || 0)}</div>
+                    <div class="pruning-debug-chip">rejected: ${formatIntegerValue(summary.rejected_path_count || stateCounts.rejected || 0)}</div>
+                    <div class="pruning-debug-chip">input pts: ${formatIntegerValue(summary.input_points || 0)}</div>
+                    <div class="pruning-debug-chip">output pts: ${formatIntegerValue(summary.output_points || 0)}</div>
+                    <div class="pruning-debug-chip">dropped input pts: ${formatIntegerValue(summary.dropped_input_points || 0)}</div>
+                    <div class="pruning-debug-chip">inferred output pts: ${formatIntegerValue(summary.inferred_output_points || 0)}</div>
+                </div>
+                ${reasonSummaryHtml}
+            `;
+
+            panel.innerHTML = `${summaryHtml}${getPruningInspectorDefaultHtml()}`;
+            panel.style.display = 'block';
+            renderSelectedPruningPathInspector();
         }
 
         let progressInterval;
@@ -4853,6 +6198,8 @@
                 clearInterval(processStagePollInterval);
                 processStagePollInterval = null;
             }
+            processStageRequestInFlight = false;
+            setAutoTuneLoadingProgress(false);
         }
 
         function startProcessStagePolling(processEpoch) {
@@ -4864,11 +6211,37 @@
                     return;
                 }
 
-                trackedFetch(`/progress/${currentSessionId}`)
+                if (processStageRequestInFlight) {
+                    return;
+                }
+
+                processStageRequestInFlight = true;
+
+                trackedFetch(`/progress/${currentSessionId}?include_preview_paths=1`)
                     .then(response => response.json())
                     .then(data => {
                         if (isRequestStale(processEpoch)) {
                             return;
+                        }
+
+                        const immediateProgress = (data && typeof data.immediate_progress === 'object')
+                            ? data.immediate_progress
+                            : null;
+                        if (immediateProgress && immediateProgress.show_bar) {
+                            const immediatePercent = Number(immediateProgress.percent || 0);
+                            setAutoTuneLoadingProgress(
+                                true,
+                                immediatePercent,
+                                `${Math.round(immediatePercent)}%`
+                            );
+                        } else {
+                            setAutoTuneLoadingProgress(false);
+                        }
+
+                        const previewPaths = Array.isArray(data.live_preview_paths) ? data.live_preview_paths : [];
+                        if (previewPaths.length > 0) {
+                            lastMagentaSkeletonPaths = previewPaths;
+                            renderMagentaSkeletonOverlay();
                         }
 
                         const messages = Array.isArray(data.messages) ? data.messages : [];
@@ -4896,13 +6269,18 @@
                         }
 
                         console.error('Immediate-stage progress polling error:', error);
+                    })
+                    .finally(() => {
+                        processStageRequestInFlight = false;
                     });
             }, 400);
         }
 
         function startProgressMonitoring() {
             console.log('Starting progress monitoring...');
+            stopProcessStagePolling();
             if (progressInterval) clearInterval(progressInterval);
+            optimizationProgressRequestInFlight = false;
             const progressEpoch = requestEpoch;
             lastSvgProgressRefreshAt = 0;
             lastProgressiveSvgRenderedCount = 0;
@@ -4921,11 +6299,18 @@
                 if (isRequestStale(progressEpoch)) {
                     clearInterval(progressInterval);
                     progressInterval = null;
+                    optimizationProgressRequestInFlight = false;
                     return;
                 }
 
+                if (optimizationProgressRequestInFlight) {
+                    return;
+                }
+
+                optimizationProgressRequestInFlight = true;
+
                 console.log('Checking progress...');
-                trackedFetch(`/progress/${currentSessionId}`)
+                trackedFetch(`/progress/${currentSessionId}?include_preview_paths=0`)
                 .then(response => response.json())
                 .then(data => {
                     if (isRequestStale(progressEpoch)) {
@@ -4943,8 +6328,6 @@
                                 messagesDiv.appendChild(msgDiv);
                             });
                             messagesDiv.scrollTop = messagesDiv.scrollHeight;
-                        } else {
-                            console.error('Progress messages div not found!');
                         }
                         const statusEl = document.getElementById('optimization-status');
                         if (statusEl && latestMessage) {
@@ -4972,11 +6355,13 @@
                             || (isEarlyAcceptedWave && timeSinceLastRefresh >= EARLY_PROGRESSIVE_SVG_BURST_MS);
 
                         if (shouldRefreshSvg && now >= downloadSvgClickLockUntil && !progressiveSvgRenderInFlight && !finalSvgRenderPending) {
-                            console.log(`Updating SVG with preview frame ${previewFrameId} (${previewCount} paths)`);
                             lastSvgProgressRefreshAt = now;
                             lastProgressiveSvgRenderedCount = done;
                             lastProgressiveSvgFrameId = previewFrameId;
-                            generateSVG('progressive');
+                            generateSVG('progressive', {
+                                preserveViewport: true,
+                                silent: true,
+                            });
                         }
                     }
 
@@ -5006,20 +6391,22 @@
                         clearInterval(progressInterval);
                         progressInterval = null;
                         optimizationReached100 = false;
-                        finalSvgRenderPending = true;
                         const statusEl = document.getElementById('optimization-status');
-                        if (statusEl) statusEl.textContent = 'Rendering final SVG...';
+                        if (statusEl) statusEl.textContent = 'Complete!';
                         const bar = document.getElementById('opt-progress-bar');
                         const lbl = document.getElementById('opt-progress-label');
-                        if (bar) bar.style.width = '99%';
+                        if (bar) bar.style.width = '100%';
                         if (lbl) {
                             const t = Number(data.total_paths || 0);
-                            lbl.textContent = t > 0 ? `${t} / ${t} paths optimised, rendering final SVG...` : 'Rendering final SVG...';
+                            lbl.textContent = t > 0 ? `${t} / ${t} paths optimised (100%)` : 'Complete';
                         }
                         lastProgressiveSvgRenderedCount = Math.max(lastProgressiveSvgRenderedCount, done);
                         lastProgressiveSvgFrameId = Math.max(lastProgressiveSvgFrameId, previewFrameId);
                         document.getElementById('stopOptBtn').style.display = 'none'; // Hide stop button
-                        generateSVG('final');
+                        generateSVG('final', {
+                            preserveViewport: true,
+                            silent: true,
+                        });
                     }
                 })
                 .catch(error => {
@@ -5028,6 +6415,9 @@
                     }
 
                     console.error('Progress monitoring error:', error);
+                })
+                .finally(() => {
+                    optimizationProgressRequestInFlight = false;
                 });
             }, 1000); // Check every second
         }
@@ -5060,7 +6450,6 @@
                     const statusEl = document.getElementById('optimization-status');
                     if (statusEl) statusEl.textContent = statusText;
                     showProgressMessage(message, 'warning');
-                    generateSVG('progressive'); // Show current state
                 }
             });
         }
@@ -5188,15 +6577,19 @@
                 rdp_tolerance: parseFloat(document.getElementById('rdpTolerance').value),
                 simplification_strength: parseFloat(document.getElementById('simplificationStrength').value),
                 line_fit_strength: parseFloat(document.getElementById('lineFitStrength').value),
+                enable_post_fit_export: document.getElementById('enablePostFitExport').checked,
+                source_smoothing: parseFloat(document.getElementById('sourceSmoothing').value),
                 short_path_protection: parseFloat(document.getElementById('shortPathProtection').value),
                 score_preservation: parseFloat(document.getElementById('scorePreservation').value),
-                enable_curve_fitting: document.getElementById('enableCurveFitting').checked,
+                enable_curve_fitting: isPostFitExportEnabled() && document.getElementById('enableCurveFitting').checked,
                 cubic_fit_tolerance: parseFloat(document.getElementById('cubicFitTolerance').value),
-                endpoint_tangent_strictness: parseFloat(document.getElementById('endpointTangentStrictness').value),
+                endpoint_tangent_strictness: 85.0,
                 force_orthogonal_as_lines: document.getElementById('forceOrthogonalAsLines').checked,
+                show_pruning_debug_grid: document.getElementById('showPruningDebugGrid').checked,
                 min_path_length: parseInt(document.getElementById('minPathLength').value),
-                enable_optimization: document.getElementById('enableOptimization').checked,
-                show_pre_optimization: document.getElementById('showPreOptimization').checked,
+                enable_pruning: document.getElementById('enablePruning').checked,
+                enable_optimization: false,
+                show_pre_optimization: true,
                 include_image: document.getElementById('includeImage').checked,
                 normalization_mode: document.getElementById('normalizationMode').value,
                 normalization_sensitivity: document.getElementById('normalizationSensitivity').value
@@ -5241,144 +6634,126 @@
             resultsPanel.style.display = 'block';
         }
 
-        function generateSVG(mode = 'final') {
-            console.log(`generateSVG called with mode: ${mode}`);
+        function generateSVG(mode = 'final', options = {}) {
             if (!currentSessionId) {
-                console.error('No currentSessionId available');
-                showMessage('No session available', 'error');
-                return;
+                return Promise.resolve(null);
             }
 
-            if (mode === 'progressive') {
-                if (progressiveSvgRenderInFlight || finalSvgRenderPending || finalSvgRenderInFlight) {
-                    return;
+            const normalizedMode = mode === 'immediate' || mode === 'progressive' ? mode : 'final';
+            const preserveViewport = Boolean(options.preserveViewport);
+            const silent = Boolean(options.silent);
+
+            if (normalizedMode === 'final') {
+                if (finalSvgRenderInFlight || progressiveSvgRenderInFlight) {
+                    finalSvgRenderPending = true;
+                    return Promise.resolve(null);
+                }
+                finalSvgRenderPending = false;
+                finalSvgRenderInFlight = true;
+            } else {
+                if (progressiveSvgRenderInFlight) {
+                    return Promise.resolve(null);
                 }
                 progressiveSvgRenderInFlight = true;
-            } else if (mode === 'final') {
-                if (finalSvgRenderInFlight) {
-                    return;
-                }
-                finalSvgRenderInFlight = true;
-                finalSvgRenderPending = true;
             }
 
-            console.log(`Making SVG request for session: ${currentSessionId}`);
-            const parameters = getParameters();
-            const svgEpoch = requestEpoch;
-            const svgRequestId = ++svgRequestSequence;
-            trackedFetch('/generate_svg', {
+            const requestSequence = ++svgRequestSequence;
+            return trackedFetch('/generate_svg', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
                     session_id: currentSessionId,
-                    mode: mode,
-                    parameters: parameters
+                    mode: normalizedMode,
+                    parameters: getParameters(),
+                    persist_parameters: true,
                 })
             })
-            .then(response => {
-                if (isRequestStale(svgEpoch)) {
-                    throw new DOMException('Stale SVG response', 'AbortError');
-                }
+                .then(response => response.json())
+                .then(data => {
+                    if (!data || data.error) {
+                        throw new Error((data && data.error) || 'Unable to render SVG preview');
+                    }
 
-                console.log('SVG response received:', response.status);
-                return response.json();
-            })
-            .then(data => {
-                if (isRequestStale(svgEpoch)) {
-                    return;
-                }
-                if (svgRequestId < latestAppliedSvgRequestSequence) {
-                    return;
-                }
+                    if (requestSequence < latestAppliedSvgRequestSequence) {
+                        return null;
+                    }
 
-                console.log('SVG data:', data);
-                showLoading(false); // Hide loading indicator
-                if (data.svg) {
-                    latestAppliedSvgRequestSequence = svgRequestId;
-                    displaySVG(data.svg);
-                    lastRenderedSvgMode = mode;
-                    if (mode === 'final') {
-                        optimizationReached100 = true;
-                        finalSvgRenderPending = false;
-                        const statusEl = document.getElementById('optimization-status');
-                        if (statusEl) statusEl.textContent = 'Complete!';
-                        const bar = document.getElementById('opt-progress-bar');
-                        const lbl = document.getElementById('opt-progress-label');
-                        if (bar) bar.style.width = '100%';
-                        if (lbl) {
-                            const totalPaths = Number(lastOptimizationTotalPaths || 0);
-                            lbl.textContent = totalPaths > 0 ? `${totalPaths} / ${totalPaths} paths optimised (100%)` : 'Complete';
-                        }
-                        showProgressMessage('Optimization complete! Final results displayed.', 'success');
+                    latestAppliedSvgRequestSequence = requestSequence;
+                    displaySVG(data.svg, {
+                        preserveViewport,
+                        mode: normalizedMode,
+                        isOptimizationComplete: normalizedMode === 'final',
+                    });
+                    return data;
+                })
+                .catch(error => {
+                    if (isAbortError(error)) {
+                        return null;
                     }
-                    
-                    if (data.preview_paths_suppressed) {
-                        showProgressMessage('SVG view path rendering suppressed for large jobs. Processing continues normally and download will still include the paths.', 'info');
-                    } else if (mode === 'immediate') {
-                        showProgressMessage('Magenta skeleton paths displayed! Optimization running in background...', 'success');
-                    } else if (mode === 'progressive') {
-                        // Message area removed: no progressive status toast.
-                    } else {
-                        showProgressMessage('Final SVG visualization generated! Ready for download.', 'success');
-                    }
-                    
-                    const downloadBtn = document.getElementById('downloadBtn');
-                    setDownloadButtonAccent(optimizationReached100);
-                    downloadBtn.style.display = shouldShowDownloadButton() ? 'inline-block' : 'none';
-                    downloadBtn.disabled = false;
-                    updateSvgExportHandle();
-                    const resetSvgViewBtn = document.getElementById('resetSvgViewBtn');
-                    if (resetSvgViewBtn) {
-                        resetSvgViewBtn.style.display = 'inline-block';
-                    }
-                } else {
-                    console.error('No SVG in response:', data);
-                    if (mode === 'final') {
-                        finalSvgRenderPending = false;
-                    }
-                    showMessage(data.error || 'SVG generation failed', 'error');
-                }
-            })
-            .catch(error => {
-                if (isAbortError(error) || isRequestStale(svgEpoch)) {
-                    return;
-                }
 
-                console.error('SVG generation error:', error);
-                    if (mode === 'final') {
-                        finalSvgRenderPending = false;
+                    console.error('SVG preview render error:', error);
+                    if (!silent) {
+                        showMessage(`SVG preview error: ${error.message}`, 'error');
                     }
-                showLoading(false); // Hide loading indicator
-                showMessage(`SVG generation error: ${error.message}`, 'error');
+                    return null;
                 })
                 .finally(() => {
-                    if (mode === 'progressive') {
-                        progressiveSvgRenderInFlight = false;
-                    } else if (mode === 'final') {
+                    if (normalizedMode === 'final') {
                         finalSvgRenderInFlight = false;
+                    } else {
+                        progressiveSvgRenderInFlight = false;
                     }
-            });
+
+                    if (finalSvgRenderPending && !finalSvgRenderInFlight && !progressiveSvgRenderInFlight) {
+                        finalSvgRenderPending = false;
+                        generateSVG('final', {
+                            preserveViewport: true,
+                            silent: true,
+                        });
+                    }
+                });
         }
 
-        function displaySVG(svgContent) {
-            console.log('displaySVG called with content length:', svgContent.length);
-            const svgDisplay = document.getElementById('svgDisplay');
-            if (!svgDisplay) {
-                console.error('svgDisplay element not found!');
+        function displaySVG(svgContent, options = {}) {
+            ensureSvgActionButtons();
+
+            const imageDisplay = document.getElementById('imageDisplay');
+            const mainImage = document.getElementById('mainImage');
+            if (!imageDisplay || !mainImage || !svgContent) {
                 return;
             }
-            lastRenderedSvgContent = svgContent;
-            svgDisplay.innerHTML = svgContent;
-            svgDisplay.style.display = 'block';
-            updateSvgExportHandle(svgContent);
 
-            const svg = svgDisplay.querySelector('svg');
-            prepareSvgViewBox(svg);
-            resetSvgViewport();
-            
-            console.log('SVG displayed with auto-fit');
+            const parsed = new DOMParser().parseFromString(svgContent, 'image/svg+xml');
+            const parsedSvg = parsed && parsed.documentElement && parsed.documentElement.tagName && parsed.documentElement.tagName.toLowerCase() === 'svg'
+                ? parsed.documentElement
+                : null;
+            if (!parsedSvg || parsed.getElementsByTagName('parsererror').length > 0) {
+                throw new Error('Server returned invalid SVG markup');
+            }
+
+            const importedSvg = document.importNode(parsedSvg, true);
+            importedSvg.querySelectorAll('image').forEach(node => node.remove());
+            importedSvg.id = 'fittedSvgOverlay';
+            importedSvg.style.cssText = 'position:absolute;pointer-events:none;overflow:visible;z-index:4;display:block;';
+            const sourceShape = Array.isArray(currentUploadDisplayImages.shape) ? currentUploadDisplayImages.shape : null;
+            if (sourceShape && sourceShape.length >= 2) {
+                const svgWidth = Math.max(1, Number(sourceShape[1] || 0));
+                const svgHeight = Math.max(1, Number(sourceShape[0] || 0));
+                importedSvg.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
+                importedSvg.setAttribute('width', String(svgWidth));
+                importedSvg.setAttribute('height', String(svgHeight));
+            }
+            importedSvg.setAttribute('preserveAspectRatio', 'none');
+            clearFittedSvgOverlay();
+            imageDisplay.appendChild(importedSvg);
+            syncFittedSvgOverlayPosition();
+
+            lastRenderedSvgContent = svgContent;
+            lastRenderedSvgMode = options.mode || lastRenderedSvgMode;
+
+            updateSvgExportHandle(svgContent);
         }
 
         function autoFitSVG() {
@@ -5480,46 +6855,33 @@
             const includeImageCheckbox = document.getElementById('initialResultsIncludeImage');
             const includeImage = !includeImageCheckbox || includeImageCheckbox.checked;
             const downloadBtn = document.getElementById('downloadInitialSvgBtn');
+            const now = Date.now();
+            if (now < downloadSvgClickLockUntil) {
+                return;
+            }
+
+            downloadSvgClickLockUntil = now + 2500;
             if (downloadBtn) {
                 downloadBtn.disabled = true;
             }
 
-            const parameters = {
-                ...getParameters(),
-                include_image: Boolean(includeImage),
-                show_pre_optimization: true,
-            };
+            if (!downloadSvgFrame) {
+                downloadSvgFrame = document.createElement('iframe');
+                downloadSvgFrame.style.display = 'none';
+                downloadSvgFrame.setAttribute('aria-hidden', 'true');
+                document.body.appendChild(downloadSvgFrame);
+            }
 
-            trackedFetch('/generate_svg', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    session_id: currentSessionId,
-                    mode: 'immediate',
-                    parameters,
-                    persist_parameters: false,
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (!data.svg) {
-                    throw new Error(data.error || 'Immediate SVG generation failed');
-                }
-                triggerSvgDownloadFromContent(data.svg, buildImmediateSvgExportFilename());
-            })
-            .catch(error => {
-                if (isAbortError(error)) {
-                    return;
-                }
-                showMessage(`Immediate SVG download error: ${error.message}`, 'error');
-            })
-            .finally(() => {
+            const downloadUrl = new URL(`/download_svg/${currentSessionId}`, window.location.origin);
+            downloadUrl.searchParams.set('include_image', includeImage ? '1' : '0');
+            downloadUrl.searchParams.set('t', String(Date.now()));
+            downloadSvgFrame.src = downloadUrl.toString();
+
+            setTimeout(() => {
                 if (downloadBtn) {
                     downloadBtn.disabled = false;
                 }
-            });
+            }, 2500);
         }
 
         function showMessage(message, type) {
@@ -5550,6 +6912,13 @@
             btn.textContent = isOpen ? '⚙️ Advanced settings ▼' : '⚙️ Advanced settings ▲';
         }
 
+        function hideResultsPanel() {
+            const resultsPanel = document.getElementById('resultsPanel');
+            if (resultsPanel) {
+                resultsPanel.style.display = 'none';
+            }
+        }
+
         function clearResults() {
             if (progressInterval) {
                 clearInterval(progressInterval);
@@ -5575,6 +6944,10 @@
             lastRenderedSvgMode = null;
             lastRenderedSvgContent = null;
             currentPreprocessingInfo = null;
+            lastPruningDebugData = null;
+            selectedPruningPath = null;
+            selectedPruningVertexIndex = null;
+            lastPruningDebugLogSignature = null;
             renderPreprocessingStatus(null);
             revokeSvgExportUrl();
 
@@ -5582,34 +6955,16 @@
             const svgDisplay = document.getElementById('svgDisplay');
             svgDisplay.innerHTML = '';
             svgDisplay.style.display = 'none';
+            clearFittedSvgOverlay();
             
             // Hide results panel
-            const resultsPanel = document.getElementById('resultsPanel');
-            resultsPanel.style.display = 'none';
+            hideResultsPanel();
 
-            // Hide optimization status panel
-            const optStatusPanel = document.getElementById('optStatusPanel');
-            if (optStatusPanel) {
-                optStatusPanel.innerHTML = '';
-                optStatusPanel.style.display = 'none';
-            }
-
-            // Hide download button
-            const downloadBtn = document.getElementById('downloadBtn');
-            setDownloadButtonAccent(false);
-            downloadBtn.style.display = 'none';
-            downloadBtn.disabled = false;
-            const dragSvgBtn = document.getElementById('dragSvgBtn');
-            if (dragSvgBtn) {
-                dragSvgBtn.style.display = 'none';
-                dragSvgBtn.removeAttribute('href');
-                dragSvgBtn.removeAttribute('download');
+            const svgActionButtons = document.getElementById('svgActionButtons');
+            if (svgActionButtons) {
+                svgActionButtons.style.display = 'none';
             }
             downloadSvgClickLockUntil = 0;
-            const resetSvgViewBtn = document.getElementById('resetSvgViewBtn');
-            if (resetSvgViewBtn) {
-                resetSvgViewBtn.style.display = 'none';
-            }
 
             // Hide stop optimization button from previous session
             const stopOptBtn = document.getElementById('stopOptBtn');
@@ -5622,6 +6977,11 @@
             if (resultsGrid) {
                 resultsGrid.innerHTML = '';
             }
+            const pruningDebugPanel = document.getElementById('pruningDebugPanel');
+            if (pruningDebugPanel) {
+                pruningDebugPanel.innerHTML = '';
+                pruningDebugPanel.style.display = 'none';
+            }
             
             // Messaging UI removed; nothing to clear.
         }
@@ -5630,17 +6990,28 @@
             const loadingArea = document.getElementById('loadingArea');
             const loadingText = document.getElementById('loadingText');
             const loadingDetails = document.getElementById('loadingDetails');
+            const emptyImageStateIcon = document.getElementById('emptyImageStateIcon');
+            const emptyImageStateText = document.getElementById('emptyImageStateText');
+            const hasLoadedImage = Boolean(document.getElementById('mainImage'));
             
             if (show) {
                 loadingArea.classList.add('show');
                 if (message) loadingText.textContent = message;
                 if (details) loadingDetails.textContent = details;
+                if (!hasLoadedImage && emptyImageStateText && emptyImageStateIcon) {
+                    emptyImageStateIcon.textContent = '⌛';
+                    emptyImageStateText.textContent = message || 'Loading image...';
+                }
             } else {
                 loadingArea.classList.remove('show');
                 loadingText.textContent = 'Refreshing preview...';
                 loadingDetails.textContent = '';
                 setLoadingActionButton(false);
                 setAutoTuneLoadingProgress(false);
+                if (!hasLoadedImage && emptyImageStateText && emptyImageStateIcon) {
+                    emptyImageStateIcon.textContent = '🖼️';
+                    emptyImageStateText.textContent = 'Upload an image to start';
+                }
             }
         }
 

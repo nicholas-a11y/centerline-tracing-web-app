@@ -36,6 +36,8 @@ FIXTURE_SW = 3
 DARK_THRESHOLD = 0.5
 IDEAL_SAMPLE_N = 400
 DEFAULT_FITTING_PARAMETERS = {
+    "analysis_mode": "main_app",
+    "main_app_enable_optimization": False,
     "enable_curve_fitting": False,
     "cubic_fit_tolerance": 1.0,
     "endpoint_tangent_strictness": 85.0,
@@ -123,7 +125,14 @@ def _normalize_fitting_parameters(fitting_parameters: dict[str, Any] | None) -> 
         raise ValueError("fitting_parameters must be an object")
 
     defaults = DEFAULT_FITTING_PARAMETERS
+    raw_mode = str(fitting_parameters.get("analysis_mode", defaults["analysis_mode"]) or defaults["analysis_mode"]).strip().lower()
+    analysis_mode = raw_mode if raw_mode in {"curve_fitter", "main_app"} else defaults["analysis_mode"]
     return {
+        "analysis_mode": analysis_mode,
+        "main_app_enable_optimization": _coerce_bool(
+            fitting_parameters.get("main_app_enable_optimization"),
+            defaults["main_app_enable_optimization"],
+        ),
         "enable_curve_fitting": _coerce_bool(
             fitting_parameters.get("enable_curve_fitting"),
             defaults["enable_curve_fitting"],
@@ -168,8 +177,21 @@ def _run_pytest(
     fixture_ids: list[str],
     fitting_parameters: dict[str, Any],
 ) -> dict[str, Any]:
-    cmd = [".venv/bin/python", "-m", "pytest", "tests/test_fit_curves.py", "-v", "--tb=short"]
-    if update_goldens:
+    analysis_mode = str(fitting_parameters.get("analysis_mode", "curve_fitter"))
+    if analysis_mode == "main_app":
+        cmd = [
+            ".venv/bin/python",
+            "-m",
+            "pytest",
+            "tests/test_web_app_optimization_state.py",
+            "tests/test_path_optimization.py",
+            "tests/test_engine_path_thresholds.py",
+            "-q",
+            "--tb=short",
+        ]
+    else:
+        cmd = [".venv/bin/python", "-m", "pytest", "tests/test_fit_curves.py", "-v", "--tb=short"]
+    if update_goldens and analysis_mode != "main_app":
         cmd.append("--update-goldens")
 
     env = os.environ.copy()
@@ -179,6 +201,9 @@ def _run_pytest(
     env["TEST_UI_CUBIC_FIT_TOLERANCE"] = str(fitting_parameters["cubic_fit_tolerance"])
     env["TEST_UI_ENDPOINT_TANGENT_STRICTNESS"] = str(fitting_parameters["endpoint_tangent_strictness"])
     env["TEST_UI_FORCE_ORTHOGONAL_AS_LINES"] = "1" if fitting_parameters["force_orthogonal_as_lines"] else "0"
+
+    if analysis_mode == "main_app":
+        env["TEST_UI_MAIN_APP_ENABLE_OPTIMIZATION"] = "1" if fitting_parameters["main_app_enable_optimization"] else "0"
 
     proc = subprocess.run(
         cmd,
@@ -335,6 +360,9 @@ def _collect_cubic_handles(raw_path: list[list[int]], segments: list[dict[str, A
 
 
 def _fixture_analysis(fixture_id: str, fitting_parameters: dict[str, Any]) -> dict[str, Any]:
+    if str(fitting_parameters.get("analysis_mode", "curve_fitter")) == "main_app":
+        return _fixture_analysis_main_app(fixture_id, fitting_parameters)
+
     fx = load_fixture(fixture_id, size=FIXTURE_SIZE, stroke_width=FIXTURE_SW)
     raw_paths = extract_skeleton_paths(fx.gray, DARK_THRESHOLD, min_object_size=3)
     non_empty = [p for p in raw_paths if len(p) >= 2]
@@ -421,6 +449,156 @@ def _fixture_analysis(fixture_id: str, fitting_parameters: dict[str, Any]) -> di
             "optimized_sampled_paths": sampled_paths,
             "optimized_segments": fitted_paths,
             "optimized_vertices": vertices,
+            "cubic_handles": cubic_handles,
+        },
+    }
+
+
+def _polyline_segments(path: list[list[float]] | list[tuple[float, float]]) -> list[dict[str, Any]]:
+    if len(path) < 2:
+        return []
+
+    normalized_path = [[float(point[0]), float(point[1])] for point in path]
+    segments = []
+    for index, point in enumerate(normalized_path[1:]):
+        segment = {
+            "type": "line",
+            "end_point": [float(point[0]), float(point[1])],
+        }
+        if index == 0:
+            segment["start_point"] = [float(normalized_path[0][0]), float(normalized_path[0][1])]
+        segments.append(segment)
+    return segments
+
+
+def _fixture_analysis_main_app(fixture_id: str, fitting_parameters: dict[str, Any]) -> dict[str, Any]:
+    fx = load_fixture(fixture_id, size=FIXTURE_SIZE, stroke_width=FIXTURE_SW)
+
+    from centerline_web_app import CenterlineSession, process_centerlines
+
+    session = CenterlineSession(f"fixture-{fixture_id}")
+    session.image = fx.gray.astype(np.float32)
+    session.display_image = session.image
+    session.parameters.update({
+        "dark_threshold": DARK_THRESHOLD,
+        "min_path_length": 3,
+        "enable_optimization": bool(fitting_parameters.get("main_app_enable_optimization", False)),
+        "enable_curve_fitting": bool(fitting_parameters.get("enable_curve_fitting", False)),
+        "cubic_fit_tolerance": float(fitting_parameters.get("cubic_fit_tolerance", 1.0)),
+        "endpoint_tangent_strictness": float(fitting_parameters.get("endpoint_tangent_strictness", 85.0)),
+        "force_orthogonal_as_lines": bool(fitting_parameters.get("force_orthogonal_as_lines", False)),
+    })
+
+    results = process_centerlines(session)
+    if not isinstance(results, dict) or results.get("error"):
+        raise ValueError(results.get("error") if isinstance(results, dict) else "main app analysis failed")
+
+    optimized_paths = [list(path) for path in list(results.get("optimized_paths") or []) if len(path) >= 2]
+    pre_paths = [list(path) for path in list(results.get("pre_optimization_paths") or []) if len(path) >= 2]
+    optimization_enabled = bool(fitting_parameters.get("main_app_enable_optimization", False))
+    pruning_debug = results.get("pruning_debug") if isinstance(results.get("pruning_debug"), dict) else None
+
+    if optimization_enabled:
+        rendered_segments = fit_curve_segments(
+            optimized_paths,
+            tolerance_px=fitting_parameters["cubic_fit_tolerance"],
+            endpoint_tangent_strictness=fitting_parameters["endpoint_tangent_strictness"],
+            force_orthogonal_as_lines=fitting_parameters["force_orthogonal_as_lines"],
+            enable_curve_fitting=fitting_parameters["enable_curve_fitting"],
+            path_hints=list(results.get("optimized_path_hints") or []),
+        )
+        rendered_segments = [_normalize_segments(path_segments) for path_segments in rendered_segments]
+    else:
+        rendered_segments = [_polyline_segments(path) for path in optimized_paths]
+
+    sampled_paths: list[list[list[float]]] = []
+    vertices: list[list[list[float]]] = []
+    vertex_provenance: list[list[str]] = []
+    cubic_handles: list[dict[str, Any]] = []
+    for path_index, (raw_path, segments) in enumerate(zip(optimized_paths, rendered_segments)):
+        if optimization_enabled:
+            start_point = segments[0].get("start_point") if segments else None
+            path_start = start_point if start_point is not None else list(raw_path[0])
+            sampled = sample_fitted_segments(path_start, segments, n_per_segment=50)
+            sampled_paths.append(_to_points(sampled))
+            vertices.append(_all_segment_vertices(raw_path, segments))
+            vertex_provenance.append(["preserved"] * len(vertices[-1]))
+            for handle in _collect_cubic_handles(raw_path, segments):
+                handle["path_index"] = path_index
+                cubic_handles.append(handle)
+        else:
+            sampled_paths.append([[float(point[0]), float(point[1])] for point in raw_path])
+            vertices.append([[float(point[0]), float(point[1])] for point in raw_path])
+            provenance = ["preserved"] * len(raw_path)
+            if pruning_debug and isinstance(pruning_debug.get("paths"), list) and path_index < len(pruning_debug["paths"]):
+                path_debug = pruning_debug["paths"][path_index]
+                raw_provenance = list(path_debug.get("output_point_provenance") or []) if isinstance(path_debug, dict) else []
+                if len(raw_provenance) == len(raw_path):
+                    provenance = [
+                        "inferred" if str(item).lower() == "inferred" else "preserved"
+                        for item in raw_provenance
+                    ]
+            vertex_provenance.append(provenance)
+
+    if sampled_paths:
+        flat_fitted = np.vstack(
+            [np.asarray(path_points, dtype=np.float32) for path_points in sampled_paths if path_points]
+        )
+    else:
+        flat_fitted = np.zeros((0, 2), dtype=np.float32)
+
+    ideal_pts = fx.defn.ideal_sample(FIXTURE_SIZE, IDEAL_SAMPLE_N).astype(np.float32)
+    ref_start = None
+    if sampled_paths and sampled_paths[0]:
+        ref_start = np.asarray(sampled_paths[0][0], dtype=np.float32)
+    elif optimized_paths and optimized_paths[0]:
+        ref_start = np.asarray(optimized_paths[0][0], dtype=np.float32)
+    display_ideal_pts = _orient_open_curve_to_start(ideal_pts, ref_start)
+    dev = analytical_deviation(flat_fitted, ideal_pts)
+
+    pixel_points = np.argwhere(fx.pixels < 128)
+    skeleton_layers = [
+        [[float(p[0]), float(p[1])] for p in path]
+        for path in (pre_paths or optimized_paths)
+    ]
+
+    segment_count = int(sum(len(segments) for segments in rendered_segments))
+    all_types = {seg.get("type") for path in rendered_segments for seg in path}
+
+    contract_flags: dict[str, Any] = {
+        "has_paths": bool(optimized_paths),
+        "has_fitted_geometry": bool(flat_fitted.size),
+        "mean_within_fixture_tolerance": bool(dev["mean_deviation_px"] <= fx.tolerance_px),
+        "line_only_segments": all(t == "line" for t in all_types) if all_types else True,
+        "uses_main_app_pipeline": True,
+        "optimization_enabled": bool(optimization_enabled),
+    }
+
+    return {
+        "fixture_id": fixture_id,
+        "description": fx.description,
+        "category": fx.category,
+        "tolerance_px": float(fx.tolerance_px),
+        "dark_threshold": DARK_THRESHOLD,
+        "fitting_parameters": dict(fitting_parameters),
+        "raw_path_count": int(results.get("initial_paths_count", 0)),
+        "non_empty_path_count": int(len(optimized_paths)),
+        "segment_count": segment_count,
+        "segment_types": sorted(t for t in all_types if isinstance(t, str)),
+        "deviation": {
+            "mean_deviation_px": float(dev["mean_deviation_px"]),
+            "max_deviation_px": float(dev["max_deviation_px"]),
+            "coverage": float(dev["coverage"]),
+        },
+        "contract_flags": contract_flags,
+        "layers": {
+            "golden_analytic_path": _to_points(display_ideal_pts),
+            "golden_pixel_points": _to_points(pixel_points.astype(np.float32)),
+            "skeleton_paths": skeleton_layers,
+            "optimized_sampled_paths": sampled_paths,
+            "optimized_segments": rendered_segments,
+            "optimized_vertices": vertices,
+            "optimized_vertex_provenance": vertex_provenance,
             "cubic_handles": cubic_handles,
         },
     }

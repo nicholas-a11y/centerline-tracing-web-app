@@ -1,0 +1,17 @@
+{
+  "id": "curve-true-circle",
+  "description": "True circle loop \u2014 closed curve target for cubic fitting",
+  "category": "curve",
+  "size": 32,
+  "stroke_width": 2,
+  "tolerance_px": 2.8,
+  "expected_segment_types": [
+    "cubic"
+  ],
+  "png_file": "curve-true-circle_32px_sw2.png",
+  "stats": {
+    "total_pixels": 1024,
+    "stroke_pixels": 140,
+    "coverage": 0.1367
+  }
+}

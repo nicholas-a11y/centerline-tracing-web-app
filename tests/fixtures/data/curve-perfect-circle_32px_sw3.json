@@ -1,0 +1,17 @@
+{
+  "id": "curve-perfect-circle",
+  "description": "Perfect circle loop \u2014 closed circle target",
+  "category": "curve",
+  "size": 32,
+  "stroke_width": 3,
+  "tolerance_px": 2.8,
+  "expected_segment_types": [
+    "cubic"
+  ],
+  "png_file": "curve-perfect-circle_32px_sw3.png",
+  "stats": {
+    "total_pixels": 1024,
+    "stroke_pixels": 168,
+    "coverage": 0.1641
+  }
+}

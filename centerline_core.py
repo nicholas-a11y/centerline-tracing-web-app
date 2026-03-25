@@ -12,11 +12,11 @@ import tempfile
 import numpy as np
 from PIL import Image
 
-from centerline_engine import extract_skeleton_paths, merge_nearby_paths
+from centerline_engine import extract_skeleton_paths, merge_nearby_paths, prune_extracted_paths
 
 
-AUTO_TUNE_TIME_BUDGET_SEC = 90.0
-AUTO_TUNE_CONFIDENCE_TARGET = 0.95
+AUTO_TUNE_TIME_BUDGET_SEC = 60.0
+AUTO_TUNE_CONFIDENCE_TARGET = 0.90
 AUTO_TUNE_RANDOM_TILE_DIM = 144
 AUTO_TUNE_RANDOM_TILE_COUNT = 12
 AUTO_TUNE_MIN_TILE_COUNT = 4
@@ -1628,8 +1628,16 @@ def load_and_process_image(image_source, normalization_mode='auto', normalizatio
     return raw_gray, extraction_gray, preprocessing_info
 
 
-def _extract_tile_preview_paths(gray_image, sample_metadata, dark_threshold, min_path_length, per_tile_limit=3, full_resolution=False):
-    """Extract path overlays per sampled tile with quality stats."""
+def _extract_tile_preview_paths(
+    gray_image,
+    sample_metadata,
+    dark_threshold,
+    min_path_length,
+    merge_gap=None,
+    min_object_size=3,
+    full_resolution=False,
+):
+    """Extract the kept detection paths per sampled tile with quality stats."""
     if gray_image is None or sample_metadata is None:
         return [], {}
 
@@ -1647,7 +1655,6 @@ def _extract_tile_preview_paths(gray_image, sample_metadata, dark_threshold, min
         tile_h, tile_w = int(image_h), int(image_w)
         tile_origins = [[0, 0]]
 
-    max_gap = max(4, int(round(min(tile_h, tile_w) * 0.17)))
     out_tiles = []
 
     for tile_index, origin in enumerate(tile_origins, start=1):
@@ -1655,42 +1662,21 @@ def _extract_tile_preview_paths(gray_image, sample_metadata, dark_threshold, min
             continue
         ox = int(origin[0])
         oy = int(origin[1])
-        if ox < 0 or oy < 0 or ox + tile_w > image_w or oy + tile_h > image_h:
-            continue
-
-        tile = gray_image[oy:oy + tile_h, ox:ox + tile_w]
-        initial_paths = extract_skeleton_paths(tile, float(dark_threshold), min_object_size=3)
-        if not initial_paths:
-            continue
-
-        merged_paths = merge_nearby_paths(initial_paths, max_gap=max_gap, verbose=False)
-        valid_paths = [path for path in merged_paths if len(path) >= int(min_path_length)]
-        orphan_paths = [path for path in merged_paths if len(path) < int(min_path_length)]
-        tile_total_length = sum(len(path) for path in valid_paths)
-
-        tile_entry = {
-            'tile_index': int(tile_index),
-            'valid_count': len(valid_paths),
-            'orphan_count': len(orphan_paths),
-            'total_length': tile_total_length,
-            'paths': [],
-        }
-
-        for rank, path in enumerate(sorted(valid_paths, key=len, reverse=True)[:max(1, int(per_tile_limit))]):
-            stride = 1 if full_resolution else max(1, len(path) // 30)
-            encoded = []
-            for pt in path[::stride]:
-                py = int(pt[0]) + oy
-                px = int(pt[1]) + ox
-                encoded.append([py, px])
-            if len(encoded) >= 2:
-                tile_entry['paths'].append({
-                    'rank': rank,
-                    'length': int(len(path)),
-                    'points': encoded,
-                })
-
-        out_tiles.append(tile_entry)
+        tile_entry = _extract_single_tile_preview_entry(
+            gray_image,
+            tile_index=tile_index,
+            origin_x=ox,
+            origin_y=oy,
+            tile_width=tile_w,
+            tile_height=tile_h,
+            dark_threshold=dark_threshold,
+            min_path_length=min_path_length,
+            merge_gap=merge_gap,
+            min_object_size=min_object_size,
+            full_resolution=full_resolution,
+        )
+        if tile_entry is not None:
+            out_tiles.append(tile_entry)
 
     total_valid = sum(tile['valid_count'] for tile in out_tiles)
     total_orphan = sum(tile['orphan_count'] for tile in out_tiles)
@@ -1704,3 +1690,72 @@ def _extract_tile_preview_paths(gray_image, sample_metadata, dark_threshold, min
     }
 
     return out_tiles, agg_stats
+
+
+def _extract_single_tile_preview_entry(
+    gray_image,
+    *,
+    tile_index,
+    origin_x,
+    origin_y,
+    tile_width,
+    tile_height,
+    dark_threshold,
+    min_path_length,
+    merge_gap=None,
+    min_object_size=3,
+    full_resolution=False,
+):
+    """Extract a faithful kept-path payload for one sampled tile."""
+    if gray_image is None:
+        return None
+
+    image_h, image_w = gray_image.shape
+    ox = int(origin_x)
+    oy = int(origin_y)
+    tile_w = int(tile_width)
+    tile_h = int(tile_height)
+    if tile_w <= 0 or tile_h <= 0:
+        return None
+    if ox < 0 or oy < 0 or ox + tile_w > image_w or oy + tile_h > image_h:
+        return None
+
+    resolved_merge_gap = int(merge_gap) if merge_gap is not None else max(4, int(round(min(tile_h, tile_w) * 0.17)))
+    resolved_min_object_size = max(1, int(min_object_size or 1))
+
+    tile = gray_image[oy:oy + tile_h, ox:ox + tile_w]
+    initial_paths = extract_skeleton_paths(tile, float(dark_threshold), min_object_size=resolved_min_object_size)
+    if not initial_paths:
+        return None
+
+    tile_merge_gap = max(1, min(int(min(tile_h, tile_w)), int(resolved_merge_gap)))
+    merged_paths = merge_nearby_paths(initial_paths, max_gap=tile_merge_gap, verbose=False)
+    valid_paths = [path for path in merged_paths if len(path) >= int(min_path_length)]
+    orphan_paths = [path for path in merged_paths if len(path) < int(min_path_length)]
+    kept_paths = prune_extracted_paths(valid_paths, min_output_points=2)
+    tile_total_length = sum(len(path) for path in kept_paths)
+    tile_id = f"tile-{int(tile_index)}-{ox}-{oy}-{tile_w}-{tile_h}"
+
+    tile_entry = {
+        'tile_id': tile_id,
+        'tile_index': int(tile_index),
+        'valid_count': len(kept_paths),
+        'orphan_count': len(orphan_paths),
+        'total_length': tile_total_length,
+        'paths': [],
+    }
+
+    for path_index, path in enumerate(kept_paths):
+        encoded = []
+        for pt in path:
+            py = int(pt[0]) + oy
+            px = int(pt[1]) + ox
+            encoded.append([py, px])
+        if len(encoded) >= 2:
+            tile_entry['paths'].append({
+                'path_id': f"{tile_id}-path-{int(path_index)}-{len(path)}-{encoded[0][0]}-{encoded[0][1]}-{encoded[-1][0]}-{encoded[-1][1]}",
+                'length': int(len(path)),
+                'points': encoded,
+            })
+
+    return tile_entry

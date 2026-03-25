@@ -10,6 +10,8 @@ import threading
 import time
 import logging
 import hashlib
+import mimetypes
+from html.parser import HTMLParser
 from queue import Queue
 from flask import Flask, render_template, request, jsonify, send_file
 import os
@@ -19,19 +21,22 @@ from scipy import ndimage as ndi
 from io import BytesIO
 from PIL import Image
 import uuid
+from urllib.error import HTTPError, URLError
+from urllib.parse import unquote, urljoin, urlsplit
+from urllib.request import Request, urlopen
 
 # Import our existing centerline extraction functions
 from centerline_engine import (
     CircleEvaluationSystem, extract_skeleton_paths, merge_nearby_paths,
     optimize_path_with_circles, create_svg_output, remove_overlapping_paths,
-    optimize_path_with_custom_params
+    optimize_path_with_custom_params, prune_extracted_paths, build_line_span_hints
 )
 from centerline_core import (
     AUTO_TUNE_CONFIDENCE_TARGET,
     AUTO_TUNE_RANDOM_TILE_DIM,
     AUTO_TUNE_TIME_BUDGET_SEC,
     _build_random_tile_mosaic,
-    _extract_tile_preview_paths,
+    _extract_single_tile_preview_entry,
     _offset_sample_metadata_to_source,
     _resolve_crop_bounds,
     auto_detect_dark_threshold,
@@ -41,6 +46,10 @@ from centerline_core import (
     resolve_parameter_scale,
     resolve_extraction_profile,
 )
+
+
+TILE_PREVIEW_CACHE_LIMIT = 512
+IMMEDIATE_PROGRESS_BAR_PATH_THRESHOLD = 200
 TEST_UI_ENABLED = False
 TEST_UI_IMPORT_ERROR = None
 
@@ -65,6 +74,9 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
 MERGE_GAP_REFERENCE_STROKE_WIDTH_PX = 3.0
+REMOTE_UPLOAD_TIMEOUT_SEC = 12
+DEFAULT_MIN_PATH_LENGTH = 2
+DEFAULT_ENABLE_PRUNING = False
 
 IS_RAILWAY_DEPLOYMENT = any(key.startswith('RAILWAY_') for key in os.environ)
 QUIET_HTTP_LOGS = os.environ.get('QUIET_HTTP_LOGS', '1' if IS_RAILWAY_DEPLOYMENT else '0') == '1'
@@ -126,6 +138,32 @@ def _sample_paths_for_progressive_preview(paths, max_paths):
 
     return [paths[index] for index in sampled_indices]
 
+
+def _sample_paths_and_hints_for_preview(paths, path_hints, max_paths):
+    """Sample paths and keep path hints aligned with the sampled subset."""
+    sampled_paths = _sample_paths_for_progressive_preview(paths, max_paths)
+    original_paths = list(paths or [])
+    original_hints = list(path_hints or [])
+
+    if not sampled_paths:
+        return [], []
+
+    if len(sampled_paths) == len(original_paths):
+        if len(original_hints) == len(original_paths):
+            return sampled_paths, original_hints
+        return sampled_paths, [build_line_span_hints(path) for path in sampled_paths]
+
+    sampled_lookup = {id(path): index for index, path in enumerate(original_paths)}
+    sampled_hints = []
+    for path in sampled_paths:
+        original_index = sampled_lookup.get(id(path))
+        if original_index is None or original_index >= len(original_hints):
+            sampled_hints.append(build_line_span_hints(path))
+        else:
+            sampled_hints.append(original_hints[original_index])
+
+    return sampled_paths, sampled_hints
+
 class CenterlineSession:
     def __init__(self, session_id):
         self.session_id = session_id
@@ -170,6 +208,9 @@ class CenterlineSession:
             'sample_metadata': {'sampled': False},
         }
         self.partial_optimized_paths = []  # Store partially optimized paths
+        self.initial_path_hints = []
+        self.partial_optimized_path_hints = []
+        self.pruning_debug_payload = None
         self.live_preview_paths = []
         self.live_preview_kind = None
         self.live_preview_frame_id = 0
@@ -181,7 +222,18 @@ class CenterlineSession:
             'total': 0,
             'percent': 0.0,
         }
+        self.immediate_progress = {
+            'active': False,
+            'phase': 'idle',
+            'percent': 0.0,
+            'show_bar': False,
+            'path_count': 0,
+            'message': 'idle',
+            'detail': '',
+            'elapsed_sec': 0.0,
+        }
         self.svg_cache = {}
+        self.tile_preview_cache = {}
         self.lock = threading.Lock()  # Lock for thread-safe access to partial_optimized_paths
         self.parameters = {
             'dark_threshold': 0.20,
@@ -193,6 +245,8 @@ class CenterlineSession:
             'simplification_strength': 100.0,  # Maximum vertex reduction target
             'arc_fit_strength': 72.0,  # Favor curves without over-smoothing
             'line_fit_strength': 0.0,  # Disable line fitting by default
+            'enable_post_fit_export': False,  # Opt-in export fitting so fast preview stays fast
+            'source_smoothing': 95.0,  # Export-only pre-fit smoothing strength
             'short_path_protection': 0.0,  # No extra protection for shorter paths by default
             'mean_closeness_px': 1.8,  # Average allowed distance from blue path to magenta path
             'peak_closeness_px': 4.5,  # 95th percentile allowed distance from blue path to magenta path
@@ -200,10 +254,12 @@ class CenterlineSession:
             'cubic_fit_tolerance': 1.0,  # SVG cubic fitting tolerance in px (lower = tighter, more segments)
             'endpoint_tangent_strictness': 85.0,  # Strength of start/end handle alignment to extracted path direction (not fixture/golden data)
             'force_orthogonal_as_lines': False,  # Optionally force axis-aligned/corner paths to use line segments only
-            'enable_curve_fitting': False,  # Fit optimized paths to cubic segments only when explicitly enabled
-            'min_path_length': 3,      # Increase to 8-15 for longer segments
-            'enable_optimization': True,   # Enable path optimization and circle evaluation
-            'show_pre_optimization': False,  # Show unoptimized paths in SVG
+            'enable_curve_fitting': True,  # Fit optimized paths to cubic segments only when explicitly enabled
+            'min_path_length': DEFAULT_MIN_PATH_LENGTH,      # Increase to 8-15 for longer segments
+            'enable_pruning': DEFAULT_ENABLE_PRUNING,    # Enable the path simplification/pruning pass after length filtering
+            'enable_optimization': False,   # Keep the simplified UI on the direct pruned-skeleton path
+            'show_pre_optimization': True,  # Always expose the direct skeleton output in simplified mode
+            'show_pruning_debug_grid': False,  # Debug-only pixel-grid inspector for pruning
             'include_image': False,    # Include original image in SVG background
             'normalization_mode': 'auto',  # auto|on|off preprocessing normalization
             'normalization_sensitivity': 'medium',  # low|medium|high
@@ -271,17 +327,62 @@ def _set_merge_progress(session, *, active, phase, processed=0, total=0, percent
         return True
 
 
+def _set_immediate_progress(
+    session,
+    *,
+    active,
+    phase,
+    percent=0.0,
+    show_bar=False,
+    path_count=0,
+    message='',
+    detail='',
+    elapsed_sec=0.0,
+    generation=None,
+):
+    with session.lock:
+        if generation is not None and generation != session.optimization_generation:
+            return False
+        session.immediate_progress = {
+            'active': bool(active),
+            'phase': str(phase or 'idle'),
+            'percent': max(0.0, min(100.0, float(percent or 0.0))),
+            'show_bar': bool(show_bar),
+            'path_count': max(0, int(path_count or 0)),
+            'message': str(message or ''),
+            'detail': str(detail or ''),
+            'elapsed_sec': max(0.0, float(elapsed_sec or 0.0)),
+        }
+        return True
+
+
 def _get_session_extraction_profile(session):
     return resolve_extraction_profile(session.preprocessing_info)
 
 
-def _effective_min_path_length(params, extraction_profile, image_shape=None):
-    requested_min_length = max(1, int(params.get('min_path_length', 3)))
+def _logical_min_path_length(params, extraction_profile):
+    requested_min_length = max(1, int(params.get('min_path_length', DEFAULT_MIN_PATH_LENGTH)))
     max_min_path_length = extraction_profile.get('max_min_path_length')
     if max_min_path_length is None:
-        logical_min_length = requested_min_length
-    else:
-        logical_min_length = max(1, min(requested_min_length, int(max_min_path_length)))
+        return requested_min_length
+    return max(1, min(requested_min_length, int(max_min_path_length)))
+
+
+def _effective_min_object_size(base_min_object_size, params, extraction_profile, image_shape=None):
+    resolved_min_object_size = max(0, int(base_min_object_size or 0))
+    if resolved_min_object_size <= 0:
+        return 0
+
+    logical_min_length = _logical_min_path_length(params, extraction_profile)
+    parameter_scale = max(1.0, float(resolve_parameter_scale(image_shape)))
+    scale_preserving_cap = max(1, int(round(float(resolved_min_object_size) / parameter_scale)))
+    loop_preserving_cap = max(1, int(logical_min_length) - 1)
+
+    return max(1, min(resolved_min_object_size, loop_preserving_cap, scale_preserving_cap))
+
+
+def _effective_min_path_length(params, extraction_profile, image_shape=None):
+    logical_min_length = _logical_min_path_length(params, extraction_profile)
     parameter_scale = resolve_parameter_scale(image_shape)
     return max(1, int(round(logical_min_length * parameter_scale)))
 
@@ -387,9 +488,248 @@ def _attach_merge_gap_metadata(metadata, logical_merge_gap, effective_merge_gap,
     return enriched
 
 
+def _serialize_point_list(points):
+    serialized = []
+    for point in list(points or []):
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            continue
+        serialized.append([float(point[0]), float(point[1])])
+    return serialized
+
+
+def _serialize_line_span_hints(hints):
+    serialized = []
+    for item in list(hints or []):
+        if not isinstance(item, dict):
+            continue
+        start_point = item.get('start_point')
+        end_point = item.get('end_point')
+        serialized.append({
+            'start_idx': int(item.get('start_idx', 0)),
+            'end_idx': int(item.get('end_idx', 0)),
+            'kind': str(item.get('kind', 'line') or 'line'),
+            'confidence': float(item.get('confidence', 0.0)),
+            'source': str(item.get('source', 'unknown') or 'unknown'),
+            'start_point': _serialize_point_list([start_point])[0] if isinstance(start_point, (list, tuple)) and len(start_point) >= 2 else None,
+            'end_point': _serialize_point_list([end_point])[0] if isinstance(end_point, (list, tuple)) and len(end_point) >= 2 else None,
+        })
+    return serialized
+
+
+def _offset_serialized_point_list(points, row_offset=0, col_offset=0):
+    adjusted = []
+    for point in list(points or []):
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            continue
+        adjusted.append([
+            float(point[0]) + float(row_offset),
+            float(point[1]) + float(col_offset),
+        ])
+    return adjusted
+
+
+def _offset_pruning_debug_payload(debug_payload, row_offset=0, col_offset=0):
+    if not isinstance(debug_payload, dict) or (row_offset == 0 and col_offset == 0):
+        return debug_payload
+
+    adjusted = {
+        'summary': dict(debug_payload.get('summary') or {}),
+        'paths': [],
+        'path_hints': [],
+    }
+
+    for hint_list in list(debug_payload.get('path_hints') or []):
+        adjusted_hints = []
+        for hint in list(hint_list or []):
+            if not isinstance(hint, dict):
+                continue
+            adjusted_hint = dict(hint)
+            adjusted_hint['start_point'] = _offset_serialized_point_list([hint.get('start_point')], row_offset, col_offset)[0] if isinstance(hint.get('start_point'), (list, tuple)) and len(hint.get('start_point')) >= 2 else None
+            adjusted_hint['end_point'] = _offset_serialized_point_list([hint.get('end_point')], row_offset, col_offset)[0] if isinstance(hint.get('end_point'), (list, tuple)) and len(hint.get('end_point')) >= 2 else None
+            adjusted_hints.append(adjusted_hint)
+        adjusted['path_hints'].append(adjusted_hints)
+
+    for path_payload in list(debug_payload.get('paths') or []):
+        if not isinstance(path_payload, dict):
+            continue
+        adjusted_path = dict(path_payload)
+        adjusted_path['input_points'] = _offset_serialized_point_list(path_payload.get('input_points'), row_offset, col_offset)
+        adjusted_path['output_points'] = _offset_serialized_point_list(path_payload.get('output_points'), row_offset, col_offset)
+        adjusted_path['dropped_input_points'] = _offset_serialized_point_list(path_payload.get('dropped_input_points'), row_offset, col_offset)
+
+        adjusted_details = []
+        for detail in list(path_payload.get('dropped_input_point_details') or []):
+            if not isinstance(detail, dict):
+                continue
+            adjusted_detail = dict(detail)
+            adjusted_detail['point'] = _offset_serialized_point_list([detail.get('point')], row_offset, col_offset)[0] if isinstance(detail.get('point'), (list, tuple)) and len(detail.get('point')) >= 2 else None
+            adjusted_details.append(adjusted_detail)
+        adjusted_path['dropped_input_point_details'] = adjusted_details
+
+        adjusted_guards = []
+        for detail in list(path_payload.get('kept_vertex_guards') or []):
+            if not isinstance(detail, dict):
+                continue
+            adjusted_detail = dict(detail)
+            adjusted_detail['point'] = _offset_serialized_point_list([detail.get('point')], row_offset, col_offset)[0] if isinstance(detail.get('point'), (list, tuple)) and len(detail.get('point')) >= 2 else None
+            adjusted_guards.append(adjusted_detail)
+        adjusted_path['kept_vertex_guards'] = adjusted_guards
+
+        adjusted_line_hints = []
+        for hint in list(path_payload.get('line_span_hints') or []):
+            if not isinstance(hint, dict):
+                continue
+            adjusted_hint = dict(hint)
+            adjusted_hint['start_point'] = _offset_serialized_point_list([hint.get('start_point')], row_offset, col_offset)[0] if isinstance(hint.get('start_point'), (list, tuple)) and len(hint.get('start_point')) >= 2 else None
+            adjusted_hint['end_point'] = _offset_serialized_point_list([hint.get('end_point')], row_offset, col_offset)[0] if isinstance(hint.get('end_point'), (list, tuple)) and len(hint.get('end_point')) >= 2 else None
+            adjusted_line_hints.append(adjusted_hint)
+        adjusted_path['line_span_hints'] = adjusted_line_hints
+
+        bbox = path_payload.get('bbox') if isinstance(path_payload.get('bbox'), dict) else None
+        if bbox:
+            adjusted_path['bbox'] = {
+                'min_row': float(bbox.get('min_row', 0.0)) + float(row_offset),
+                'max_row': float(bbox.get('max_row', 0.0)) + float(row_offset),
+                'min_col': float(bbox.get('min_col', 0.0)) + float(col_offset),
+                'max_col': float(bbox.get('max_col', 0.0)) + float(col_offset),
+            }
+
+        adjusted['paths'].append(adjusted_path)
+
+    return adjusted
+
+
+def _serialize_pruning_debug_payload(debug_payload):
+    if not isinstance(debug_payload, dict):
+        return None
+
+    def _serialize_point_detail(detail):
+        if not isinstance(detail, dict):
+            return None
+        point = detail.get('point')
+        point_pair = None
+        if isinstance(point, (list, tuple)) and len(point) >= 2:
+            point_pair = [float(point[0]), float(point[1])]
+        return {
+            'point_index': int(detail.get('point_index', 0)),
+            'point': point_pair,
+            'reason': str(detail.get('reason', 'pruned')),
+            'source_stage': str(detail.get('source_stage', 'finalize')),
+        }
+
+    def _serialize_kept_vertex_guard(detail):
+        if not isinstance(detail, dict):
+            return None
+        point = detail.get('point')
+        point_pair = None
+        if isinstance(point, (list, tuple)) and len(point) >= 2:
+            point_pair = [float(point[0]), float(point[1])]
+        return {
+            'point_index': int(detail.get('point_index', 0)),
+            'point': point_pair,
+            'provenance': 'inferred' if str(detail.get('provenance', 'preserved')).lower() == 'inferred' else 'preserved',
+            'working_index': int(detail.get('working_index')) if detail.get('working_index') is not None else None,
+            'guards': [str(item) for item in list(detail.get('guards') or [])],
+            'criteria_explanations': [str(item) for item in list(detail.get('criteria_explanations') or [])],
+            'turn_angle': float(detail.get('turn_angle', 0.0)),
+            'local_deviation': float(detail.get('local_deviation', 0.0)),
+            'turn_sign': int(detail.get('turn_sign', 0)),
+        }
+
+    summary = dict(debug_payload.get('summary') or {})
+    serialized_paths = []
+    for path_payload in list(debug_payload.get('paths') or []):
+        if not isinstance(path_payload, dict):
+            continue
+        bbox = path_payload.get('bbox') if isinstance(path_payload.get('bbox'), dict) else None
+        dropped_input_point_details = []
+        for detail in list(path_payload.get('dropped_input_point_details') or []):
+            serialized_detail = _serialize_point_detail(detail)
+            if serialized_detail is not None:
+                dropped_input_point_details.append(serialized_detail)
+        kept_vertex_guards = []
+        for detail in list(path_payload.get('kept_vertex_guards') or []):
+            serialized_detail = _serialize_kept_vertex_guard(detail)
+            if serialized_detail is not None:
+                kept_vertex_guards.append(serialized_detail)
+        serialized_paths.append({
+            'path_index': int(path_payload.get('path_index', 0)),
+            'original_path_index': int(path_payload.get('original_path_index', path_payload.get('path_index', 0))),
+            'input_count': int(path_payload.get('input_count', 0)),
+            'output_count': int(path_payload.get('output_count', 0)),
+            'dropped_input_count': int(path_payload.get('dropped_input_count', 0)),
+            'inferred_output_count': int(path_payload.get('inferred_output_count', 0)),
+            'spur_trimmed_count': int(path_payload.get('spur_trimmed_count', 0)),
+            'critical_points_count': int(path_payload.get('critical_points_count', 0)),
+            'closed': bool(path_payload.get('closed', False)),
+            'path_state': str(path_payload.get('path_state', 'unknown') or 'unknown'),
+            'changed': bool(path_payload.get('changed', False)),
+            'state_reasons': [str(item) for item in list(path_payload.get('state_reasons') or [])],
+            'unchanged_reasons': [str(item) for item in list(path_payload.get('unchanged_reasons') or [])],
+            'pruning_config': {
+                'min_output_points': int(dict(path_payload.get('pruning_config') or {}).get('min_output_points', 0)),
+                'deviation_tol': float(dict(path_payload.get('pruning_config') or {}).get('deviation_tol', 0.0)),
+                'rdp_epsilon': float(dict(path_payload.get('pruning_config') or {}).get('rdp_epsilon', 0.0)),
+            },
+            'input_points': _serialize_point_list(path_payload.get('input_points')),
+            'output_points': _serialize_point_list(path_payload.get('output_points')),
+            'output_point_provenance': [
+                'inferred' if str(item).lower() == 'inferred' else 'preserved'
+                for item in list(path_payload.get('output_point_provenance') or [])
+            ],
+            'dropped_input_points': _serialize_point_list(path_payload.get('dropped_input_points')),
+            'dropped_input_point_details': dropped_input_point_details,
+            'dropped_counts_by_reason': {
+                str(key): int(value)
+                for key, value in dict(path_payload.get('dropped_counts_by_reason') or {}).items()
+            },
+            'kept_vertex_guards': kept_vertex_guards,
+            'line_span_hints': _serialize_line_span_hints(path_payload.get('line_span_hints')),
+            'rejection_reason': str(path_payload.get('rejection_reason')) if path_payload.get('rejection_reason') else None,
+            'bbox': {
+                'min_row': float(bbox.get('min_row', 0.0)),
+                'max_row': float(bbox.get('max_row', 0.0)),
+                'min_col': float(bbox.get('min_col', 0.0)),
+                'max_col': float(bbox.get('max_col', 0.0)),
+            } if bbox else None,
+        })
+
+    return {
+        'summary': {
+            'path_count': int(summary.get('path_count', 0)),
+            'changed_path_count': int(summary.get('changed_path_count', 0)),
+            'unchanged_path_count': int(summary.get('unchanged_path_count', 0)),
+            'rejected_path_count': int(summary.get('rejected_path_count', 0)),
+            'input_points': int(summary.get('input_points', 0)),
+            'output_points': int(summary.get('output_points', 0)),
+            'dropped_input_points': int(summary.get('dropped_input_points', 0)),
+            'line_span_hint_count': int(summary.get('line_span_hint_count', 0)),
+            'inferred_output_points': int(summary.get('inferred_output_points', 0)),
+            'dropped_counts_by_reason': {
+                str(key): int(value)
+                for key, value in dict(summary.get('dropped_counts_by_reason') or {}).items()
+            },
+            'path_state_counts': {
+                str(key): int(value)
+                for key, value in dict(summary.get('path_state_counts') or {}).items()
+            },
+        },
+        'paths': serialized_paths,
+        'path_hints': [
+            _serialize_line_span_hints(path_hints)
+            for path_hints in list(debug_payload.get('path_hints') or [])
+        ],
+    }
+
+
 def _should_capture_benchmark_metrics(filename):
     cleaned = os.path.basename(str(filename or '')).lower()
     return any(cleaned.startswith(prefix) for prefix in BENCHMARK_FILENAME_PREFIXES)
+
+
+def _should_force_pruning_debug(filename):
+    cleaned = os.path.basename(str(filename or '')).lower()
+    return '_debug' in cleaned
 
 
 def _ensure_benchmark_metrics(session):
@@ -534,20 +874,40 @@ def _path_snapshot_signature(paths):
     return digest.hexdigest()
 
 
+def _path_hint_signature(path_hints):
+    digest = hashlib.blake2b(digest_size=16)
+    for hints in list(path_hints or []):
+        digest.update(f"{len(list(hints or []))}:".encode('ascii'))
+        for hint in list(hints or []):
+            if not isinstance(hint, dict):
+                digest.update(b'bad|')
+                continue
+            digest.update(
+                (
+                    f"{int(hint.get('start_idx', 0))},{int(hint.get('end_idx', 0))},"
+                    f"{str(hint.get('kind', 'line'))},{float(hint.get('confidence', 0.0)):.4f}|"
+                ).encode('ascii')
+            )
+    return digest.hexdigest()
+
+
 def _svg_render_signature(
     render_variant,
     include_image,
     show_pre,
+    source_smoothing,
     curve_fit_tolerance,
     endpoint_tangent_strictness,
     force_orthogonal_as_lines,
     enable_curve_fitting,
+    enable_post_fit_export,
     fit_optimized_paths,
     combine_optimized_paths,
     combine_pre_optimization_paths,
     coordinate_precision,
     pre_paths,
     optimized_paths,
+    optimized_path_hints,
     suppress_paths_in_view,
     has_circle_system,
     optimization_generation,
@@ -557,14 +917,17 @@ def _svg_render_signature(
     optimized_count, optimized_points = _path_snapshot_stats(optimized_paths)
     pre_signature = _path_snapshot_signature(pre_paths)
     optimized_signature = _path_snapshot_signature(optimized_paths)
+    optimized_hint_signature = _path_hint_signature(optimized_path_hints)
     return (
         str(render_variant),
         bool(include_image),
         bool(show_pre),
+        round(float(source_smoothing), 4),
         round(float(curve_fit_tolerance), 4),
         round(float(endpoint_tangent_strictness), 4),
         bool(force_orthogonal_as_lines),
         bool(enable_curve_fitting),
+        bool(enable_post_fit_export),
         bool(fit_optimized_paths),
         bool(combine_optimized_paths),
         bool(combine_pre_optimization_paths),
@@ -579,6 +942,7 @@ def _svg_render_signature(
         int(optimized_count),
         int(optimized_points),
         str(optimized_signature),
+        str(optimized_hint_signature),
     )
 
 
@@ -603,10 +967,13 @@ def _render_svg_content(
     circle_system,
     optimized_paths,
     pre_optimization_paths,
+    optimized_path_hints,
+    source_smoothing,
     curve_fit_tolerance,
     endpoint_tangent_strictness,
     force_orthogonal_as_lines,
     enable_curve_fitting,
+    enable_post_fit_export,
     include_image,
     show_pre,
     suppress_paths_in_view=False,
@@ -619,16 +986,19 @@ def _render_svg_content(
         render_variant,
         include_image,
         show_pre,
+        source_smoothing,
         curve_fit_tolerance,
         endpoint_tangent_strictness,
         force_orthogonal_as_lines,
         enable_curve_fitting,
+        enable_post_fit_export,
         fit_optimized_paths,
         combine_optimized_paths,
         combine_pre_optimization_paths,
         coordinate_precision,
         pre_optimization_paths,
         optimized_paths,
+        optimized_path_hints,
         suppress_paths_in_view,
         circle_system is not None,
         session.optimization_generation,
@@ -651,6 +1021,7 @@ def _render_svg_content(
             optimized_paths,
             [1.0] * len(optimized_paths),
             pre_optimization_paths,
+            source_smoothing=source_smoothing,
             curve_fit_tolerance=curve_fit_tolerance,
             endpoint_tangent_strictness=endpoint_tangent_strictness,
             force_orthogonal_as_lines=force_orthogonal_as_lines,
@@ -660,6 +1031,7 @@ def _render_svg_content(
             combine_optimized_paths=combine_optimized_paths,
             combine_pre_optimization_paths=combine_pre_optimization_paths,
             coordinate_precision=coordinate_precision,
+            optimized_path_hints=optimized_path_hints,
         )
     finally:
         wo.SHOW_BITMAP = original_show_bitmap
@@ -671,7 +1043,13 @@ def _render_svg_content(
 
 def _resolve_svg_render_settings(parameters):
     render_parameters = dict(parameters or {})
+    optimization_enabled = bool(render_parameters.get('enable_optimization', True))
+    enable_post_fit_export = bool(render_parameters.get('enable_post_fit_export', False))
     return {
+        'source_smoothing': max(
+            0.0,
+            min(100.0, float(render_parameters.get('source_smoothing', 0.0))),
+        ),
         'curve_fit_tolerance': max(
             0.35,
             min(8.0, float(render_parameters.get('cubic_fit_tolerance', 1.0))),
@@ -682,13 +1060,26 @@ def _resolve_svg_render_settings(parameters):
         ),
         'force_orthogonal_as_lines': bool(render_parameters.get('force_orthogonal_as_lines', False)),
         'enable_curve_fitting': bool(render_parameters.get('enable_curve_fitting', False)),
+        'enable_post_fit_export': enable_post_fit_export,
         'include_image': bool(render_parameters.get('include_image', False)),
-        'show_pre': bool(render_parameters.get('show_pre_optimization', False)),
-        'fit_optimized_paths': True,
+        'show_pre': optimization_enabled and bool(render_parameters.get('show_pre_optimization', False)),
+        'fit_optimized_paths': optimization_enabled or enable_post_fit_export,
         'combine_optimized_paths': False,
         'combine_pre_optimization_paths': False,
         'coordinate_precision': 2,
     }
+
+
+def _get_request_bool_arg(name, default=None):
+    raw_value = request.args.get(name)
+    if raw_value is None:
+        return default
+    cleaned = str(raw_value).strip().lower()
+    if cleaned in {'1', 'true', 'yes', 'on'}:
+        return True
+    if cleaned in {'0', 'false', 'no', 'off'}:
+        return False
+    return default
 
 
 def _benchmark_metrics_response(session):
@@ -715,6 +1106,22 @@ def process_centerlines(session):
     gray = session.image
     extraction_profile = _get_session_extraction_profile(session)
     effective_min_path_length = _effective_min_path_length(params, extraction_profile, image_shape=gray.shape)
+    effective_full_min_object_size = _effective_min_object_size(
+        extraction_profile['full_min_object_size'],
+        params,
+        extraction_profile,
+        image_shape=gray.shape,
+    )
+    effective_preview_min_object_size = _effective_min_object_size(
+        extraction_profile['preview_min_object_size'],
+        params,
+        extraction_profile,
+        image_shape=gray.shape,
+    )
+    simplification_enabled = bool(params.get('enable_pruning', DEFAULT_ENABLE_PRUNING))
+    pruning_debug_enabled = simplification_enabled and (
+        bool(params.get('show_pruning_debug_grid', False)) or _should_force_pruning_debug(session.original_filename)
+    )
     
     # Check if optimization is enabled to determine processing level
     optimization_enabled = params.get('enable_optimization', True)
@@ -724,21 +1131,18 @@ def process_centerlines(session):
         initial_paths = extract_skeleton_paths(
             gray,
             params['dark_threshold'],
-            min_object_size=extraction_profile['full_min_object_size'],
+            min_object_size=effective_full_min_object_size,
             min_path_length=max(1, min(8, int(round(effective_min_path_length * 0.5)))),
         )
     else:
         # Fast mode: use the fast extraction function directly
         print("Fast extraction mode for unoptimized processing...")
-        # Import the fast function from the shared engine module.
-        from centerline_engine import create_fast_paths
-        from skimage import morphology
-        
-        # Quick binary conversion and skeletonization with minimal filtering
-        binary = gray < params['dark_threshold']
-        binary = morphology.remove_small_objects(binary, extraction_profile['preview_min_object_size'])
-        skeleton = morphology.skeletonize(binary)
-        initial_paths = create_fast_paths(skeleton, min_path_length=effective_min_path_length)
+        initial_paths = extract_skeleton_paths(
+            gray,
+            params['dark_threshold'],
+            min_object_size=effective_preview_min_object_size,
+            min_path_length=effective_min_path_length,
+        )
     
     if len(initial_paths) == 0:
         return {'error': 'No skeleton paths found. Try adjusting the dark threshold.'}
@@ -748,7 +1152,7 @@ def process_centerlines(session):
         median_stroke_width_px = _estimate_median_stroke_width(
             gray,
             params['dark_threshold'],
-            min_object_size=extraction_profile['full_min_object_size'],
+            min_object_size=effective_full_min_object_size,
         )
         session.stroke_width_estimate_px = median_stroke_width_px
         merge_gap = _effective_merge_gap_from_stroke(
@@ -775,6 +1179,21 @@ def process_centerlines(session):
                 overlap_threshold=params.get('overlap_threshold', 0.3),
                 min_distance=params.get('min_overlap_distance', 8)
             )
+
+        if pruning_debug_enabled:
+            valid_paths, pruning_debug_payload = prune_extracted_paths(
+                valid_paths,
+                min_output_points=2,
+                return_diagnostics=True,
+            )
+        elif simplification_enabled:
+            valid_paths = prune_extracted_paths(
+                valid_paths,
+                min_output_points=2,
+            )
+            pruning_debug_payload = None
+        else:
+            pruning_debug_payload = None
         
         merged_paths_count = len(merged_paths)
     else:
@@ -783,7 +1202,23 @@ def process_centerlines(session):
         
         # Filter paths by minimum length only
         valid_paths = [path for path in initial_paths if len(path) >= effective_min_path_length]
+        if pruning_debug_enabled:
+            valid_paths, pruning_debug_payload = prune_extracted_paths(
+                valid_paths,
+                min_output_points=2,
+                return_diagnostics=True,
+            )
+        elif simplification_enabled:
+            valid_paths = prune_extracted_paths(
+                valid_paths,
+                min_output_points=2,
+            )
+            pruning_debug_payload = None
+        else:
+            pruning_debug_payload = None
         merged_paths_count = len(initial_paths)  # Use initial count since no merging
+
+    valid_path_hints = list((pruning_debug_payload or {}).get('path_hints') or [build_line_span_hints(path) for path in valid_paths])
     
     if len(valid_paths) == 0:
         return {'error': 'No valid paths after filtering. Try reducing minimum path length.'}
@@ -803,7 +1238,10 @@ def process_centerlines(session):
             'optimized_paths': valid_paths,  # Use original paths as "optimized"
             'optimized_scores': [1.0] * len(valid_paths),  # Dummy scores
             'pre_optimization_paths': valid_paths,
-            'circle_system': None  # No circle system in fast mode
+            'optimized_path_hints': valid_path_hints,
+            'pre_optimization_path_hints': valid_path_hints,
+            'circle_system': None,  # No circle system in fast mode
+            'pruning_debug': _serialize_pruning_debug_payload(pruning_debug_payload),
         }
         
         return results
@@ -828,6 +1266,7 @@ def process_centerlines(session):
     
     optimized_paths = []
     optimized_scores = []
+    optimized_path_hints = []
     
     print(f"Optimizing all {len(valid_paths)} valid paths...")
     
@@ -843,6 +1282,7 @@ def process_centerlines(session):
         
         optimized_paths.append(optimized_path)
         optimized_scores.append(optimized_score)
+        optimized_path_hints.append(build_line_span_hints(optimized_path))
     
     # Get corresponding pre-optimization paths for visualization (in same order)
     top_pre_optimization_paths = [valid_paths[idx] for idx in sorted_indices]
@@ -857,7 +1297,10 @@ def process_centerlines(session):
         'optimized_paths': optimized_paths,
         'optimized_scores': optimized_scores,
         'pre_optimization_paths': top_pre_optimization_paths,
-        'circle_system': circle_system
+        'optimized_path_hints': optimized_path_hints,
+        'pre_optimization_path_hints': [valid_path_hints[idx] for idx in sorted_indices],
+        'circle_system': circle_system,
+        'pruning_debug': _serialize_pruning_debug_payload(pruning_debug_payload),
     }
     
     return results
@@ -882,12 +1325,18 @@ def auto_detect_min_path_length_route():
         extraction_profile = _get_session_extraction_profile(session)
         effective_max_min_path_length = extraction_profile.get('max_min_path_length')
         parameter_scale = resolve_parameter_scale(session.image.shape)
+        effective_auto_tune_min_object_size = _effective_min_object_size(
+            extraction_profile['auto_tune_min_object_size'],
+            session.parameters,
+            extraction_profile,
+            image_shape=session.image.shape,
+        )
         
         # Run auto-detection
         detection_result = auto_detect_min_path_length(
             session.image,
             current_threshold,
-            min_object_size=extraction_profile['auto_tune_min_object_size'],
+            min_object_size=effective_auto_tune_min_object_size,
             parameter_scale=parameter_scale,
         )
         
@@ -934,16 +1383,24 @@ def auto_detect_threshold():
     try:
         extraction_profile = _get_session_extraction_profile(session)
         parameter_scale = resolve_parameter_scale(session.image.shape)
+        effective_auto_tune_min_object_size = _effective_min_object_size(
+            extraction_profile['auto_tune_min_object_size'],
+            session.parameters,
+            extraction_profile,
+            image_shape=session.image.shape,
+        )
         # Run auto-detection
         detection_result = auto_detect_dark_threshold(
             session.image,
-            min_object_size=extraction_profile['auto_tune_min_object_size'],
+            min_object_size=effective_auto_tune_min_object_size,
             parameter_scale=parameter_scale,
         )
         
         if detection_result['best_score'] > 0:
             # Update session parameters with detected threshold
             session.parameters['dark_threshold'] = detection_result['best_threshold']
+            session.parameters['enable_optimization'] = False
+            session.parameters['show_pre_optimization'] = True
             sample_metadata = _augment_sample_metadata(
                 detection_result.get('sample_metadata'),
                 session.image.shape,
@@ -1032,7 +1489,12 @@ def _run_auto_detect_threshold_job(session, auto_detect_generation):
 
         detection_result = auto_detect_dark_threshold(
             source_image,
-            min_object_size=extraction_profile['auto_tune_min_object_size'],
+            min_object_size=_effective_min_object_size(
+                extraction_profile['auto_tune_min_object_size'],
+                session.parameters,
+                extraction_profile,
+                image_shape=source_image.shape,
+            ),
             parameter_scale=parameter_scale,
             should_continue=_should_continue_auto_detect,
             on_progress=_record_progress,
@@ -1074,6 +1536,8 @@ def _run_auto_detect_threshold_job(session, auto_detect_generation):
 
         if detection_result['best_score'] > 0:
             session.parameters['dark_threshold'] = float(detection_result['best_threshold'])
+            session.parameters['enable_optimization'] = False
+            session.parameters['show_pre_optimization'] = True
             success = True
             status_message = f"Auto-detect complete. Threshold set to {float(detection_result['best_threshold']):.3f}."
         else:
@@ -1233,7 +1697,7 @@ def auto_tune_extraction():
         sample_metadata = _augment_sample_metadata(
             sample_metadata,
             session.image.shape,
-            logical_min_path_length=int(session.parameters.get('min_path_length', 3)),
+            logical_min_path_length=int(session.parameters.get('min_path_length', DEFAULT_MIN_PATH_LENGTH)),
             logical_merge_gap=int(session.parameters.get('merge_gap', 25)),
         )
 
@@ -1263,7 +1727,7 @@ def auto_tune_extraction():
 
         if tuning_result['quality_score'] <= 0 or tuning_result.get('timed_out'):
             session.parameters['dark_threshold'] = 0.20
-            session.parameters['min_path_length'] = 3
+            session.parameters['min_path_length'] = DEFAULT_MIN_PATH_LENGTH
             session.parameters['enable_optimization'] = False
             session.parameters['show_pre_optimization'] = True
 
@@ -1279,11 +1743,18 @@ def auto_tune_extraction():
 
         session.parameters['dark_threshold'] = tuning_result['best_threshold']
         session.parameters['min_path_length'] = tuning_result['best_min_length']
+        session.parameters['enable_optimization'] = False
+        session.parameters['show_pre_optimization'] = True
         _apply_auto_tuned_merge_gap(
             session,
             dark_threshold=tuning_result['best_threshold'],
             gray_image=session.image,
-            min_object_size=extraction_profile['auto_tune_min_object_size'],
+            min_object_size=_effective_min_object_size(
+                extraction_profile['auto_tune_min_object_size'],
+                session.parameters,
+                extraction_profile,
+                image_shape=session.image.shape,
+            ),
         )
 
         return jsonify({
@@ -1307,7 +1778,7 @@ def auto_tune_extraction():
             if session.auto_tune_generation == auto_tune_generation:
                 session.auto_tune_active = False
         session.parameters['dark_threshold'] = 0.20
-        session.parameters['min_path_length'] = 3
+        session.parameters['min_path_length'] = DEFAULT_MIN_PATH_LENGTH
         session.parameters['enable_optimization'] = False
         session.parameters['show_pre_optimization'] = True
         return jsonify({
@@ -1362,7 +1833,7 @@ def auto_tune_sample_region():
     sample_metadata = _augment_sample_metadata(
         sample_metadata,
         session.image.shape,
-        logical_min_path_length=int(session.parameters.get('min_path_length', 3)),
+        logical_min_path_length=int(session.parameters.get('min_path_length', DEFAULT_MIN_PATH_LENGTH)),
         logical_merge_gap=int(session.parameters.get('merge_gap', 25)),
     )
 
@@ -1388,7 +1859,7 @@ def auto_tune_tile_preview():
 
     try:
         dark_threshold = float(data.get('dark_threshold', session.parameters.get('dark_threshold', 0.20)))
-        min_path_length = int(data.get('min_path_length', session.parameters.get('min_path_length', 3)))
+        min_path_length = int(data.get('min_path_length', session.parameters.get('min_path_length', DEFAULT_MIN_PATH_LENGTH)))
     except Exception:
         return jsonify({'error': 'Invalid threshold or min path length'})
 
@@ -1451,13 +1922,82 @@ def auto_tune_tile_preview():
         extraction_profile,
         image_shape=session.image.shape,
     )
-    tile_data, stats = _extract_tile_preview_paths(
-        session.image,
-        sample_metadata,
-        dark_threshold=dark_threshold,
-        min_path_length=effective_min_path_length,
-        full_resolution=full_image_preview,
+
+    tile_shape = sample_metadata.get('tile_shape')
+    tile_origins = sample_metadata.get('tile_origins') or [[0, 0]]
+    if not (isinstance(tile_shape, (list, tuple)) and len(tile_shape) >= 2):
+        tile_shape = sample_metadata.get('sample_shape') or list(session.image.shape)
+    tile_height = int(tile_shape[0] or session.image.shape[0])
+    tile_width = int(tile_shape[1] or session.image.shape[1])
+    resolved_min_object_size = _effective_min_object_size(
+        extraction_profile['auto_tune_min_object_size'],
+        {'min_path_length': min_path_length},
+        extraction_profile,
+        image_shape=session.image.shape,
     )
+
+    tile_data = []
+    cache_hits = 0
+    cache_misses = 0
+
+    for tile_index, origin in enumerate(tile_origins):
+        if not isinstance(origin, (list, tuple)) or len(origin) < 2:
+            continue
+        origin_x = int(origin[0])
+        origin_y = int(origin[1])
+        cache_key = (
+            int(origin_x),
+            int(origin_y),
+            int(tile_width),
+            int(tile_height),
+            round(float(dark_threshold), 6),
+            int(effective_min_path_length),
+            int(effective_merge_gap),
+            int(resolved_min_object_size),
+        )
+
+        with session.lock:
+            cache_has_key = cache_key in session.tile_preview_cache
+            cached_tile_entry = session.tile_preview_cache.get(cache_key)
+
+        if cache_has_key:
+            cache_hits += 1
+            tile_entry = cached_tile_entry
+        else:
+            cache_misses += 1
+            tile_entry = _extract_single_tile_preview_entry(
+                session.image,
+                tile_index=tile_index,
+                origin_x=origin_x,
+                origin_y=origin_y,
+                tile_width=tile_width,
+                tile_height=tile_height,
+                dark_threshold=dark_threshold,
+                min_path_length=effective_min_path_length,
+                merge_gap=effective_merge_gap,
+                min_object_size=resolved_min_object_size,
+                full_resolution=full_image_preview,
+            )
+            with session.lock:
+                if len(session.tile_preview_cache) >= TILE_PREVIEW_CACHE_LIMIT:
+                    session.tile_preview_cache.clear()
+                session.tile_preview_cache[cache_key] = tile_entry
+
+        if tile_entry is not None:
+            tile_data.append(tile_entry)
+
+    total_valid = sum(int(tile.get('valid_count', 0)) for tile in tile_data)
+    total_orphan = sum(int(tile.get('orphan_count', 0)) for tile in tile_data)
+    total_length = sum(float(tile.get('total_length', 0)) for tile in tile_data)
+    stats = {
+        'total_valid_paths': total_valid,
+        'total_orphan_paths': total_orphan,
+        'total_path_length': total_length,
+        'tile_count': len(tile_data),
+        'noise_ratio': round(total_orphan / max(1, total_valid + total_orphan), 3),
+        'cached_tile_count': int(cache_hits),
+        'computed_tile_count': int(cache_misses),
+    }
     preview_runtime_ms = int(round((time.perf_counter() - preview_started_at) * 1000.0))
 
     return jsonify({
@@ -1466,6 +2006,8 @@ def auto_tune_tile_preview():
         'tile_data': tile_data,
         'tile_path_count': sum(len(t.get('paths', [])) for t in tile_data),
         'stats': stats,
+        'cached_tile_count': int(cache_hits),
+        'computed_tile_count': int(cache_misses),
         'preview_runtime_ms': preview_runtime_ms,
         'source_shape': list(session.image.shape),
         'dark_threshold': float(dark_threshold),
@@ -1510,7 +2052,7 @@ def _run_auto_tune_job(session, auto_tune_generation):
         sample_metadata = _augment_sample_metadata(
             sample_metadata,
             source_image.shape,
-            logical_min_path_length=int(session.parameters.get('min_path_length', 3)),
+            logical_min_path_length=int(session.parameters.get('min_path_length', DEFAULT_MIN_PATH_LENGTH)),
             logical_merge_gap=int(session.parameters.get('merge_gap', 25)),
         )
 
@@ -1583,7 +2125,12 @@ def _run_auto_tune_job(session, auto_tune_generation):
             on_best_result=_record_best_so_far,
             on_progress=_record_progress,
             confidence_target=AUTO_TUNE_CONFIDENCE_TARGET,
-            min_object_size=extraction_profile['auto_tune_min_object_size'],
+            min_object_size=_effective_min_object_size(
+                extraction_profile['auto_tune_min_object_size'],
+                session.parameters,
+                extraction_profile,
+                image_shape=tuning_image.shape,
+            ),
             parameter_scale=parameter_scale,
         )
 
@@ -1595,7 +2142,7 @@ def _run_auto_tune_job(session, auto_tune_generation):
 
         if tuning_result['quality_score'] <= 0 or tuning_result.get('timed_out'):
             session.parameters['dark_threshold'] = 0.20
-            session.parameters['min_path_length'] = 3
+            session.parameters['min_path_length'] = DEFAULT_MIN_PATH_LENGTH
             session.parameters['enable_optimization'] = False
             session.parameters['show_pre_optimization'] = True
             success = False
@@ -1606,6 +2153,8 @@ def _run_auto_tune_job(session, auto_tune_generation):
             if effective_max_min_path_length is not None:
                 detected_min_length = min(detected_min_length, int(effective_max_min_path_length))
             session.parameters['min_path_length'] = detected_min_length
+            session.parameters['enable_optimization'] = False
+            session.parameters['show_pre_optimization'] = True
             stroke_measure_image = source_image
             if crop_bounds is not None:
                 stroke_measure_image = source_image[crop_bounds['y1']:crop_bounds['y2'], crop_bounds['x1']:crop_bounds['x2']]
@@ -1613,7 +2162,12 @@ def _run_auto_tune_job(session, auto_tune_generation):
                 session,
                 dark_threshold=tuning_result['best_threshold'],
                 gray_image=stroke_measure_image,
-                min_object_size=extraction_profile['auto_tune_min_object_size'],
+                min_object_size=_effective_min_object_size(
+                    extraction_profile['auto_tune_min_object_size'],
+                    session.parameters,
+                    extraction_profile,
+                    image_shape=stroke_measure_image.shape,
+                ),
             )
             success = True
             if tuning_result.get('high_confidence_reached'):
@@ -1646,7 +2200,7 @@ def _run_auto_tune_job(session, auto_tune_generation):
                 return
             session.auto_tune_active = False
             session.parameters['dark_threshold'] = 0.20
-            session.parameters['min_path_length'] = 3
+            session.parameters['min_path_length'] = DEFAULT_MIN_PATH_LENGTH
             session.parameters['enable_optimization'] = False
             session.parameters['show_pre_optimization'] = True
             session.auto_tune_progress.update({
@@ -1690,7 +2244,7 @@ def auto_tune_extraction_start():
             'confidence_score': 0.0,
             'quality_score': 0.0,
             'best_threshold': float(session.parameters.get('dark_threshold', 0.20)),
-            'best_min_length': int(session.parameters.get('min_path_length', 3)),
+            'best_min_length': int(session.parameters.get('min_path_length', DEFAULT_MIN_PATH_LENGTH)),
             'timed_out': False,
             'cancelled': False,
             'high_confidence_reached': False,
@@ -1699,7 +2253,7 @@ def auto_tune_extraction_start():
             'live_paths': [],
             'live_paths_current': [],
             'live_paths_current_threshold': 0.0,
-            'live_paths_current_min_length': int(session.parameters.get('min_path_length', 3)),
+            'live_paths_current_min_length': int(session.parameters.get('min_path_length', DEFAULT_MIN_PATH_LENGTH)),
             'live_paths_current_score': 0.0,
             'live_paths_frame_id': 0,
             'live_paths_scale': 1.0,
@@ -1825,44 +2379,169 @@ def api_get_test_run_progress(run_id):
         return jsonify({'error': 'Unknown run_id'}), 404
     return jsonify(progress)
 
-@app.route('/upload', methods=['POST'])
-def upload_file():
-    """Handle file upload."""
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'})
-    
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No file selected'})
-    
-    # Create session
-    session_id = str(uuid.uuid4())
-    session = CenterlineSession(session_id)
 
-    requested_mode = request.form.get('normalization_mode', 'auto')
-    requested_sensitivity = request.form.get('normalization_sensitivity', 'medium')
-    session.parameters['normalization_mode'] = requested_mode
-    session.parameters['normalization_sensitivity'] = requested_sensitivity
-    
-    # Store original filename
-    session.original_filename = file.filename
-    session.benchmark_enabled = _should_capture_benchmark_metrics(file.filename)
-    
-    upload_bytes = file.read()
+def _is_supported_upload_source(mime_type=None, source_name=None):
+    cleaned_mime_type = str(mime_type or '').split(';', 1)[0].strip().lower()
+    cleaned_name = os.path.basename(str(source_name or '')).lower()
+    return (
+        cleaned_mime_type.startswith('image/')
+        or cleaned_mime_type == 'application/pdf'
+        or cleaned_name.endswith('.pdf')
+    )
+
+
+def _guess_remote_source_name(remote_url, content_type=None):
+    parsed = urlsplit(str(remote_url or ''))
+    candidate = os.path.basename(unquote(parsed.path or '')).strip()
+    if candidate and candidate not in ('.', '..'):
+        return candidate
+
+    cleaned_mime_type = str(content_type or '').split(';', 1)[0].strip().lower()
+    extension = mimetypes.guess_extension(cleaned_mime_type) or ''
+    if extension == '.jpe':
+        extension = '.jpg'
+    if not extension and cleaned_mime_type.startswith('image/'):
+        extension = '.png'
+
+    return f'dropped-image{extension}'
+
+
+class _RemoteFetchError(Exception):
+    def __init__(self, message, status_code=400):
+        super().__init__(message)
+        self.status_code = int(status_code)
+
+
+class _RemoteMediaCandidateParser(HTMLParser):
+    def __init__(self, base_url):
+        super().__init__()
+        self.base_url = str(base_url or '')
+        self.candidates = []
+        self._seen = set()
+
+    def _append_candidate(self, candidate):
+        normalized = str(candidate or '').strip()
+        if not normalized:
+            return
+        resolved = urljoin(self.base_url, normalized)
+        parsed = urlsplit(resolved)
+        if parsed.scheme.lower() not in {'http', 'https'}:
+            return
+        if resolved in self._seen:
+            return
+        self._seen.add(resolved)
+        self.candidates.append(resolved)
+
+    def _append_srcset(self, srcset_value):
+        for item in str(srcset_value or '').split(','):
+            candidate = item.strip().split(' ', 1)[0].strip()
+            if candidate:
+                self._append_candidate(candidate)
+
+    def handle_starttag(self, tag, attrs):
+        attr_map = {str(key).lower(): value for key, value in attrs}
+        lowered_tag = str(tag).lower()
+
+        if lowered_tag == 'meta':
+            marker = (
+                attr_map.get('property')
+                or attr_map.get('name')
+                or attr_map.get('itemprop')
+                or ''
+            ).strip().lower()
+            if marker in {'og:image', 'og:image:url', 'twitter:image', 'twitter:image:src', 'image'}:
+                self._append_candidate(attr_map.get('content'))
+            return
+
+        if lowered_tag == 'link':
+            rel_tokens = {token.strip().lower() for token in str(attr_map.get('rel') or '').split() if token.strip()}
+            if 'image_src' in rel_tokens or ('preload' in rel_tokens and str(attr_map.get('as') or '').strip().lower() == 'image'):
+                self._append_candidate(attr_map.get('href'))
+            return
+
+        if lowered_tag in {'img', 'source'}:
+            for key in ('src', 'data-src', 'data-original', 'data-lazy-src', 'data-url'):
+                self._append_candidate(attr_map.get(key))
+            self._append_srcset(attr_map.get('srcset'))
+
+
+def _looks_like_html_payload(content_type, payload):
+    cleaned_content_type = str(content_type or '').split(';', 1)[0].strip().lower()
+    if cleaned_content_type in {'text/html', 'application/xhtml+xml'}:
+        return True
+    snippet = bytes(payload[:256] if payload else b'').lstrip().lower()
+    return snippet.startswith(b'<!doctype html') or snippet.startswith(b'<html')
+
+
+def _extract_remote_media_candidate_urls(html_bytes, base_url):
+    try:
+        html_text = bytes(html_bytes or b'').decode('utf-8', errors='ignore')
+    except Exception:
+        return []
+
+    parser = _RemoteMediaCandidateParser(base_url)
+    try:
+        parser.feed(html_text)
+        parser.close()
+    except Exception:
+        return list(parser.candidates)
+    return list(parser.candidates)
+
+
+def _fetch_remote_payload(remote_url, referer=None):
+    try:
+        headers = {
+            'User-Agent': 'CenterlineTracingWebApp/1.0',
+            'Accept': 'image/*,application/pdf,text/html;q=0.8,*/*;q=0.1',
+        }
+        if referer:
+            headers['Referer'] = str(referer)
+        remote_request = Request(str(remote_url), headers=headers)
+        with urlopen(remote_request, timeout=REMOTE_UPLOAD_TIMEOUT_SEC) as response:
+            response_headers = getattr(response, 'headers', {}) or {}
+            content_type = response_headers.get('Content-Type', '')
+            content_length = response_headers.get('Content-Length')
+            if content_length is not None:
+                try:
+                    if int(content_length) > int(app.config['MAX_CONTENT_LENGTH']):
+                        raise _RemoteFetchError('Remote file exceeds the 16MB upload limit', status_code=413)
+                except (TypeError, ValueError):
+                    pass
+
+            upload_bytes = response.read(int(app.config['MAX_CONTENT_LENGTH']) + 1)
+            final_url = response.geturl() or str(remote_url)
+
+        if len(upload_bytes) > int(app.config['MAX_CONTENT_LENGTH']):
+            raise _RemoteFetchError('Remote file exceeds the 16MB upload limit', status_code=413)
+
+        return upload_bytes, final_url, content_type
+    except HTTPError as exc:
+        raise _RemoteFetchError(f'Remote server returned HTTP {exc.code}') from exc
+    except URLError as exc:
+        raise _RemoteFetchError(f'Could not fetch dropped URL: {exc.reason}') from exc
+
+
+def _build_upload_response(upload_bytes, source_name, normalization_mode, normalization_sensitivity):
+    cleaned_source_name = os.path.basename(str(source_name or '')).strip() or 'uploaded-file'
     if not upload_bytes:
         return jsonify({'error': 'Uploaded file is empty'})
 
+    session_id = str(uuid.uuid4())
+    session = CenterlineSession(session_id)
+    session.parameters['normalization_mode'] = normalization_mode
+    session.parameters['normalization_sensitivity'] = normalization_sensitivity
+    session.original_filename = cleaned_source_name
+    session.benchmark_enabled = _should_capture_benchmark_metrics(cleaned_source_name)
     session.image_file_size = len(upload_bytes)
     _ensure_benchmark_metrics(session)
-    
+
     try:
         load_started_at = time.perf_counter()
-        # Load and preprocess image for extraction, while keeping original for display.
         raw_gray, extraction_gray, preprocessing_info = load_and_process_image(
             upload_bytes,
-            normalization_mode=requested_mode,
-            normalization_sensitivity=requested_sensitivity,
-            source_name=file.filename,
+            normalization_mode=normalization_mode,
+            normalization_sensitivity=normalization_sensitivity,
+            source_name=cleaned_source_name,
         )
         load_elapsed_ms = (time.perf_counter() - load_started_at) * 1000.0
         session.image = extraction_gray
@@ -1873,7 +2552,12 @@ def upload_file():
         session.stroke_width_estimate_px = _estimate_median_stroke_width(
             extraction_gray,
             session.parameters['dark_threshold'],
-            min_object_size=extraction_profile['preview_min_object_size'],
+            min_object_size=_effective_min_object_size(
+                extraction_profile['preview_min_object_size'],
+                session.parameters,
+                extraction_profile,
+                image_shape=extraction_gray.shape,
+            ),
         )
         session.preprocessing_info = dict(preprocessing_info)
         if session.stroke_width_estimate_px is not None:
@@ -1891,11 +2575,9 @@ def upload_file():
         metrics = _ensure_benchmark_metrics(session)
         if metrics is not None:
             metrics['preprocessing'] = dict(session.preprocessing_info)
-        
-        # Store session
+
         sessions[session_id] = session
-        
-        # Only encode the distinct preview variants we actually need to return.
+
         preview_encode_started_at = time.perf_counter()
         raw_img = Image.fromarray((raw_gray * 255).astype(np.uint8))
         raw_buf = BytesIO()
@@ -1930,7 +2612,7 @@ def upload_file():
             'normalization_applied': normalization_applied,
             'image_shape': raw_gray.shape,
             'parameters': session.parameters,
-            'preprocessing': session.preprocessing_info
+            'preprocessing': session.preprocessing_info,
         }
         if normalization_applied:
             response_payload['raw_image_data'] = raw_img_data
@@ -1939,9 +2621,69 @@ def upload_file():
             response_payload['benchmark_metrics_url'] = f"/benchmark_metrics/{session_id}"
 
         return jsonify(response_payload)
-        
     except Exception as e:
         return jsonify({'error': f'Error processing image: {str(e)}'})
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    """Handle file upload."""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'})
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'})
+
+    requested_mode = request.form.get('normalization_mode', 'auto')
+    requested_sensitivity = request.form.get('normalization_sensitivity', 'medium')
+    upload_bytes = file.read()
+    if not _is_supported_upload_source(getattr(file, 'mimetype', None), file.filename):
+        return jsonify({'error': 'Please upload an image or PDF file.'}), 400
+
+    return _build_upload_response(upload_bytes, file.filename, requested_mode, requested_sensitivity)
+
+
+@app.route('/upload_remote', methods=['POST'])
+def upload_remote_file():
+    """Handle remote image or PDF upload from a dropped webpage URL."""
+    data = request.json or {}
+    remote_url = str(data.get('url', '')).strip()
+    if not remote_url:
+        return jsonify({'error': 'No remote URL provided'}), 400
+
+    parsed_url = urlsplit(remote_url)
+    if parsed_url.scheme.lower() not in {'http', 'https'}:
+        return jsonify({'error': 'Only http and https URLs are supported'}), 400
+
+    requested_mode = str(data.get('normalization_mode', 'auto'))
+    requested_sensitivity = str(data.get('normalization_sensitivity', 'medium'))
+
+    try:
+        upload_bytes, final_url, content_type = _fetch_remote_payload(remote_url)
+
+        source_name = _guess_remote_source_name(final_url, content_type=content_type)
+        if _is_supported_upload_source(content_type, source_name):
+            return _build_upload_response(upload_bytes, source_name, requested_mode, requested_sensitivity)
+
+        if _looks_like_html_payload(content_type, upload_bytes):
+            candidate_urls = _extract_remote_media_candidate_urls(upload_bytes, final_url)
+            for candidate_url in candidate_urls[:8]:
+                try:
+                    candidate_bytes, candidate_final_url, candidate_content_type = _fetch_remote_payload(candidate_url, referer=final_url)
+                except _RemoteFetchError:
+                    continue
+
+                candidate_name = _guess_remote_source_name(candidate_final_url, content_type=candidate_content_type)
+                if _is_supported_upload_source(candidate_content_type, candidate_name):
+                    return _build_upload_response(candidate_bytes, candidate_name, requested_mode, requested_sensitivity)
+
+            return jsonify({'error': 'Dropped webpage did not expose a fetchable image or PDF file'}), 400
+
+        return jsonify({'error': 'Dropped URL did not resolve to an image or PDF file'}), 400
+    except _RemoteFetchError as exc:
+        return jsonify({'error': str(exc)}), exc.status_code
+    except Exception as exc:
+        return jsonify({'error': f'Could not fetch dropped URL: {str(exc)}'}), 400
 
 @app.route('/process_immediate', methods=['POST'])
 def process_immediate():
@@ -1960,13 +2702,59 @@ def process_immediate():
     
     try:
         immediate_started_at = time.perf_counter()
+        extraction_elapsed_ms = 0.0
+        post_extraction_elapsed_ms = 0.0
+        response_assembly_elapsed_ms = 0.0
+        initial_preview_publish_elapsed_ms = 0.0
+        length_filter_elapsed_ms = 0.0
+        pruning_elapsed_ms = 0.0
+        final_path_serialization_elapsed_ms = 0.0
+        hint_generation_elapsed_ms = 0.0
+        final_preview_publish_elapsed_ms = 0.0
+        progress_queue_clear_elapsed_ms = 0.0
         while not session.progress_queue.empty():
             session.progress_queue.get()
+
+        session.results = None
+        session.optimization_complete = False
+        session.optimization_stopped = False
+        session.optimization_generation += 1
+        current_generation = session.optimization_generation
+        _clear_live_preview(session, generation=current_generation)
+        _set_merge_progress(
+            session,
+            active=False,
+            phase='idle',
+            processed=0,
+            total=0,
+            percent=0.0,
+            generation=current_generation,
+        )
+        _set_immediate_progress(
+            session,
+            active=True,
+            phase='preparing',
+            percent=10.0,
+            show_bar=False,
+            path_count=0,
+            message='Detecting centerline candidates...',
+            detail='Thresholding the image, extracting the skeleton, and building the first overlay.',
+            elapsed_sec=0.0,
+            generation=current_generation,
+        )
 
         # Quick raw path extraction
         params = session.parameters
         gray = session.image
         extraction_profile = _get_session_extraction_profile(session)
+        simplification_enabled = bool(params.get('enable_pruning', DEFAULT_ENABLE_PRUNING))
+        requested_min_path_length = max(1, int(params.get('min_path_length', DEFAULT_MIN_PATH_LENGTH)))
+        max_min_path_length = extraction_profile.get('max_min_path_length')
+        if max_min_path_length is None:
+            logical_min_path_length = requested_min_path_length
+        else:
+            logical_min_path_length = max(1, min(requested_min_path_length, int(max_min_path_length)))
+        parameter_scale = resolve_parameter_scale(session.image.shape)
         effective_min_path_length = _effective_min_path_length(params, extraction_profile, image_shape=session.image.shape)
 
         # Apply optional crop region (fractions 0-1 of image dimensions)
@@ -1991,30 +2779,100 @@ def process_immediate():
 
         # Always use fast extraction for immediate display
         print("Immediate extraction mode...")
-        from centerline_engine import create_fast_paths
+        from centerline_engine import create_fast_paths, prune_extracted_paths
         from skimage import morphology
+        effective_preview_min_object_size = _effective_min_object_size(
+            extraction_profile['preview_min_object_size'],
+            params,
+            extraction_profile,
+            image_shape=gray.shape,
+        )
         
         # Quick binary conversion and skeletonization
         session.progress_queue.put(
-            f"Skeletonizing binary mask (min object size: {int(extraction_profile['preview_min_object_size'])})..."
+            f"Skeletonizing binary mask (min object size: {int(effective_preview_min_object_size)})..."
         )
         binary = gray < params['dark_threshold']
-        binary = morphology.remove_small_objects(binary, extraction_profile['preview_min_object_size'])
+        if effective_preview_min_object_size > 0:
+            binary = morphology.remove_small_objects(binary, effective_preview_min_object_size)
         skeleton = morphology.skeletonize(binary)
         session.stroke_width_estimate_px = _estimate_median_stroke_width_from_masks(binary, skeleton)
         skeleton_pixels = int(np.count_nonzero(skeleton))
         extraction_min_length = max(1, min(8, int(round(effective_min_path_length * 0.5))))
+        extracting_detail = (
+            f"Skeletonizing the thresholded mask and extracting fast centerline paths "
+            f"from {skeleton_pixels:,} skeleton pixels..."
+        )
+        _set_immediate_progress(
+            session,
+            active=True,
+            phase='extracting',
+            percent=40.0,
+            show_bar=False,
+            path_count=0,
+            message='Detecting centerline candidates...',
+            detail=extracting_detail,
+            elapsed_sec=time.perf_counter() - immediate_started_at,
+            generation=current_generation,
+        )
         session.progress_queue.put(f"Starting fast path extraction on {skeleton_pixels:,} skeleton pixels...")
-        initial_paths = create_fast_paths(
-            skeleton,
+        initial_paths = extract_skeleton_paths(
+            gray,
+            params['dark_threshold'],
+            min_object_size=effective_preview_min_object_size,
             min_path_length=extraction_min_length,
         )
+        extraction_elapsed_ms = max(0.0, (time.perf_counter() - immediate_started_at) * 1000.0)
         session.progress_queue.put(
             f"Fast path extraction complete: {len(initial_paths)} raw paths kept "
             f"(min length: {int(extraction_min_length)})"
         )
+
+        preview_paths = [
+            [
+                [int(point[0]) + crop_offset_row, int(point[1]) + crop_offset_col]
+                for point in path
+            ]
+            for path in initial_paths
+            if path
+        ]
+        initial_preview_publish_started_at = time.perf_counter()
+        _publish_live_preview(session, preview_paths, kind='initial', generation=current_generation)
+        initial_preview_publish_elapsed_ms = max(0.0, (time.perf_counter() - initial_preview_publish_started_at) * 1000.0)
+        session.progress_queue.put(
+            f"Showing a sampled first-pass overlay from {len(preview_paths)} raw paths while filtering continues..."
+        )
+        show_bar = len(initial_paths) >= IMMEDIATE_PROGRESS_BAR_PATH_THRESHOLD
+        filtering_detail = (
+            f"Filtering extracted paths with an effective minimum length of {int(effective_min_path_length)} px "
+            f"(slider: {int(logical_min_path_length)} px, scale: {float(parameter_scale):.2f}x)..."
+        )
+        _set_immediate_progress(
+            session,
+            active=True,
+            phase='filtering',
+            percent=78.0,
+            show_bar=show_bar,
+            path_count=len(initial_paths),
+            message='Detecting centerline candidates...',
+            detail=filtering_detail,
+            elapsed_sec=time.perf_counter() - immediate_started_at,
+            generation=current_generation,
+        )
         
         if len(initial_paths) == 0:
+            _set_immediate_progress(
+                session,
+                active=False,
+                phase='error',
+                percent=72.0,
+                show_bar=show_bar,
+                path_count=len(initial_paths),
+                message='Detecting centerline candidates...',
+                detail='No skeleton paths found. Try adjusting the dark threshold.',
+                elapsed_sec=time.perf_counter() - immediate_started_at,
+                generation=current_generation,
+            )
             return jsonify({'error': 'No skeleton paths found. Try adjusting the dark threshold.'})
         
         merge_gap = _effective_merge_gap_from_stroke(
@@ -2035,21 +2893,92 @@ def process_immediate():
             session.progress_queue.put("Skipping nearby path merging because optimization is disabled.")
 
         # Filter by minimum length
-        session.progress_queue.put(
-            f"Filtering extracted paths by minimum length {int(effective_min_path_length)}..."
-        )
+        session.progress_queue.put(filtering_detail)
+        length_filter_started_at = time.perf_counter()
         valid_paths = [path for path in merged_paths if len(path) >= effective_min_path_length]
-        session.progress_queue.put(
+        length_filter_elapsed_ms = max(0.0, (time.perf_counter() - length_filter_started_at) * 1000.0)
+        pruning_debug_enabled = simplification_enabled and (
+            bool(params.get('show_pruning_debug_grid', False)) or _should_force_pruning_debug(session.original_filename)
+        )
+        pruning_debug_payload = None
+        pruning_timing_payload = None
+        pruning_started_at = time.perf_counter()
+        if pruning_debug_enabled:
+            valid_paths, pruning_debug_payload, pruning_timing_payload = prune_extracted_paths(
+                valid_paths,
+                min_output_points=2,
+                return_diagnostics=True,
+                max_debug_paths=None,
+                return_timing=True,
+            )
+            pruning_summary = dict(pruning_debug_payload.get('summary') or {})
+            session.progress_queue.put(
+                "Pruning debug: "
+                f"{int(pruning_summary.get('input_points', 0))} input points -> "
+                f"{int(pruning_summary.get('output_points', 0))} output points across "
+                f"{int(pruning_summary.get('changed_path_count', 0))}/{int(pruning_summary.get('path_count', 0))} paths"
+            )
+        elif simplification_enabled:
+            valid_paths, pruning_timing_payload = prune_extracted_paths(
+                valid_paths,
+                min_output_points=2,
+                return_timing=True,
+            )
+        else:
+            session.progress_queue.put("Path simplification disabled: keeping length-filtered centerlines without pruning.")
+        pruning_elapsed_ms = max(0.0, (time.perf_counter() - pruning_started_at) * 1000.0)
+        _set_immediate_progress(
+            session,
+            active=True,
+            phase='finalizing',
+            percent=94.0,
+            show_bar=show_bar,
+            path_count=len(initial_paths),
+            message='Detecting centerline candidates...',
+            detail='Finalizing the first simplified overlay...',
+            elapsed_sec=time.perf_counter() - immediate_started_at,
+            generation=current_generation,
+        )
+        ready_detail = (
             f"Immediate overlay ready: {len(valid_paths)} paths kept after length filtering "
-            f"(effective min length: {int(effective_min_path_length)})"
+            f"(effective min length: {int(effective_min_path_length)}; "
+            f"path simplification {'on' if simplification_enabled else 'off'})"
+        )
+        post_extraction_elapsed_ms = max(0.0, (time.perf_counter() - immediate_started_at) * 1000.0) - float(extraction_elapsed_ms)
+        session.progress_queue.put(ready_detail)
+        _set_immediate_progress(
+            session,
+            active=True,
+            phase='ready',
+            percent=100.0,
+            show_bar=show_bar,
+            path_count=len(initial_paths),
+            message='Detecting centerline candidates...',
+            detail=ready_detail,
+            elapsed_sec=time.perf_counter() - immediate_started_at,
+            generation=current_generation,
         )
         
         if len(valid_paths) == 0:
+            _set_immediate_progress(
+                session,
+                active=False,
+                phase='error',
+                percent=100.0,
+                show_bar=show_bar,
+                path_count=len(initial_paths),
+                message='Detecting centerline candidates...',
+                detail='No valid paths after filtering. Try reducing minimum path length.',
+                elapsed_sec=time.perf_counter() - immediate_started_at,
+                generation=current_generation,
+            )
             return jsonify({'error': 'No valid paths after filtering. Try reducing minimum path length.'})
         
         # Convert numpy coordinates to regular Python lists for JSON serialization.
         # If a crop was applied, offset coordinates back to full-image space so
         # the frontend can render paths correctly over the original image.
+        response_assembly_started_at = time.perf_counter()
+        final_path_serialization_started_at = time.perf_counter()
         json_serializable_paths = []
         for path in valid_paths:
             serializable_path = [
@@ -2057,6 +2986,7 @@ def process_immediate():
                 for point in path
             ]
             json_serializable_paths.append(serializable_path)
+        final_path_serialization_elapsed_ms = max(0.0, (time.perf_counter() - final_path_serialization_started_at) * 1000.0)
 
         # Store paths in full-image coordinates for subsequent SVG generation and optimization.
         if crop_offset_row != 0 or crop_offset_col != 0:
@@ -2067,24 +2997,39 @@ def process_immediate():
         else:
             session.initial_paths = valid_paths  # Keep original for processing
         session.partial_optimized_paths = []
-        session.optimization_complete = False
-        session.optimization_stopped = False
-        session.optimization_generation += 1
-        current_generation = session.optimization_generation
-        _clear_live_preview(session, generation=current_generation)
-        _set_merge_progress(
-            session,
-            active=False,
-            phase='idle',
-            processed=0,
-            total=0,
-            percent=0.0,
-            generation=current_generation,
+        hint_generation_started_at = time.perf_counter()
+        session.initial_path_hints = [build_line_span_hints(path) for path in session.initial_paths]
+        hint_generation_elapsed_ms = max(0.0, (time.perf_counter() - hint_generation_started_at) * 1000.0)
+        session.partial_optimized_path_hints = []
+        session.pruning_debug_payload = _serialize_pruning_debug_payload(
+            _offset_pruning_debug_payload(pruning_debug_payload, crop_offset_row, crop_offset_col)
         )
+        final_preview_publish_started_at = time.perf_counter()
+        _publish_live_preview(session, json_serializable_paths, kind='initial', generation=current_generation)
+        final_preview_publish_elapsed_ms = max(0.0, (time.perf_counter() - final_preview_publish_started_at) * 1000.0)
         
         # Clear progress queue
+        progress_queue_clear_started_at = time.perf_counter()
         while not session.progress_queue.empty():
             session.progress_queue.get()
+        progress_queue_clear_elapsed_ms = max(0.0, (time.perf_counter() - progress_queue_clear_started_at) * 1000.0)
+
+        processing_elapsed_sec = time.perf_counter() - immediate_started_at
+        processing_elapsed_ms = processing_elapsed_sec * 1000.0
+        response_assembly_elapsed_ms = max(0.0, (time.perf_counter() - response_assembly_started_at) * 1000.0)
+        timing_breakdown_ms = {
+            'extraction': round(float(extraction_elapsed_ms), 3),
+            'initial_preview_publish': round(float(initial_preview_publish_elapsed_ms), 3),
+            'length_filter': round(float(length_filter_elapsed_ms), 3),
+            'pruning': round(float(pruning_elapsed_ms), 3),
+            'final_path_serialization': round(float(final_path_serialization_elapsed_ms), 3),
+            'hint_generation': round(float(hint_generation_elapsed_ms), 3),
+            'final_preview_publish': round(float(final_preview_publish_elapsed_ms), 3),
+            'progress_queue_clear': round(float(progress_queue_clear_elapsed_ms), 3),
+            'post_extraction': round(float(max(0.0, post_extraction_elapsed_ms)), 3),
+            'response_assembly': round(float(response_assembly_elapsed_ms), 3),
+            'total_server': round(float(processing_elapsed_ms), 3),
+        }
         
         # Create immediate results for magenta display
         immediate_results = {
@@ -2097,8 +3042,17 @@ def process_immediate():
             'paths': json_serializable_paths,  # Use JSON-serializable version
             'optimization_enabled': bool(params.get('enable_optimization', True)),
             'optimization_started': False,
+            'logical_min_path_length': int(logical_min_path_length),
+            'effective_min_path_length': int(effective_min_path_length),
+            'parameter_scale': float(parameter_scale),
+            'processing_elapsed_sec': float(processing_elapsed_sec),
+            'processing_elapsed_ms': float(processing_elapsed_ms),
+            'timing_breakdown_ms': timing_breakdown_ms,
+            'pruning_timing_breakdown_ms': pruning_timing_payload,
             'effective_merge_gap': int(merge_gap),
             'median_stroke_width_px': float(session.stroke_width_estimate_px) if session.stroke_width_estimate_px is not None else None,
+            'path_simplification_enabled': bool(simplification_enabled),
+            'pruning_debug': session.pruning_debug_payload,
         }
         
         # Start optimization in background if enabled
@@ -2116,7 +3070,20 @@ def process_immediate():
             'valid_paths_count': len(valid_paths),
             'optimization_started': bool(immediate_results['optimization_started']),
             'crop_applied': bool(crop_offset_row != 0 or crop_offset_col != 0),
+            'timing_breakdown_ms': timing_breakdown_ms,
         })
+        _set_immediate_progress(
+            session,
+            active=False,
+            phase='complete',
+            percent=100.0,
+            show_bar=show_bar,
+            path_count=len(initial_paths),
+            message='Detecting centerline candidates...',
+            detail=ready_detail,
+            elapsed_sec=processing_elapsed_sec,
+            generation=current_generation,
+        )
         
         return jsonify({
             'success': True,
@@ -2125,6 +3092,18 @@ def process_immediate():
         })
         
     except Exception as e:
+        _set_immediate_progress(
+            session,
+            active=False,
+            phase='error',
+            percent=0.0,
+            show_bar=False,
+            path_count=0,
+            message='Detecting centerline candidates...',
+            detail=f'Processing error: {str(e)}',
+            elapsed_sec=(time.perf_counter() - immediate_started_at) if 'immediate_started_at' in locals() else 0.0,
+            generation=current_generation if 'current_generation' in locals() else None,
+        )
         return jsonify({'error': f'Processing error: {str(e)}'})
 
 def background_optimization(session, generation):
@@ -2137,6 +3116,7 @@ def background_optimization(session, generation):
 
         params = session.parameters
         valid_paths = list(session.initial_paths or [])
+        valid_path_hints = list(session.initial_path_hints or [])
         extraction_profile = _get_session_extraction_profile(session)
         effective_min_path_length = _effective_min_path_length(params, extraction_profile, image_shape=session.image.shape)
         merge_gap = _effective_merge_gap_from_stroke(
@@ -2270,12 +3250,14 @@ def background_optimization(session, generation):
         merged_valid_paths = [path for path in merged_paths if len(path) >= effective_min_path_length]
         if merged_valid_paths:
             valid_paths = merged_valid_paths
+            valid_path_hints = [build_line_span_hints(path) for path in valid_paths]
             session.progress_queue.put(
                 f"Path merging complete: {len(session.initial_paths or [])} raw paths -> {len(merged_paths)} merged paths in {merge_elapsed_sec:.2f}s; "
                 f"{len(valid_paths)} paths kept (min length: {int(effective_min_path_length)})"
             )
         else:
             valid_paths = [path for path in valid_paths if len(path) >= effective_min_path_length]
+            valid_path_hints = [build_line_span_hints(path) for path in valid_paths]
             session.progress_queue.put(
                 "Merged result was empty after filtering; falling back to unmerged paths for optimization."
             )
@@ -2284,6 +3266,7 @@ def background_optimization(session, generation):
             if generation != session.optimization_generation:
                 return
             session.initial_paths = valid_paths
+            session.initial_path_hints = valid_path_hints
         _publish_live_preview(session, valid_paths, kind='merge', generation=generation)
         _set_merge_progress(
             session,
@@ -2397,6 +3380,7 @@ def background_optimization(session, generation):
                 if generation != session.optimization_generation:
                     break
                 session.partial_optimized_paths.append(optimized_path)
+                session.partial_optimized_path_hints.append(build_line_span_hints(optimized_path))
                 session.live_preview_kind = 'optimization'
                 session.live_preview_frame_id += 1
 
@@ -2423,10 +3407,16 @@ def background_optimization(session, generation):
             return
 
         finalized_optimized_paths = list(session.partial_optimized_paths)
+        finalized_optimized_path_hints = list(session.partial_optimized_path_hints)
         finalized_pre_optimization_paths = [
             valid_paths[idx]
             for idx in processed_sorted_indices[:len(finalized_optimized_paths)]
             if 0 <= int(idx) < len(valid_paths)
+        ]
+        finalized_pre_optimization_path_hints = [
+            valid_path_hints[idx]
+            for idx in processed_sorted_indices[:len(finalized_optimized_paths)]
+            if 0 <= int(idx) < len(valid_path_hints)
         ]
         session.results = {
             'initial_paths_count': len(session.initial_paths or []),
@@ -2437,6 +3427,8 @@ def background_optimization(session, generation):
             'optimized_paths': finalized_optimized_paths,
             'optimized_scores': list(optimized_scores[:len(finalized_optimized_paths)]),
             'pre_optimization_paths': finalized_pre_optimization_paths,
+            'optimized_path_hints': finalized_optimized_path_hints,
+            'pre_optimization_path_hints': finalized_pre_optimization_path_hints,
             'circle_system': circle_system,
         }
 
@@ -2529,12 +3521,21 @@ def get_progress(session_id):
     while not session.progress_queue.empty():
         messages.append(session.progress_queue.get())
 
+    include_preview_paths = _get_request_bool_arg('include_preview_paths', default=True)
+
     with session.lock:
         optimized_count = len(session.partial_optimized_paths)
         live_preview_kind = session.live_preview_kind
         live_preview_frame_id = int(session.live_preview_frame_id)
         live_preview_count = optimized_count if optimized_count > 0 else len(session.live_preview_paths)
+        live_preview_paths = []
+        if include_preview_paths:
+            live_preview_paths = [
+                _serialize_point_list(path)
+                for path in list(session.live_preview_paths)
+            ]
         merge_progress = dict(session.merge_progress)
+        immediate_progress = dict(session.immediate_progress)
     
     return jsonify({
         'messages': messages,
@@ -2545,7 +3546,9 @@ def get_progress(session_id):
         'live_preview_kind': live_preview_kind,
         'live_preview_frame_id': live_preview_frame_id,
         'live_preview_count': live_preview_count,
+        'live_preview_paths': live_preview_paths,
         'merge_progress': merge_progress,
+        'immediate_progress': immediate_progress,
         'optimization_running': bool(
             session.optimization_thread and session.optimization_thread.is_alive() and not session.optimization_complete
         ),
@@ -2649,7 +3652,7 @@ def stop_auto_tune():
         })
 
     session.parameters['dark_threshold'] = 0.20
-    session.parameters['min_path_length'] = 3
+    session.parameters['min_path_length'] = DEFAULT_MIN_PATH_LENGTH
     session.parameters['enable_optimization'] = False
     session.parameters['show_pre_optimization'] = True
 
@@ -2768,6 +3771,7 @@ def generate_svg():
         render_parameters.update(data['parameters'])
     svg_render_settings = _resolve_svg_render_settings(render_parameters)
     show_pre = bool(svg_render_settings['show_pre'])
+    optimization_enabled = bool(render_parameters.get('enable_optimization', True))
     
     detected_paths_count = len(session.initial_paths) if session.initial_paths else 0
 
@@ -2776,20 +3780,30 @@ def generate_svg():
         # Show only magenta paths immediately
         _log_debug(f"Generating immediate SVG with {len(session.initial_paths)} paths")
         paths_to_show = session.initial_paths
-        optimized_paths = []
+        if optimization_enabled:
+            optimized_paths = []
+            optimized_path_hints = []
+            pre_optimization_paths = paths_to_show if show_pre else []
+        else:
+            optimized_paths = paths_to_show
+            optimized_path_hints = list(session.initial_path_hints) or [build_line_span_hints(path) for path in optimized_paths]
+            pre_optimization_paths = []
         circle_system = None
-        pre_optimization_paths = paths_to_show if show_pre else []
-        
+
     elif display_mode == 'progressive':
         # Show magenta + current blue progress
         with session.lock:
             # Make a thread-safe copy of the paths to avoid issues during iteration
             optimized_paths = list(session.partial_optimized_paths)
+            optimized_path_hints = list(session.partial_optimized_path_hints)
             live_preview_paths = list(session.live_preview_paths)
-        
+
         _log_debug(f"Generating progressive SVG with {len(optimized_paths)} optimized paths")
         paths_to_show = session.initial_paths
-        if live_preview_paths:
+        if not optimization_enabled:
+            optimized_paths = list(session.initial_paths or [])
+            optimized_path_hints = list(session.initial_path_hints) or [build_line_span_hints(path) for path in optimized_paths]
+        elif live_preview_paths:
             stitched_progressive_paths = list(live_preview_paths)
             optimized_prefix_count = min(len(optimized_paths), len(stitched_progressive_paths))
             if optimized_prefix_count > 0:
@@ -2797,6 +3811,7 @@ def generate_svg():
             if len(optimized_paths) > len(stitched_progressive_paths):
                 stitched_progressive_paths.extend(optimized_paths[optimized_prefix_count:])
             optimized_paths = stitched_progressive_paths
+            optimized_path_hints = [build_line_span_hints(path) for path in optimized_paths]
         circle_system = None  # Could add this later
         pre_optimization_paths = paths_to_show if show_pre else []
         
@@ -2806,38 +3821,52 @@ def generate_svg():
         results = session.results
         paths_to_show = results.get('pre_optimization_paths', [])
         optimized_paths = results.get('optimized_paths', [])
+        optimized_path_hints = results.get('optimized_path_hints') or [build_line_span_hints(path) for path in optimized_paths]
         circle_system = results.get('circle_system')
         pre_optimization_paths = paths_to_show if show_pre else []
         
     else:
         return jsonify({'error': 'No results available yet'})
 
-    suppress_paths_in_view = detected_paths_count > SVG_VIEW_PATH_RENDER_LIMIT
-    if suppress_paths_in_view and (optimized_paths or pre_optimization_paths):
+    preview_paths_suppressed = detected_paths_count > SVG_VIEW_PATH_RENDER_LIMIT
+    if preview_paths_suppressed and (optimized_paths or pre_optimization_paths):
         _log_debug(
-            f"Suppressing SVG preview paths because detected path count "
+            f"Sampling SVG preview paths because detected path count "
             f"{detected_paths_count} exceeds limit {SVG_VIEW_PATH_RENDER_LIMIT}"
         )
-        optimized_paths = []
-        pre_optimization_paths = []
+        optimized_paths, optimized_path_hints = _sample_paths_and_hints_for_preview(
+            optimized_paths,
+            optimized_path_hints,
+            SVG_VIEW_PATH_RENDER_LIMIT,
+        )
+        pre_optimization_paths, _ = _sample_paths_and_hints_for_preview(
+            pre_optimization_paths,
+            None,
+            SVG_VIEW_PATH_RENDER_LIMIT,
+        )
 
     try:
         svg_started_at = time.perf_counter()
         background_image = session.display_image if session.display_image is not None else session.image
+        render_optimized_paths = [] if display_mode == 'immediate' and optimization_enabled else optimized_paths
+        render_optimized_path_hints = [] if display_mode == 'immediate' and optimization_enabled else optimized_path_hints
         svg_content, suppressed, cache_hit = _render_svg_content(
             session,
             f"view:{display_mode}",
             background_image,
             None if display_mode == 'immediate' else circle_system,
-            [] if display_mode == 'immediate' else optimized_paths,
+            render_optimized_paths,
             pre_optimization_paths,
+            render_optimized_path_hints,
+            svg_render_settings['source_smoothing'],
             svg_render_settings['curve_fit_tolerance'],
             svg_render_settings['endpoint_tangent_strictness'],
             svg_render_settings['force_orthogonal_as_lines'],
             svg_render_settings['enable_curve_fitting'],
+            svg_render_settings['enable_post_fit_export'],
             svg_render_settings['include_image'],
             show_pre,
-            suppress_paths_in_view=suppress_paths_in_view,
+            suppress_paths_in_view=preview_paths_suppressed,
             fit_optimized_paths=svg_render_settings['fit_optimized_paths'],
             combine_optimized_paths=svg_render_settings['combine_optimized_paths'],
             combine_pre_optimization_paths=svg_render_settings['combine_pre_optimization_paths'],
@@ -2855,6 +3884,8 @@ def generate_svg():
         return jsonify({
             'svg': svg_content,
             'preview_paths_suppressed': suppressed,
+            'detected_paths_count': int(detected_paths_count),
+            'rendered_path_count': int(len(render_optimized_paths) + len(pre_optimization_paths)),
         })
             
     except Exception as e:
@@ -2877,7 +3908,13 @@ def download_svg(session_id):
     
     try:
         download_started_at = time.perf_counter()
-        svg_render_settings = _resolve_svg_render_settings(session.parameters)
+        render_parameters = dict(session.parameters)
+        include_image_override = _get_request_bool_arg('include_image', default=None)
+        if include_image_override is not None:
+            render_parameters['include_image'] = bool(include_image_override)
+
+        svg_render_settings = _resolve_svg_render_settings(render_parameters)
+        optimization_enabled = bool(session.parameters.get('enable_optimization', True))
 
         # Create filename based on original upload
         original_filename = session.original_filename or 'centerline_extraction'
@@ -2889,23 +3926,55 @@ def download_svg(session_id):
         
         # Determine what to show based on available data
         show_pre = bool(svg_render_settings['show_pre'])
-        if has_progressive_data:
+        prefer_final_results = bool(
+            has_traditional_results and (
+                session.optimization_complete
+                or not has_progressive_data
+                or (
+                    optimization_enabled
+                    and not session.partial_optimized_paths
+                    and len(session.results.get('optimized_paths', []) or []) > 0
+                )
+            )
+        )
+
+        if has_progressive_data and not prefer_final_results:
             # Use progressive data
             _log_debug(f"Generating download SVG with progressive data: {len(session.initial_paths)} initial paths, {len(session.partial_optimized_paths)} optimized paths")
-            optimized_paths = list(session.partial_optimized_paths)
-            pre_optimization_paths = session.initial_paths if show_pre else []
+            if optimization_enabled:
+                optimized_paths = list(session.partial_optimized_paths)
+                optimized_path_hints = list(session.partial_optimized_path_hints)
+                pre_optimization_paths = session.initial_paths if show_pre else []
+            else:
+                optimized_paths = list(session.initial_paths or [])
+                optimized_path_hints = list(session.initial_path_hints) or [build_line_span_hints(path) for path in optimized_paths]
+                pre_optimization_paths = []
             circle_system = None
             render_variant = 'download:progressive'
+            export_source = 'progressive'
         else:
             # Use traditional results
             results = session.results
             optimization_enabled = session.parameters.get('enable_optimization', True)
-            if not optimization_enabled:
-                show_pre = True
             optimized_paths = results['optimized_paths']
-            pre_optimization_paths = results['pre_optimization_paths']
+            optimized_path_hints = results.get('optimized_path_hints') or [build_line_span_hints(path) for path in optimized_paths]
+            pre_optimization_paths = results['pre_optimization_paths'] if optimization_enabled else []
             circle_system = results['circle_system']
             render_variant = 'download:final'
+            export_source = 'final'
+
+        if not optimization_enabled and not svg_render_settings['enable_post_fit_export']:
+            pre_optimization_paths = list(session.initial_paths or optimized_paths or [])
+            optimized_paths = []
+            optimized_path_hints = []
+            show_pre = True
+
+        _log_debug(
+            "Download SVG export source="
+            f"{export_source}, optimization_enabled={bool(optimization_enabled)}, "
+            f"optimized_paths={len(optimized_paths)}, pre_paths={len(pre_optimization_paths)}, "
+            f"include_image={bool(svg_render_settings['include_image'])}"
+        )
 
         svg_content, _, cache_hit = _render_svg_content(
             session,
@@ -2914,10 +3983,13 @@ def download_svg(session_id):
             circle_system,
             optimized_paths,
             pre_optimization_paths,
+            optimized_path_hints,
+            svg_render_settings['source_smoothing'],
             svg_render_settings['curve_fit_tolerance'],
             svg_render_settings['endpoint_tangent_strictness'],
             svg_render_settings['force_orthogonal_as_lines'],
             svg_render_settings['enable_curve_fitting'],
+            svg_render_settings['enable_post_fit_export'],
             svg_render_settings['include_image'],
             show_pre,
             suppress_paths_in_view=False,

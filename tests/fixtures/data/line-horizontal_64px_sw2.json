@@ -1,0 +1,17 @@
+{
+  "id": "line-horizontal",
+  "description": "Horizontal line across centre",
+  "category": "line",
+  "size": 64,
+  "stroke_width": 2,
+  "tolerance_px": 1.0,
+  "expected_segment_types": [
+    "line"
+  ],
+  "png_file": "line-horizontal_64px_sw2.png",
+  "stats": {
+    "total_pixels": 4096,
+    "stroke_pixels": 104,
+    "coverage": 0.0254
+  }
+}
