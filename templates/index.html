@@ -1790,7 +1790,7 @@
                         </div>
                         <div class="help-control-item">
                             <p class="help-control-name">Ok</p>
-                            <p class="help-control-desc">Accepts the shown tuning values and continues with full-image processing. If you do nothing, the review auto-accepts after about one second.</p>
+                            <p class="help-control-desc">Accepts the shown tuning values and continues with full-image processing. The review stays open until you explicitly continue.</p>
                         </div>
                     </div>
                 </section>
@@ -1951,7 +1951,6 @@
             previewToken: 0,
             previewInFlight: false,
             debounceTimer: null,
-            autoAcceptTimer: null,
             lastTileData: null,
             lastSourceShape: null,
             lastPreviewRuntimeMs: null,
@@ -3635,10 +3634,6 @@
                 clearTimeout(tileTuneReviewState.debounceTimer);
                 tileTuneReviewState.debounceTimer = null;
             }
-            if (tileTuneReviewState.autoAcceptTimer) {
-                clearTimeout(tileTuneReviewState.autoAcceptTimer);
-                tileTuneReviewState.autoAcceptTimer = null;
-            }
             tileTuneReviewState.previewToken += 1;
             tileTuneReviewState.previewInFlight = false;
             tileTuneReviewState.active = false;
@@ -3664,10 +3659,6 @@
             tileTuneReviewState.sampleMetadata = sampleMetadata || null;
             tileTuneReviewState.shouldProcessAfter = Boolean(shouldProcessAfter);
             tileTuneReviewState.previewToken += 1;
-            if (tileTuneReviewState.autoAcceptTimer) {
-                clearTimeout(tileTuneReviewState.autoAcceptTimer);
-                tileTuneReviewState.autoAcceptTimer = null;
-            }
             tileTuneReviewState.lastPreviewRuntimeMs = null;
             tileTuneReviewState.fullImagePreviewMode = false;
 
@@ -3683,31 +3674,19 @@
             tileTuneReviewState.pendingAutoSkipDecision = samplingMode === 'random_tiles_mosaic' && tileCount > 0;
             setTileTuneReadonlyInfo(buildTileTuneReadonlyInfo(sampleMetadata));
             if (samplingMode === 'random_tiles_mosaic' && tileCount > 0) {
-                setTileTuneDetails(`Adjust sliders to tune threshold/min length. Preview updates inside ${tileCount} sampled tiles only.`);
+                setTileTuneDetails(`Adjust sliders to tune threshold/min length. Preview updates inside ${tileCount} sampled tiles only. Click Ok to continue when the preview looks right.`);
             } else {
-                setTileTuneDetails('Adjust sliders to tune threshold/min length. Preview updates on sampled area only.');
+                setTileTuneDetails('Adjust sliders to tune threshold/min length. Preview updates on sampled area only. Click Ok to continue when the preview looks right.');
             }
             updateTileTuneActionButtons();
 
             renderSampleBoundingBox(sampleMetadata, 0);
             requestTileOnlyPreview();
-            tileTuneReviewState.autoAcceptTimer = setTimeout(() => {
-                tileTuneReviewState.autoAcceptTimer = null;
-                if (!tileTuneReviewState.active) {
-                    return;
-                }
-                acceptTileTuningAndContinue();
-            }, 1000);
         }
 
         function requestTileOnlyPreview(options = {}) {
             if (!tileTuneReviewState.active || !currentSessionId) {
                 return;
-            }
-
-            if (options.debounce && tileTuneReviewState.autoAcceptTimer) {
-                clearTimeout(tileTuneReviewState.autoAcceptTimer);
-                tileTuneReviewState.autoAcceptTimer = null;
             }
 
             const runFetch = () => {
@@ -3849,11 +3828,6 @@
         function resampleTileTuning() {
             if (!tileTuneReviewState.active || !currentSessionId) {
                 return;
-            }
-
-            if (tileTuneReviewState.autoAcceptTimer) {
-                clearTimeout(tileTuneReviewState.autoAcceptTimer);
-                tileTuneReviewState.autoAcceptTimer = null;
             }
 
             tileTuneLog('🔁 Resampling tile set...', 'start');
