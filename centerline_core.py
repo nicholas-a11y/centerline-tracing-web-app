@@ -12,7 +12,8 @@ import tempfile
 import numpy as np
 from PIL import Image
 
-from centerline_engine import extract_skeleton_paths, merge_nearby_paths, prune_extracted_paths
+from centerline_engine_light import extract_skeleton_paths, prune_extracted_paths
+from centerline_engine import merge_nearby_paths
 
 
 AUTO_TUNE_TIME_BUDGET_SEC = 60.0

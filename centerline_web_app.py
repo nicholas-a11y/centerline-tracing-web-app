@@ -25,11 +25,21 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urljoin, urlsplit
 from urllib.request import Request, urlopen
 
-# Import our existing centerline extraction functions
+# Import the current UI engine surface from the lightweight module.
+from centerline_engine_light import (
+    build_line_span_hints,
+    create_svg_output,
+    extract_skeleton_paths,
+    prune_extracted_paths,
+)
+
+# Keep legacy optimization functionality on the original engine during migration.
 from centerline_engine import (
-    CircleEvaluationSystem, extract_skeleton_paths, merge_nearby_paths,
-    optimize_path_with_circles, create_svg_output, remove_overlapping_paths,
-    optimize_path_with_custom_params, prune_extracted_paths, build_line_span_hints
+    CircleEvaluationSystem,
+    merge_nearby_paths,
+    optimize_path_with_circles,
+    optimize_path_with_custom_params,
+    remove_overlapping_paths,
 )
 from centerline_core import (
     AUTO_TUNE_CONFIDENCE_TARGET,
@@ -950,13 +960,77 @@ def _get_cached_svg_render(session, cache_key):
     return session.svg_cache.get(cache_key)
 
 
-def _store_cached_svg_render(session, cache_key, svg_content, suppressed):
+def _store_cached_svg_render(session, cache_key, svg_content, suppressed, render_metadata=None):
     if len(session.svg_cache) >= 8:
         oldest_key = next(iter(session.svg_cache))
         session.svg_cache.pop(oldest_key, None)
     session.svg_cache[cache_key] = {
         'svg': svg_content,
         'preview_paths_suppressed': bool(suppressed),
+        'render_metadata': dict(render_metadata or {}),
+    }
+
+
+def _build_svg_optimization_summary(
+    render_metadata,
+    *,
+    enable_post_fit_export,
+    fit_optimized_paths,
+    enable_curve_fitting,
+    force_orthogonal_as_lines,
+    elapsed_ms,
+    svg_content,
+    cache_hit,
+):
+    metadata = dict(render_metadata or {})
+    source_path_count = int(metadata.get('source_path_count', 0))
+    source_point_count = int(metadata.get('source_point_count', 0))
+    source_segment_count = int(metadata.get('source_segment_count', 0))
+    output_path_count = int(metadata.get('output_path_count', source_path_count))
+    output_segment_count = int(metadata.get('output_segment_count', source_segment_count))
+    line_segment_count = int(metadata.get('line_segment_count', output_segment_count))
+    bezier_segment_count = int(metadata.get('bezier_segment_count', 0))
+
+    segment_delta = output_segment_count - source_segment_count
+    segment_reduction_pct = 0.0
+    if source_segment_count > 0:
+        segment_reduction_pct = ((source_segment_count - output_segment_count) / source_segment_count) * 100.0
+
+    if not enable_post_fit_export or not fit_optimized_paths:
+        work_label = 'Refreshing direct path preview'
+    elif enable_curve_fitting:
+        work_label = 'Re-fitting cubic export geometry'
+    elif force_orthogonal_as_lines:
+        work_label = 'Refreshing line-only export geometry'
+    else:
+        work_label = 'Refreshing optimized path preview'
+
+    geometry_summary = (
+        f"{source_segment_count} source segments -> {output_segment_count} final segments"
+        if source_segment_count > 0 or output_segment_count > 0
+        else 'No vector segments generated'
+    )
+
+    return {
+        'work_label': work_label,
+        'geometry_summary': geometry_summary,
+        'source_path_count': source_path_count,
+        'output_path_count': output_path_count,
+        'source_point_count': source_point_count,
+        'source_segment_count': source_segment_count,
+        'output_segment_count': output_segment_count,
+        'line_segment_count': line_segment_count,
+        'bezier_segment_count': bezier_segment_count,
+        'segment_delta': int(segment_delta),
+        'segment_reduction_pct': float(segment_reduction_pct),
+        'elapsed_ms': float(elapsed_ms),
+        'elapsed_sec': float(elapsed_ms / 1000.0),
+        'svg_size_bytes': int(len(svg_content.encode('utf-8'))),
+        'cache_hit': bool(cache_hit),
+        'fit_optimized_paths': bool(fit_optimized_paths),
+        'enable_curve_fitting': bool(enable_curve_fitting),
+        'force_orthogonal_as_lines': bool(force_orthogonal_as_lines),
+        'enable_post_fit_export': bool(enable_post_fit_export),
     }
 
 
@@ -1006,16 +1080,21 @@ def _render_svg_content(
     )
     cached_render = _get_cached_svg_render(session, cache_key)
     if cached_render is not None:
-        return cached_render['svg'], cached_render['preview_paths_suppressed'], True
+        return (
+            cached_render['svg'],
+            cached_render['preview_paths_suppressed'],
+            True,
+            dict(cached_render.get('render_metadata') or {}),
+        )
 
-    import centerline_engine as wo
+    import centerline_engine_light as wo
     original_show_bitmap = wo.SHOW_BITMAP
     original_show_pre = wo.SHOW_PRE_OPTIMIZATION_PATHS
 
     try:
         wo.SHOW_BITMAP = include_image
         wo.SHOW_PRE_OPTIMIZATION_PATHS = show_pre
-        svg_content = create_svg_output(
+        render_result = create_svg_output(
             background_image,
             circle_system,
             optimized_paths,
@@ -1032,13 +1111,19 @@ def _render_svg_content(
             combine_pre_optimization_paths=combine_pre_optimization_paths,
             coordinate_precision=coordinate_precision,
             optimized_path_hints=optimized_path_hints,
+            return_metadata=True,
         )
+        if isinstance(render_result, tuple) and len(render_result) == 2:
+            svg_content, render_metadata = render_result
+        else:
+            svg_content = render_result
+            render_metadata = {}
     finally:
         wo.SHOW_BITMAP = original_show_bitmap
         wo.SHOW_PRE_OPTIMIZATION_PATHS = original_show_pre
 
-    _store_cached_svg_render(session, cache_key, svg_content, suppress_paths_in_view)
-    return svg_content, suppress_paths_in_view, False
+    _store_cached_svg_render(session, cache_key, svg_content, suppress_paths_in_view, render_metadata)
+    return svg_content, suppress_paths_in_view, False, render_metadata
 
 
 def _resolve_svg_render_settings(parameters):
@@ -2779,7 +2864,6 @@ def process_immediate():
 
         # Always use fast extraction for immediate display
         print("Immediate extraction mode...")
-        from centerline_engine import create_fast_paths, prune_extracted_paths
         from skimage import morphology
         effective_preview_min_object_size = _effective_min_object_size(
             extraction_profile['preview_min_object_size'],
@@ -3850,7 +3934,7 @@ def generate_svg():
         background_image = session.display_image if session.display_image is not None else session.image
         render_optimized_paths = [] if display_mode == 'immediate' and optimization_enabled else optimized_paths
         render_optimized_path_hints = [] if display_mode == 'immediate' and optimization_enabled else optimized_path_hints
-        svg_content, suppressed, cache_hit = _render_svg_content(
+        svg_content, suppressed, cache_hit, render_metadata = _render_svg_content(
             session,
             f"view:{display_mode}",
             background_image,
@@ -3872,11 +3956,22 @@ def generate_svg():
             combine_pre_optimization_paths=svg_render_settings['combine_pre_optimization_paths'],
             coordinate_precision=svg_render_settings['coordinate_precision'],
         )
+        svg_elapsed_ms = (time.perf_counter() - svg_started_at) * 1000.0
+        optimization_summary = _build_svg_optimization_summary(
+            render_metadata,
+            enable_post_fit_export=svg_render_settings['enable_post_fit_export'],
+            fit_optimized_paths=svg_render_settings['fit_optimized_paths'],
+            enable_curve_fitting=svg_render_settings['enable_curve_fitting'],
+            force_orthogonal_as_lines=svg_render_settings['force_orthogonal_as_lines'],
+            elapsed_ms=svg_elapsed_ms,
+            svg_content=svg_content,
+            cache_hit=cache_hit,
+        )
         _log_debug(f"SVG content ready, size: {len(svg_content)} characters (cache_hit={cache_hit})")
         _record_benchmark_svg(
             session,
             display_mode,
-            (time.perf_counter() - svg_started_at) * 1000.0,
+            svg_elapsed_ms,
             svg_content,
             suppressed,
             cache_hit=cache_hit,
@@ -3886,6 +3981,7 @@ def generate_svg():
             'preview_paths_suppressed': suppressed,
             'detected_paths_count': int(detected_paths_count),
             'rendered_path_count': int(len(render_optimized_paths) + len(pre_optimization_paths)),
+            'optimization_summary': optimization_summary,
         })
             
     except Exception as e:
@@ -3976,7 +4072,7 @@ def download_svg(session_id):
             f"include_image={bool(svg_render_settings['include_image'])}"
         )
 
-        svg_content, _, cache_hit = _render_svg_content(
+        svg_content, _, cache_hit, _ = _render_svg_content(
             session,
             render_variant,
             background_image,

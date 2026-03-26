@@ -1387,7 +1387,7 @@
         <div class="header">
             <div class="header-inner">
                 <h1>🎯 Centerline Extraction Tool</h1>
-                <p>Interactive centerline extraction v1.91 Nicholas Leqeta</p>
+                <p>Interactive centerline extraction v1.92 Nicholas Leqeta</p>
                 <button type="button" class="header-help-btn" id="helpBtn">? Help</button>
             </div>
         </div>
@@ -1878,6 +1878,7 @@
         let downloadSvgClickLockUntil = 0;
         let downloadSvgFrame = null;
         let lastRenderedSvgContent = null;
+        let lastOptimizationSummary = null;
         let currentSvgObjectUrl = null;
         let currentSvgExportFilename = 'centerline_export.svg';
         let lastOptimizationTotalPaths = 0;
@@ -5481,6 +5482,10 @@
                         return;
                     }
 
+                    if (this.id === 'sourceSmoothing') {
+                        return;
+                    }
+
                     if (tileTuneReviewState.active && (this.id === 'darkThreshold' || this.id === 'minPathLength')) {
                         requestTileOnlyPreview({ debounce: true });
                         return;
@@ -5489,6 +5494,24 @@
                         refreshSvgForDisplayToggles();
                         return;
                     }
+                    if (autoProcessEnabled) {
+                        scheduleAutoProcess();
+                    }
+                });
+
+                range.addEventListener('change', function() {
+                    markParameterTouched(this.id);
+                    updateRangeValue(this.id);
+
+                    if (this.id !== 'sourceSmoothing') {
+                        return;
+                    }
+
+                    if (isSvgRenderOnlyControl(this.id)) {
+                        refreshSvgForDisplayToggles();
+                        return;
+                    }
+
                     if (autoProcessEnabled) {
                         scheduleAutoProcess();
                     }
@@ -6191,6 +6214,10 @@
             logPruningDebugSummary(lastPruningDebugData);
             renderPruningDebugPanel(lastPruningDebugData);
 
+            if (lastOptimizationSummary) {
+                renderOptimizationSummary(lastOptimizationSummary);
+            }
+
             resultsPanel.style.display = 'block';
             console.log('Results panel should now be visible');
         }
@@ -6661,42 +6688,89 @@
             };
         }
 
-        function displayResults(data) {
-            const resultsPanel = document.getElementById('resultsPanel');
-            const resultsGrid = document.getElementById('resultsGrid');
-            
-            resultsGrid.innerHTML = `
-                <div class="stat-card">
-                    <div class="stat-value">${data.initial_paths_count}</div>
-                    <div class="stat-label">Initial Paths</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">${data.merged_paths_count}</div>
-                    <div class="stat-label">Merged Paths</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">${data.valid_paths_count}</div>
-                    <div class="stat-label">Valid Paths</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">${data.best_score.toFixed(1)}</div>
-                    <div class="stat-label">Best Score</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">${data.paths_count}</div>
-                    <div class="stat-label">Output Paths</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">${data.optimized_points || 'N/A'}</div>
-                    <div class="stat-label">Blue Line Points</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">${data.point_reduction_percentage || 0}%</div>
-                    <div class="stat-label">Points Reduced</div>
+        function describePendingOptimizationWork() {
+            if (!isPostFitExportEnabled()) {
+                return 'Refreshing direct path preview';
+            }
+
+            const enableCurveFitting = Boolean(document.getElementById('enableCurveFitting')?.checked);
+            const forceOrthogonalAsLines = Boolean(document.getElementById('forceOrthogonalAsLines')?.checked);
+
+            if (enableCurveFitting) {
+                return 'Re-fitting cubic export geometry';
+            }
+
+            if (forceOrthogonalAsLines) {
+                return 'Refreshing line-only export geometry';
+            }
+
+            return 'Refreshing optimized path preview';
+        }
+
+        function buildOptimizationSummaryMarkup(summary) {
+            const workLabel = summary && summary.work_label ? summary.work_label : 'Refreshing optimized path preview';
+            const pending = Boolean(summary && summary.pending);
+            const failed = Boolean(summary && summary.failed);
+            const geometrySummary = summary && summary.geometry_summary ? summary.geometry_summary : 'Waiting for server response...';
+            const sourceSegments = formatIntegerValue(Number(summary && summary.source_segment_count || 0));
+            const outputSegments = formatIntegerValue(Number(summary && summary.output_segment_count || 0));
+            const lineSegments = formatIntegerValue(Number(summary && summary.line_segment_count || 0));
+            const bezierSegments = formatIntegerValue(Number(summary && summary.bezier_segment_count || 0));
+            const elapsedMs = Number(summary && summary.elapsed_ms || 0);
+            const svgSizeBytes = Number(summary && summary.svg_size_bytes || 0);
+            const segmentReductionPct = Number(summary && summary.segment_reduction_pct || 0);
+            const cacheHit = Boolean(summary && summary.cache_hit);
+            const statusText = failed
+                ? 'render failed'
+                : (pending ? 'server working...' : (cacheHit ? 'render ready (cache hit)' : 'render ready'));
+            const detailText = pending
+                ? 'Waiting for the server to finish the latest optimization update.'
+                : geometrySummary;
+            const metricsText = pending || failed
+                ? ''
+                : `source=${sourceSegments} &nbsp;|&nbsp; final=${outputSegments} &nbsp;|&nbsp; lines=${lineSegments} &nbsp;|&nbsp; beziers=${bezierSegments}`;
+            const timingText = pending || failed
+                ? ''
+                : `elapsed=${Math.round(elapsedMs)}ms &nbsp;|&nbsp; reduction=${segmentReductionPct.toFixed(1)}% &nbsp;|&nbsp; svg=${formatIntegerValue(svgSizeBytes)} bytes`;
+            const accentColor = failed ? '#9b2c2c' : (pending ? '#805ad5' : '#2f855a');
+
+            return `
+                <div class="result-item" id="optimizationSummaryBlock" style="display:flex; flex-direction:column; gap:8px; align-items:flex-start; margin-top:12px; padding-top:12px; border-top:1px solid rgba(47,61,79,0.12);">
+                    <p style="margin:0; font-weight:600; color:${accentColor};">${workLabel}</p>
+                    <p style="font-size:0.8em; color:#6b7280; margin:0;">${statusText}</p>
+                    <p style="font-size:0.82em; color:#374151; margin:0;">${detailText}</p>
+                    ${metricsText ? `<p style="font-size:0.78em; color:#7a8794; margin:0;">segments: ${metricsText}</p>` : ''}
+                    ${timingText ? `<p style="font-size:0.76em; color:#8b96a2; margin:0;">timing: ${timingText}</p>` : ''}
                 </div>
             `;
-            
+        }
+
+        function renderOptimizationSummary(summary) {
+            if (!summary) {
+                return;
+            }
+
+            const resultsPanel = document.getElementById('resultsPanel');
+            const resultsGrid = document.getElementById('resultsGrid');
+            if (!resultsPanel || !resultsGrid) {
+                return;
+            }
+
+            lastOptimizationSummary = summary;
+
+            const existing = document.getElementById('optimizationSummaryBlock');
+            const markup = buildOptimizationSummaryMarkup(summary);
+            if (existing) {
+                existing.outerHTML = markup;
+            } else {
+                resultsGrid.insertAdjacentHTML('beforeend', markup);
+            }
+
             resultsPanel.style.display = 'block';
+        }
+
+        function displayResults(data) {
+            renderOptimizationSummary(data);
         }
 
         function generateSVG(mode = 'final', options = {}) {
@@ -6723,6 +6797,11 @@
             }
 
             const requestSequence = ++svgRequestSequence;
+            renderOptimizationSummary({
+                pending: true,
+                work_label: describePendingOptimizationWork(),
+                geometry_summary: 'Submitting the latest optimization settings to the server.',
+            });
             return trackedFetch('/generate_svg', {
                 method: 'POST',
                 headers: {
@@ -6751,6 +6830,9 @@
                         mode: normalizedMode,
                         isOptimizationComplete: normalizedMode === 'final',
                     });
+                    if (data.optimization_summary) {
+                        displayResults(data.optimization_summary);
+                    }
                     return data;
                 })
                 .catch(error => {
@@ -6759,6 +6841,12 @@
                     }
 
                     console.error('SVG preview render error:', error);
+                    renderOptimizationSummary({
+                        pending: false,
+                        failed: true,
+                        work_label: 'SVG preview error',
+                        geometry_summary: error.message,
+                    });
                     if (!silent) {
                         showMessage(`SVG preview error: ${error.message}`, 'error');
                     }
@@ -6983,6 +7071,7 @@
             if (resultsPanel) {
                 resultsPanel.style.display = 'none';
             }
+            lastOptimizationSummary = null;
         }
 
         function clearResults() {

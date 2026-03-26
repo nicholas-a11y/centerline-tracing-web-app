@@ -833,7 +833,15 @@ def test_generate_svg_immediate_disabled_optimization_uses_direct_single_layer(m
         captured['optimized_paths'] = kwargs.get('optimized_paths', args[2] if len(args) > 2 else None)
         captured['pre_optimization_paths'] = kwargs.get('pre_optimization_paths', args[4] if len(args) > 4 else None)
         captured['fit_optimized_paths'] = kwargs.get('fit_optimized_paths')
-        return '<svg xmlns="http://www.w3.org/2000/svg"></svg>'
+        return '<svg xmlns="http://www.w3.org/2000/svg"></svg>', {
+            'source_path_count': 1,
+            'source_point_count': 3,
+            'source_segment_count': 2,
+            'output_path_count': 1,
+            'output_segment_count': 2,
+            'line_segment_count': 2,
+            'bezier_segment_count': 0,
+        }
 
     monkeypatch.setattr('centerline_web_app.create_svg_output', _stub_create_svg_output)
 
@@ -850,9 +858,13 @@ def test_generate_svg_immediate_disabled_optimization_uses_direct_single_layer(m
         )
 
         assert response.status_code == 200
+        payload = response.get_json()
         assert captured['optimized_paths'] == session.initial_paths
         assert captured['pre_optimization_paths'] == []
         assert captured['fit_optimized_paths'] is False
+        assert payload['optimization_summary']['work_label'] == 'Refreshing direct path preview'
+        assert payload['optimization_summary']['line_segment_count'] == 2
+        assert payload['optimization_summary']['bezier_segment_count'] == 0
     finally:
         sessions.pop(session.session_id, None)
 
@@ -958,7 +970,15 @@ def test_generate_svg_disabled_optimization_can_enable_post_fit_export(monkeypat
     def _stub_create_svg_output(*args, **kwargs):
         captured['fit_optimized_paths'] = kwargs.get('fit_optimized_paths')
         captured['source_smoothing'] = kwargs.get('source_smoothing')
-        return '<svg xmlns="http://www.w3.org/2000/svg"></svg>'
+        return '<svg xmlns="http://www.w3.org/2000/svg"></svg>', {
+            'source_path_count': 1,
+            'source_point_count': 3,
+            'source_segment_count': 2,
+            'output_path_count': 1,
+            'output_segment_count': 1,
+            'line_segment_count': 0,
+            'bezier_segment_count': 1,
+        }
 
     monkeypatch.setattr('centerline_web_app.create_svg_output', _stub_create_svg_output)
 
@@ -975,8 +995,12 @@ def test_generate_svg_disabled_optimization_can_enable_post_fit_export(monkeypat
         )
 
         assert response.status_code == 200
+        payload = response.get_json()
         assert captured['fit_optimized_paths'] is True
         assert captured['source_smoothing'] == 38.0
+        assert payload['optimization_summary']['work_label'] == 'Re-fitting cubic export geometry'
+        assert payload['optimization_summary']['bezier_segment_count'] == 1
+        assert payload['optimization_summary']['segment_reduction_pct'] == 50.0
     finally:
         sessions.pop(session.session_id, None)
 
