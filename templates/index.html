@@ -1386,7 +1386,7 @@
         <div class="header">
             <div class="header-inner">
                 <h1>🎯 Centerline Extraction Tool</h1>
-                <p>Interactive centerline extraction v1.9 Nicholas Leqeta</p>
+                <p>Interactive centerline extraction v1.91 Nicholas Leqeta</p>
                 <button type="button" class="header-help-btn" id="helpBtn">? Help</button>
             </div>
         </div>
@@ -1437,13 +1437,23 @@
                     <div class="parameter" style="margin-top: 10px;">
                         <label>
                             <input type="checkbox" id="enablePruning">
-                            Path Simplification
+                            Simplify
                         </label>
-                        <small style="color: #666; font-size: 0.8em;">When enabled, prune redundant vertices after length filtering to simplify extracted centerlines.(Probably not helpful if you are going to use 'Enable Optimisation')</small>
+                        <small style="color: #666; font-size: 0.8em;">Prune vertices to reduce node count. Usually unnecessary if you plan to enable Path Optimisation (below)</small>
                     </div>
                     <div class="parameter" style="margin-top: 10px;">
-                        <button class="btn btn-secondary" id="autoTuneBtn" onclick="autoTuneExtractionParameters()" style="padding: 6px 12px; font-size: 14px;" disabled>⚡ Auto-Tune</button>
+                        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                            <button class="btn btn-secondary" id="autoTuneBtn" onclick="autoTuneExtractionParameters()" style="padding: 6px 12px; font-size: 14px;" disabled>⚡ Auto-Tune</button>
+                            <button class="btn" id="acceptTileTuneBtn" onclick="acceptTileTuningAndContinue()" style="display: none; padding: 6px 12px; font-size: 14px;">✅ Apply</button>
+                        </div>
                         <small style="display:block; color: #666; font-size: 0.8em; margin-top: 6px;">Samples the current image or crop region to set threshold and minimum path length.</small>
+                    </div>
+                    <div class="parameter" style="margin-top: 10px;">
+                        <label>
+                            <input type="checkbox" id="showPreOptimization" checked>
+                            Show Magenta Paths
+                        </label>
+                        <small style="color: #666; font-size: 0.8em;">Show raw magenta centerlines.</small>
                     </div>
                     <div style="margin-top: 10px;">
                         <button type="button" id="detectionAdvancedToggleBtn" onclick="toggleDetectionAdvancedSettings()" style="background: none; border: none; color: #4facfe; cursor: pointer; font-size: 0.85em; padding: 0;">⚙️ Advanced settings ▼</button>
@@ -1471,7 +1481,7 @@
                 </div>
 
                 <div class="parameter-group" id="exportFittingGroup">
-                    <h3>New Optimisation</h3>
+                    <h3>Path Optimisation</h3>
                     <div class="parameter">
                         <label>
                             <input type="checkbox" id="enablePostFitExport">
@@ -1479,16 +1489,9 @@
                         </label>
                         <small style="color: #666; font-size: 0.8em;">Apply smoothing and SVG line/curve fitting.</small>
                     </div>
-                    <div class="parameter">
-                        <label>
-                            <input type="checkbox" id="showPreOptimization" checked>
-                            Show Magenta Paths
-                        </label>
-                        <small style="color: #666; font-size: 0.8em;">Show raw magenta centerlines.</small>
-                    </div>
                     <div class="parameter" id="sourceSmoothingWrap">
-                        <label>Source Smoothing <span class="range-value" id="sourceSmoothingValue">95</span></label>
-                        <input type="range" id="sourceSmoothing" min="0" max="100" step="1" value="95">
+                        <label>Source Smoothing <span class="range-value" id="sourceSmoothingValue">70</span></label>
+                        <input type="range" id="sourceSmoothing" min="0" max="100" step="1" value="70">
                         <small style="color: #666; font-size: 0.8em;">Smoothing to remove staircase kinks before SVG line/curve fitting.</small>
                     </div>
                     <div class="parameter" id="enableCurveFittingWrap">
@@ -1499,8 +1502,8 @@
                         <small style="color: #666; font-size: 0.8em;">Enable to emit fitted curves</small>
                     </div>
                     <div class="parameter" id="cubicFitToleranceWrap">
-                        <label>Cubic Fit Tolerance (px) <span class="range-value" id="cubicFitToleranceValue">1.0</span></label>
-                        <input type="range" id="cubicFitTolerance" min="0.35" max="4.0" step="0.05" value="1.0">
+                        <label>Cubic Fit Tolerance (px) <span class="range-value" id="cubicFitToleranceValue">0.35</span></label>
+                        <input type="range" id="cubicFitTolerance" min="0.35" max="4.0" step="0.05" value="0.35">
                         <small style="color: #666; font-size: 0.8em;">Lower values keep tighter curves; higher values reduce cubic segment count for smaller SVGs.</small>
                     </div>
                     <div class="parameter" id="forceOrthogonalAsLinesWrap">
@@ -1645,9 +1648,6 @@
                     <div class="tile-tune-actions">
                         <button class="btn btn-secondary" id="resampleTileTuneBtn" onclick="resampleTileTuning()">🔁 Resample</button>
                     </div>
-                    <div class="tile-tune-actions">
-                        <button class="btn" id="acceptTileTuneBtn" onclick="acceptTileTuningAndContinue()">✅ Ok</button>
-                    </div>
                 </div>
 
                 <div class="results-panel" id="resultsPanel" style="display: none;">
@@ -1735,26 +1735,26 @@
                             <p class="help-control-desc">Filters out short detected paths before optimization. Raise it to drop dots and tiny fragments; lower it only when genuine short strokes are being lost.</p>
                         </div>
                         <div class="help-control-item">
-                            <p class="help-control-name">Path Simplification</p>
-                            <p class="help-control-desc">Enables the pruning pass that removes redundant vertices after minimum-length filtering. Turn it off if you want to inspect the rawer detected centerlines before simplification.</p>
+                            <p class="help-control-name">Simplify</p>
+                            <p class="help-control-desc">Prune vertices to reduce node count. Usually unnecessary if you plan to enable Path Optimisation below.</p>
                         </div>
                         <div class="help-control-item">
                             <p class="help-control-name">Auto-Tune</p>
                             <p class="help-control-desc">Samples the current image or crop region and suggests threshold and minimum path length settings. Use it when the input quality changes from file to file.</p>
                         </div>
+                        <div class="help-control-item">
+                            <p class="help-control-name">Show Magenta Paths</p>
+                            <p class="help-control-desc">Shows or hides the raw magenta centerlines in the main detection view while you compare them against the fitted blue output.</p>
+                        </div>
                     </div>
                 </section>
 
                 <section class="help-section">
-                    <h3 class="help-section-title">Optimisation</h3>
+                    <h3 class="help-section-title">Path Optimisation</h3>
                     <div class="help-control-list">
                         <div class="help-control-item">
                             <p class="help-control-name">Enable Optimisation</p>
                             <p class="help-control-desc">Turns on smoothing and fitted SVG export. When it is off, the viewer and download stay with the raw magenta extraction only (use LightBurn Optimisation to smooth and simplify).</p>
-                        </div>
-                        <div class="help-control-item">
-                            <p class="help-control-name">Show Magenta Paths</p>
-                            <p class="help-control-desc">Shows or hides the raw magenta centerlines while you compare them against the fitted blue output. When optimisation is off, this stays on because the magenta extraction is the only visible result.</p>
                         </div>
                         <div class="help-control-item">
                             <p class="help-control-name">Source Smoothing</p>
@@ -1790,11 +1790,11 @@
                     <div class="help-control-list">
                         <div class="help-control-item">
                             <p class="help-control-name">Auto Detection Tuning Review</p>
-                            <p class="help-control-desc">Auto-Tune can open a review panel that previews threshold and minimum-length changes on sampled busy regions before the full image run continues.</p>
+                            <p class="help-control-desc">Auto-Tune can open a review panel that previews threshold and minimum-length changes on sampled busy regions before the full image run continues. While review is active, the Apply button appears next to Auto-Tune for quick confirmation.</p>
                         </div>
                         <div class="help-control-item">
-                            <p class="help-control-name">Ok</p>
-                            <p class="help-control-desc">Accepts the shown tuning values and continues with full-image processing. The review stays open until you explicitly continue.</p>
+                            <p class="help-control-name">Apply</p>
+                            <p class="help-control-desc">Accepts the shown tuning values and continues with full-image processing. It appears to the right of Auto-Tune while guided tuning review is active.</p>
                         </div>
                     </div>
                 </section>
@@ -2628,7 +2628,7 @@
                     const y = (r * scaleY).toFixed(1);
                     d += (i === 0 ? 'M' : 'L') + x + ' ' + y;
                 }
-                html += '<path d="' + d + '" fill="none" stroke="rgba(255,0,220,0.75)" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>';
+                html += '<path d="' + d + '" fill="none" stroke="rgba(255,0,220,0.75)" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round"/>';
             }
             svg.innerHTML = html;
         }
@@ -2648,12 +2648,14 @@
                 return;
             }
 
-            overlay.style.left = `${mainImage.offsetLeft}px`;
-            overlay.style.top = `${mainImage.offsetTop}px`;
-            overlay.style.width = `${mainImage.clientWidth}px`;
-            overlay.style.height = `${mainImage.clientHeight}px`;
-            overlay.style.transformOrigin = mainImage.style.transformOrigin || 'center center';
-            overlay.style.transform = mainImage.style.transform || 'none';
+            const imgRect = mainImage.getBoundingClientRect();
+            const containerRect = imageDisplay.getBoundingClientRect();
+            overlay.style.left = `${imgRect.left - containerRect.left}px`;
+            overlay.style.top = `${imgRect.top - containerRect.top}px`;
+            overlay.style.width = `${imgRect.width}px`;
+            overlay.style.height = `${imgRect.height}px`;
+            overlay.style.transformOrigin = 'center center';
+            overlay.style.transform = 'none';
         }
 
         function rerenderCurrentImageOverlays() {
@@ -2665,6 +2667,7 @@
                     tileTuneReviewState.lastTileData || [],
                     tileTuneReviewState.lastSourceShape || []
                 );
+                syncFittedSvgOverlayPosition();
                 renderCropOverlay();
                 return;
             }
@@ -2713,6 +2716,45 @@
             if (zoomToCropBtn) {
                 zoomToCropBtn.style.display = (hasImage && Boolean(getCropParams())) ? 'inline-block' : 'none';
             }
+        }
+
+        function getAdaptiveImageMaxZoom(mainImage) {
+            const minimumMaxZoom = 24;
+            const hardMaxZoom = 96;
+            const sourceShape = Array.isArray(currentUploadDisplayImages.shape) ? currentUploadDisplayImages.shape : null;
+            const renderedWidth = Math.max(1, mainImage ? (mainImage.clientWidth || mainImage.offsetWidth || 1) : 1);
+            const renderedHeight = Math.max(1, mainImage ? (mainImage.clientHeight || mainImage.offsetHeight || 1) : 1);
+
+            if (!sourceShape || sourceShape.length < 2) {
+                return minimumMaxZoom;
+            }
+
+            const sourceHeight = Math.max(1, Number(sourceShape[0] || 1));
+            const sourceWidth = Math.max(1, Number(sourceShape[1] || 1));
+            const nativePixelScaleX = sourceWidth / renderedWidth;
+            const nativePixelScaleY = sourceHeight / renderedHeight;
+            const adaptiveMaxZoom = Math.max(nativePixelScaleX, nativePixelScaleY) * 2;
+
+            return Math.min(hardMaxZoom, Math.max(minimumMaxZoom, adaptiveMaxZoom));
+        }
+
+        function getAdaptiveSvgMaxZoom(svg, focusViewBox) {
+            const minimumMaxZoom = 24;
+            const hardMaxZoom = 96;
+            if (!svg || !Array.isArray(focusViewBox) || focusViewBox.length < 4) {
+                return minimumMaxZoom;
+            }
+
+            const rect = svg.getBoundingClientRect();
+            const renderedWidth = Math.max(1, rect.width || 1);
+            const renderedHeight = Math.max(1, rect.height || 1);
+            const focusWidth = Math.max(1, Number(focusViewBox[2] || 1));
+            const focusHeight = Math.max(1, Number(focusViewBox[3] || 1));
+            const nativeUnitScaleX = focusWidth / renderedWidth;
+            const nativeUnitScaleY = focusHeight / renderedHeight;
+            const adaptiveMaxZoom = Math.max(nativeUnitScaleX, nativeUnitScaleY) * 2;
+
+            return Math.min(hardMaxZoom, Math.max(minimumMaxZoom, adaptiveMaxZoom));
         }
 
         function applyImageViewportTransform() {
@@ -3345,6 +3387,16 @@
         function hideTileTunePanel() {
             const panel = document.getElementById('tileTunePanel');
             if (panel) panel.style.display = 'none';
+            setTileTuneAcceptButtonVisible(false);
+        }
+
+        function setTileTuneAcceptButtonVisible(show) {
+            const acceptBtn = document.getElementById('acceptTileTuneBtn');
+            if (!acceptBtn) {
+                return;
+            }
+
+            acceptBtn.style.display = show ? 'inline-flex' : 'none';
         }
 
         function updateTileTuneActionButtons() {
@@ -3678,6 +3730,7 @@
             clearTileTuneConsole();
             const panel = document.getElementById('tileTunePanel');
             if (panel) panel.style.display = 'block';
+            setTileTuneAcceptButtonVisible(true);
 
             const samplingMode = String((sampleMetadata && sampleMetadata.sampling_mode) || 'full_image');
             const tileCount = Number((sampleMetadata && sampleMetadata.tile_count) || 0);
@@ -3685,9 +3738,9 @@
             tileTuneReviewState.pendingAutoSkipDecision = samplingMode === 'random_tiles_mosaic' && tileCount > 0;
             setTileTuneReadonlyInfo(buildTileTuneReadonlyInfo(sampleMetadata));
             if (samplingMode === 'random_tiles_mosaic' && tileCount > 0) {
-                setTileTuneDetails(`Adjust sliders to tune threshold/min length. Preview updates inside ${tileCount} sampled tiles only. Click Ok to continue when the preview looks right.`);
+                setTileTuneDetails(`Adjust sliders to tune threshold/min length. Preview updates inside ${tileCount} sampled tiles only. Click Apply to continue when the preview looks right.`);
             } else {
-                setTileTuneDetails('Adjust sliders to tune threshold/min length. Preview updates on sampled area only. Click Ok to continue when the preview looks right.');
+                setTileTuneDetails('Adjust sliders to tune threshold/min length. Preview updates on sampled area only. Click Apply to continue when the preview looks right.');
             }
             updateTileTuneActionButtons();
 
@@ -4326,7 +4379,8 @@
                 event.preventDefault();
                 const previousScale = imageViewportState.scale;
                 const deltaScale = event.deltaY < 0 ? 1.12 : (1 / 1.12);
-                const nextScale = Math.max(1, Math.min(12, previousScale * deltaScale));
+                const maxZoom = getAdaptiveImageMaxZoom(mainImage);
+                const nextScale = Math.max(1, Math.min(maxZoom, previousScale * deltaScale));
                 if (Math.abs(nextScale - previousScale) < 0.0001) {
                     return;
                 }
@@ -4376,7 +4430,8 @@
 
                 const previousScale = svgViewportState.scale || 1;
                 const deltaScale = event.deltaY < 0 ? 1.12 : (1 / 1.12);
-                const nextScale = Math.max(1, Math.min(12, previousScale * deltaScale));
+                const maxZoom = getAdaptiveSvgMaxZoom(svg, focusViewBox);
+                const nextScale = Math.max(1, Math.min(maxZoom, previousScale * deltaScale));
                 if (Math.abs(nextScale - previousScale) < 0.0001) {
                     return;
                 }
@@ -5471,6 +5526,10 @@
 
                     if (this.id === 'enablePostFitExport') {
                         handleCurveFittingToggle();
+                        if (this.checked && tileTuneReviewState.active) {
+                            acceptTileTuningAndContinue();
+                            return;
+                        }
                     }
 
                     if (isSvgRenderOnlyControl(this.id)) {
@@ -5503,7 +5562,6 @@
 
         function handleOptimizationToggle() {
             const enableOptimization = document.getElementById('enableOptimization');
-            const showPreOptimization = document.getElementById('showPreOptimization');
             const overlapSection = document.getElementById('overlapControlSection');
             const optimizationParametersGroup = document.getElementById('optimizationParametersGroup');
             const advancedSettings = document.getElementById('advancedSettings');
@@ -5541,12 +5599,33 @@
                 }
             }
 
-            if (showPreOptimization && showPreOptimization.parentElement) {
-                showPreOptimization.disabled = false;
-                showPreOptimization.parentElement.style.opacity = '1';
+            handleCurveFittingToggle();
+        }
+
+        function syncShowPreOptimizationControl() {
+            const showPreOptimization = document.getElementById('showPreOptimization');
+            const enablePostFitExport = document.getElementById('enablePostFitExport');
+            if (!showPreOptimization) {
+                return;
             }
 
-            handleCurveFittingToggle();
+            const allowToggle = Boolean(enablePostFitExport && enablePostFitExport.checked);
+            const parent = showPreOptimization.parentElement;
+            const wasChecked = showPreOptimization.checked;
+
+            if (!allowToggle) {
+                showPreOptimization.checked = true;
+            }
+
+            showPreOptimization.disabled = !allowToggle;
+            if (parent) {
+                parent.style.opacity = allowToggle ? '1' : '0.65';
+            }
+
+            if (!allowToggle && !wasChecked) {
+                rerenderCurrentImageOverlays();
+                refreshSvgForDisplayToggles();
+            }
         }
 
         function handleCurveFittingToggle() {
@@ -5611,6 +5690,8 @@
                 input.disabled = !curveControlsEnabled;
                 wrap.style.opacity = curveControlsEnabled ? '1' : '0.55';
             });
+
+            syncShowPreOptimizationControl();
         }
 
         function isOptimizationRunning() {
@@ -6719,6 +6800,7 @@
             importedSvg.querySelectorAll('image').forEach(node => node.remove());
             importedSvg.id = 'fittedSvgOverlay';
             importedSvg.style.cssText = 'position:absolute;pointer-events:none;overflow:visible;z-index:4;display:block;';
+            importedSvg.setAttribute('shape-rendering', 'geometricPrecision');
             const sourceShape = Array.isArray(currentUploadDisplayImages.shape) ? currentUploadDisplayImages.shape : null;
             if (sourceShape && sourceShape.length >= 2) {
                 const svgWidth = Math.max(1, Number(sourceShape[1] || 0));

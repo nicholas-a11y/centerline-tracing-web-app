@@ -56,9 +56,9 @@ SHOW_ML_PATHS = False  # ML features disabled
 SHOW_TRAINING_PATHS = False  # Training paths disabled
 CIRCLE_OPACITY = 0.2
 BEST_PATH_COLOR = "lime"
-BEST_PATH_WIDTH = 3.0
+BEST_PATH_WIDTH = 1.5
 PRE_OPTIMIZATION_PATH_COLOR = "magenta"
-PRE_OPTIMIZATION_PATH_WIDTH = 1.5
+PRE_OPTIMIZATION_PATH_WIDTH = 0.8
 PRE_OPTIMIZATION_PATH_OPACITY = 0.4
 SMALL_IMAGE_SUPERSAMPLE_TARGET_MAX_DIM = 160
 SMALL_IMAGE_SUPERSAMPLE_MAX_FACTOR = 4
@@ -3366,7 +3366,7 @@ def create_svg_output(
         
         # Color all paths with consistent blue color
         color = "#0066CC"  # Consistent blue hex color
-        width = 1.6
+        width = 0.8
         opacity = 1.0  # Keep consistent opacity for all optimized paths
         
         path_data = _segment_path_data(path, segments)
@@ -3390,7 +3390,7 @@ def create_svg_output(
         _add_stroked_path(
             " ".join(chunk for chunk in optimized_path_data if chunk),
             "#0066CC",
-            2.0,
+            0.8,
             1.0,
         )
 

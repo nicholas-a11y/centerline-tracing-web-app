@@ -246,12 +246,12 @@ class CenterlineSession:
             'arc_fit_strength': 72.0,  # Favor curves without over-smoothing
             'line_fit_strength': 0.0,  # Disable line fitting by default
             'enable_post_fit_export': False,  # Opt-in export fitting so fast preview stays fast
-            'source_smoothing': 95.0,  # Export-only pre-fit smoothing strength
+            'source_smoothing': 70.0,  # Export-only pre-fit smoothing strength
             'short_path_protection': 0.0,  # No extra protection for shorter paths by default
             'mean_closeness_px': 1.8,  # Average allowed distance from blue path to magenta path
             'peak_closeness_px': 4.5,  # 95th percentile allowed distance from blue path to magenta path
             'score_preservation': 99.0,  # Keep accepted fits as close as possible to the source path
-            'cubic_fit_tolerance': 1.0,  # SVG cubic fitting tolerance in px (lower = tighter, more segments)
+            'cubic_fit_tolerance': 0.35,  # SVG cubic fitting tolerance in px (lower = tighter, more segments)
             'endpoint_tangent_strictness': 85.0,  # Strength of start/end handle alignment to extracted path direction (not fixture/golden data)
             'force_orthogonal_as_lines': False,  # Optionally force axis-aligned/corner paths to use line segments only
             'enable_curve_fitting': True,  # Fit optimized paths to cubic segments only when explicitly enabled

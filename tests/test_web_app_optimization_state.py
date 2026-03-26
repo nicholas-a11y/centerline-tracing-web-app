@@ -600,6 +600,8 @@ def test_centerline_session_defaults_to_disabled_optimization():
     assert session.parameters["show_pre_optimization"] is True
     assert session.parameters["enable_pruning"] is False
     assert session.parameters["min_path_length"] == 2
+    assert session.parameters["source_smoothing"] == 70.0
+    assert session.parameters["cubic_fit_tolerance"] == 0.35
 
 
 def test_process_immediate_reports_disabled_optimization_state(monkeypatch):

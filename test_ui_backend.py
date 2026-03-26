@@ -39,7 +39,7 @@ DEFAULT_FITTING_PARAMETERS = {
     "analysis_mode": "main_app",
     "main_app_enable_optimization": False,
     "enable_curve_fitting": False,
-    "cubic_fit_tolerance": 1.0,
+    "cubic_fit_tolerance": 0.35,
     "endpoint_tangent_strictness": 85.0,
     "force_orthogonal_as_lines": False,
 }
