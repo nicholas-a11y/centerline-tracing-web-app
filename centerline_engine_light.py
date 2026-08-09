@@ -7,13 +7,14 @@ web app can move to a smaller import surface without changing user-visible behav
 """
 
 import os
+import sys
 import time
 import bisect
 import math
 import numpy as np
 from skimage import io, color, filters, morphology, transform
 from skimage.morphology import binary_erosion, footprint_rectangle
-from scipy import interpolate
+from scipy import interpolate, ndimage as ndi
 from functools import lru_cache
 import svgwrite
 import base64
@@ -31,6 +32,7 @@ warnings.filterwarnings("ignore")
 __all__ = [
     "build_line_span_hints",
     "create_fast_paths",
+    "create_fast_paths_vectorized",
     "create_svg_output",
     "extract_skeleton_paths",
     "fit_curve_segments",
@@ -67,6 +69,8 @@ PRE_OPTIMIZATION_PATH_WIDTH = 0.8
 PRE_OPTIMIZATION_PATH_OPACITY = 0.4
 SMALL_IMAGE_SUPERSAMPLE_TARGET_MAX_DIM = 160
 SMALL_IMAGE_SUPERSAMPLE_MAX_FACTOR = 4
+USE_VECTORIZED_FAST_PATHS = True
+VECTORIZED_FAST_PATHS_MIN_PIXELS = 40000
 
 # Multi-path support
 OPTIMIZE_TOP_N_PATHS = 10  # Increased from 3 to show more paths
@@ -306,9 +310,19 @@ def extract_skeleton_paths(
     
     # Skeletonize
     skeleton = morphology.skeletonize(binary)
-    
-    # Use fast path extraction
-    paths = create_fast_paths(skeleton, min_path_length=min_path_length)
+
+    # Use the vectorized walker only when enabled and the skeleton is large
+    # enough to benefit from the label-based extraction.
+    skeleton_pixel_count = int(np.count_nonzero(skeleton))
+    use_vectorized_fast_paths = USE_VECTORIZED_FAST_PATHS and (
+        int(VECTORIZED_FAST_PATHS_MIN_PIXELS) <= 0
+        or skeleton_pixel_count >= int(VECTORIZED_FAST_PATHS_MIN_PIXELS)
+    )
+    if use_vectorized_fast_paths:
+        paths = create_fast_paths_vectorized(skeleton, min_path_length=min_path_length)
+    else:
+        legacy_fast_path_extractor = _resolve_legacy_fast_path_extractor()
+        paths = legacy_fast_path_extractor(skeleton, min_path_length=min_path_length)
     if supersample_factor > 1:
         paths = _downscale_extracted_paths(paths, supersample_factor)
     
@@ -3444,35 +3458,83 @@ def create_svg_output(
         return svg_content, render_metadata
     return svg_content
 
-def create_fast_paths(skeleton, min_path_length=MIN_PATH_LENGTH):
-    """Extract branch-aware paths from a skeleton while preserving open segments."""
-    ys, xs = np.nonzero(skeleton)
-    if len(ys) == 0:
-        return []
+_FAST_PATH_NEIGHBOR_OFFSETS = (
+    (-1, -1), (-1, 0), (-1, 1),
+    (0, -1),           (0, 1),
+    (1, -1),  (1, 0),  (1, 1),
+)
+_FAST_PATH_STRUCTURE = np.ones((3, 3), dtype=np.uint8)
 
-    print(f"  Starting fast path extraction on {len(ys)} skeleton pixels...")
 
-    skeleton_points = set(zip(ys, xs))
-    paths = []
+def _compute_fast_path_degree_map(mask):
+    mask_u8 = np.asarray(mask, dtype=np.uint8)
+    return ndi.convolve(mask_u8, _FAST_PATH_STRUCTURE, mode="constant", cval=0) - mask_u8
 
-    # Pre-compute 8-connected neighbors.
-    offsets = [
-        (-1, -1), (-1, 0), (-1, 1),
-        (0, -1),           (0, 1),
-        (1, -1),  (1, 0),  (1, 1),
-    ]
+
+def _lookup_junction_cluster_id(junction_cluster_ids, point):
+    point_y = int(point[0])
+    point_x = int(point[1])
+    if isinstance(junction_cluster_ids, dict):
+        return junction_cluster_ids.get((point_y, point_x))
+    if point_y < 0 or point_y >= junction_cluster_ids.shape[0]:
+        return None
+    if point_x < 0 or point_x >= junction_cluster_ids.shape[1]:
+        return None
+    cluster_id = int(junction_cluster_ids[point_y, point_x])
+    return cluster_id if cluster_id > 0 else None
+
+
+def _lookup_junction_cluster_size(junction_cluster_sizes, cluster_id):
+    if cluster_id is None:
+        return 0
+    if isinstance(junction_cluster_sizes, dict):
+        return int(junction_cluster_sizes.get(cluster_id, 0))
+    cluster_id = int(cluster_id)
+    if cluster_id < 0 or cluster_id >= len(junction_cluster_sizes):
+        return 0
+    return int(junction_cluster_sizes[cluster_id])
+
+
+def _lookup_junction_cluster_anchor(junction_cluster_anchors, cluster_id, fallback_point):
+    fallback = (int(fallback_point[0]), int(fallback_point[1]))
+    if cluster_id is None:
+        return fallback
+    if isinstance(junction_cluster_anchors, dict):
+        anchor = junction_cluster_anchors.get(cluster_id, fallback)
+        return (int(anchor[0]), int(anchor[1]))
+    cluster_id = int(cluster_id)
+    if cluster_id < 0 or cluster_id >= len(junction_cluster_anchors):
+        return fallback
+    anchor = junction_cluster_anchors[cluster_id]
+    return (int(anchor[0]), int(anchor[1]))
+
+
+def _resolve_legacy_fast_path_extractor():
+    legacy_module = sys.modules.get("centerline_engine")
+    if legacy_module is None:
+        return create_fast_paths
+
+    candidate = getattr(legacy_module, "create_fast_paths", None)
+    if callable(candidate) and getattr(candidate, "__module__", "centerline_engine") != "centerline_engine":
+        return candidate
+    return create_fast_paths
+
+
+def _build_fast_path_neighbors(skeleton_points):
     neighbors_dict = {}
     for y, x in skeleton_points:
         neighbors = []
-        for dy, dx in offsets:
+        for dy, dx in _FAST_PATH_NEIGHBOR_OFFSETS:
             candidate = (y + dy, x + dx)
             if candidate in skeleton_points:
                 neighbors.append(candidate)
         neighbors_dict[(y, x)] = neighbors
+    return neighbors_dict
 
-    # Junctions/endpoints (degree != 2) are graph nodes; chains between them are edges.
-    node_points = {p for p, n in neighbors_dict.items() if len(n) != 2}
-    junction_points = {p for p, n in neighbors_dict.items() if len(n) > 2}
+
+def _build_fast_path_junction_state(neighbors_dict):
+    node_points = {point for point, neighbors in neighbors_dict.items() if len(neighbors) != 2}
+    junction_points = {point for point, neighbors in neighbors_dict.items() if len(neighbors) > 2}
     junction_cluster_ids = {}
     junction_cluster_sizes = {}
     junction_cluster_anchors = {}
@@ -3507,63 +3569,413 @@ def create_fast_paths(skeleton, min_path_length=MIN_PATH_LENGTH):
             )
             junction_cluster_anchors[cluster_id] = tuple(anchor)
 
+    return node_points, junction_cluster_ids, junction_cluster_sizes, junction_cluster_anchors
+
+
+def _get_same_junction_cluster_id(path, junction_cluster_ids, junction_cluster_sizes):
+    if len(path) < 2:
+        return None
+
+    start_cluster = _lookup_junction_cluster_id(junction_cluster_ids, path[0])
+    end_cluster = _lookup_junction_cluster_id(junction_cluster_ids, path[-1])
+    if start_cluster is None or end_cluster is None:
+        return None
+    if start_cluster != end_cluster:
+        return None
+    if _lookup_junction_cluster_size(junction_cluster_sizes, start_cluster) <= 1:
+        return None
+    return start_cluster
+
+
+def _snap_fast_path_to_junction_anchor(
+    path,
+    junction_cluster_ids,
+    junction_cluster_sizes,
+    junction_cluster_anchors,
+):
+    snapped = [tuple(point) for point in path]
+    if not snapped:
+        return snapped
+
+    start_cluster = _lookup_junction_cluster_id(junction_cluster_ids, snapped[0])
+    if _lookup_junction_cluster_size(junction_cluster_sizes, start_cluster) > 1:
+        snapped[0] = _lookup_junction_cluster_anchor(junction_cluster_anchors, start_cluster, snapped[0])
+
+    end_cluster = _lookup_junction_cluster_id(junction_cluster_ids, snapped[-1])
+    if _lookup_junction_cluster_size(junction_cluster_sizes, end_cluster) > 1:
+        snapped[-1] = _lookup_junction_cluster_anchor(junction_cluster_anchors, end_cluster, snapped[-1])
+
+    return _remove_duplicate_points(snapped)
+
+
+def _should_keep_fast_path(
+    path,
+    min_path_length,
+    junction_cluster_ids,
+    junction_cluster_sizes,
+    junction_cluster_anchors,
+):
+    if len(path) < int(min_path_length):
+        return False
+    if len(path) < 2:
+        return False
+
+    same_cluster_id = _get_same_junction_cluster_id(
+        path,
+        junction_cluster_ids,
+        junction_cluster_sizes,
+    )
+    if same_cluster_id is None:
+        return True
+
+    deduped_path = _remove_duplicate_points(path)
+    if len(deduped_path) < max(4, int(min_path_length) + 1):
+        return False
+
+    cluster_anchor = np.asarray(
+        _lookup_junction_cluster_anchor(junction_cluster_anchors, same_cluster_id, deduped_path[0]),
+        dtype=float,
+    )
+    pts = np.asarray(deduped_path, dtype=float)
+    spans = np.ptp(pts, axis=0)
+    max_radius = float(np.max(np.linalg.norm(pts - cluster_anchor, axis=1)))
+
+    # Preserve genuine attached loops that leave the junction cluster,
+    # travel a meaningful distance, and return to the same cluster.
+    return bool(max(spans[0], spans[1]) >= 3.0 and max_radius >= 2.0)
+
+
+def _classify_fast_path(
+    path,
+    min_path_length,
+    junction_cluster_ids,
+    junction_cluster_sizes,
+    junction_cluster_anchors,
+):
+    normalized_path = _snap_fast_path_to_junction_anchor(
+        path,
+        junction_cluster_ids,
+        junction_cluster_sizes,
+        junction_cluster_anchors,
+    )
+    keep_path = _should_keep_fast_path(
+        normalized_path,
+        min_path_length,
+        junction_cluster_ids,
+        junction_cluster_sizes,
+        junction_cluster_anchors,
+    )
+    same_cluster_id = None
+    if not keep_path:
+        same_cluster_id = _get_same_junction_cluster_id(
+            normalized_path,
+            junction_cluster_ids,
+            junction_cluster_sizes,
+        )
+    return normalized_path, keep_path, same_cluster_id
+
+
+def _recover_discarded_same_cluster_paths(
+    discarded_same_cluster_points,
+    min_path_length,
+    junction_cluster_ids,
+    junction_cluster_sizes,
+    junction_cluster_anchors,
+):
+    recovered_paths = []
+    for cluster_id, cluster_points in discarded_same_cluster_points.items():
+        if len(cluster_points) < max(4, int(min_path_length) + 1):
+            continue
+
+        cluster_points = set(cluster_points)
+        if _lookup_junction_cluster_size(junction_cluster_sizes, cluster_id) > 0:
+            anchor = _lookup_junction_cluster_anchor(junction_cluster_anchors, cluster_id, (0, 0))
+            cluster_points.add(tuple(anchor))
+
+        ys = [point[0] for point in cluster_points]
+        xs = [point[1] for point in cluster_points]
+        min_y = min(ys)
+        max_y = max(ys)
+        min_x = min(xs)
+        max_x = max(xs)
+
+        local_mask = np.zeros((max_y - min_y + 1, max_x - min_x + 1), dtype=bool)
+        for point_y, point_x in cluster_points:
+            local_mask[point_y - min_y, point_x - min_x] = True
+
+        cluster_recovered_paths = skeleton_to_paths_improved(local_mask)
+        for recovered_path in cluster_recovered_paths:
+            mapped_path = [
+                (point_y + min_y, point_x + min_x)
+                for point_y, point_x in recovered_path
+            ]
+            mapped_path, keep_path, _ = _classify_fast_path(
+                mapped_path,
+                min_path_length,
+                junction_cluster_ids,
+                junction_cluster_sizes,
+                junction_cluster_anchors,
+            )
+            if keep_path:
+                recovered_paths.append(mapped_path)
+
+    return recovered_paths
+
+
+def _build_vectorized_junction_state(skeleton, degree_map):
+    junction_mask = np.asarray(skeleton, dtype=bool) & (np.asarray(degree_map) > 2)
+    if not np.any(junction_mask):
+        empty_ids = np.zeros_like(junction_mask, dtype=np.int32)
+        empty_sizes = np.zeros(1, dtype=np.int32)
+        empty_anchors = np.zeros((1, 2), dtype=np.int32)
+        return junction_mask, empty_ids, empty_sizes, empty_anchors
+
+    junction_cluster_ids, cluster_count = ndi.label(junction_mask, structure=_FAST_PATH_STRUCTURE)
+    junction_cluster_ids = junction_cluster_ids.astype(np.int32, copy=False)
+    junction_cluster_sizes = np.bincount(junction_cluster_ids.ravel()).astype(np.int32, copy=False)
+    junction_cluster_anchors = np.zeros((cluster_count + 1, 2), dtype=np.int32)
+
+    for cluster_id, cluster_slice in enumerate(ndi.find_objects(junction_cluster_ids), start=1):
+        if cluster_slice is None:
+            continue
+        component_mask = junction_cluster_ids[cluster_slice] == cluster_id
+        cluster_points = np.argwhere(component_mask)
+        if cluster_points.size == 0:
+            continue
+
+        cluster_points = cluster_points.astype(np.int32, copy=False)
+        cluster_points[:, 0] += int(cluster_slice[0].start)
+        cluster_points[:, 1] += int(cluster_slice[1].start)
+
+        centroid = np.mean(cluster_points.astype(np.float64), axis=0)
+        distances = np.linalg.norm(cluster_points.astype(np.float64) - centroid, axis=1)
+        degree_values = degree_map[cluster_points[:, 0], cluster_points[:, 1]].astype(np.int32, copy=False)
+        order = np.lexsort((cluster_points[:, 1], cluster_points[:, 0], -degree_values, distances))
+        junction_cluster_anchors[cluster_id] = cluster_points[order[0]]
+
+    return junction_mask, junction_cluster_ids, junction_cluster_sizes, junction_cluster_anchors
+
+
+def _order_vectorized_arc_component(component_mask, component_degree_map):
+    component_points = np.argwhere(component_mask)
+    if component_points.size == 0:
+        return np.zeros((0, 2), dtype=np.int32), False
+
+    endpoint_points = np.argwhere(component_mask & (component_degree_map <= 1))
+    is_loop = len(endpoint_points) == 0
+    start_candidates = component_points if is_loop else endpoint_points
+    start_order = np.lexsort((start_candidates[:, 1], start_candidates[:, 0]))
+    start_point = start_candidates[start_order[0]].astype(np.int32)
+
+    visited = np.zeros_like(component_mask, dtype=bool)
+    ordered_points = []
+    prev_point = np.asarray([-1, -1], dtype=np.int32)
+    current_point = start_point.copy()
+    total_points = int(component_points.shape[0])
+
+    while True:
+        ordered_points.append(current_point.copy())
+        visited[current_point[0], current_point[1]] = True
+
+        next_point = None
+        for dy, dx in _FAST_PATH_NEIGHBOR_OFFSETS:
+            next_y = int(current_point[0]) + dy
+            next_x = int(current_point[1]) + dx
+            if next_y < 0 or next_y >= component_mask.shape[0]:
+                continue
+            if next_x < 0 or next_x >= component_mask.shape[1]:
+                continue
+            if not component_mask[next_y, next_x]:
+                continue
+            if next_y == int(prev_point[0]) and next_x == int(prev_point[1]):
+                continue
+            if not visited[next_y, next_x]:
+                next_point = np.asarray([next_y, next_x], dtype=np.int32)
+                break
+
+        if next_point is None:
+            if is_loop and len(ordered_points) == total_points:
+                for dy, dx in _FAST_PATH_NEIGHBOR_OFFSETS:
+                    next_y = int(current_point[0]) + dy
+                    next_x = int(current_point[1]) + dx
+                    if next_y < 0 or next_y >= component_mask.shape[0]:
+                        continue
+                    if next_x < 0 or next_x >= component_mask.shape[1]:
+                        continue
+                    if next_y == int(start_point[0]) and next_x == int(start_point[1]):
+                        ordered_points.append(start_point.copy())
+                        break
+            break
+
+        prev_point = current_point
+        current_point = next_point
+
+    return np.asarray(ordered_points, dtype=np.int32), is_loop
+
+
+def _find_adjacent_junction_clusters(point, junction_cluster_ids):
+    point_y = int(point[0])
+    point_x = int(point[1])
+    cluster_ids = []
+    for dy, dx in _FAST_PATH_NEIGHBOR_OFFSETS:
+        cluster_id = _lookup_junction_cluster_id(
+            junction_cluster_ids,
+            (point_y + dy, point_x + dx),
+        )
+        if cluster_id is None or cluster_id in cluster_ids:
+            continue
+        cluster_ids.append(cluster_id)
+    return cluster_ids
+
+
+def _attach_junction_anchors_to_arc_path(
+    path_points,
+    is_loop,
+    junction_cluster_ids,
+    junction_cluster_anchors,
+):
+    path_points = np.asarray(path_points, dtype=np.int32)
+    if is_loop or len(path_points) == 0:
+        return path_points
+
+    start_clusters = _find_adjacent_junction_clusters(path_points[0], junction_cluster_ids)
+    end_clusters = _find_adjacent_junction_clusters(path_points[-1], junction_cluster_ids)
+
+    arrays = []
+    if start_clusters:
+        start_anchor = np.asarray(
+            _lookup_junction_cluster_anchor(junction_cluster_anchors, start_clusters[0], path_points[0]),
+            dtype=np.int32,
+        )
+        arrays.append(start_anchor.reshape(1, 2))
+
+    arrays.append(path_points)
+
+    if end_clusters:
+        end_cluster_id = None
+        if len(path_points) == 1 and start_clusters:
+            for cluster_id in end_clusters:
+                if cluster_id != start_clusters[0]:
+                    end_cluster_id = cluster_id
+                    break
+        else:
+            end_cluster_id = end_clusters[0]
+        if end_cluster_id is not None:
+            end_anchor = np.asarray(
+                _lookup_junction_cluster_anchor(junction_cluster_anchors, end_cluster_id, path_points[-1]),
+                dtype=np.int32,
+            )
+            arrays.append(end_anchor.reshape(1, 2))
+
+    if len(arrays) == 1:
+        return arrays[0]
+    return np.vstack(arrays)
+
+
+def _materialize_fast_path(path_points):
+    path_points = np.asarray(path_points, dtype=np.int32)
+    return [
+        (int(point[0]), int(point[1]))
+        for point in path_points
+    ]
+
+
+def create_fast_paths_vectorized(skeleton, min_path_length=MIN_PATH_LENGTH):
+    """Extract branch-aware paths from a skeleton using vectorized labeling."""
+    skeleton = np.asarray(skeleton, dtype=bool)
+    skeleton_pixel_count = int(np.count_nonzero(skeleton))
+    if skeleton_pixel_count == 0:
+        return []
+
+    print(f"  Starting vectorized fast path extraction on {skeleton_pixel_count} skeleton pixels...")
+
+    degree_map = _compute_fast_path_degree_map(skeleton)
+    junction_mask, junction_cluster_ids, junction_cluster_sizes, junction_cluster_anchors = _build_vectorized_junction_state(
+        skeleton,
+        degree_map,
+    )
+    arc_mask = skeleton & ~junction_mask
+    arc_degree_map = _compute_fast_path_degree_map(arc_mask)
+    component_labels, _component_count = ndi.label(arc_mask, structure=_FAST_PATH_STRUCTURE)
+
+    paths = []
+    discarded_same_cluster_points = {}
+    for component_id, component_slice in enumerate(ndi.find_objects(component_labels), start=1):
+        if component_slice is None:
+            continue
+
+        component_mask = component_labels[component_slice] == component_id
+        if not np.any(component_mask):
+            continue
+
+        ordered_local_path, is_loop = _order_vectorized_arc_component(
+            component_mask,
+            arc_degree_map[component_slice],
+        )
+        if len(ordered_local_path) == 0:
+            continue
+
+        ordered_global_path = ordered_local_path.copy()
+        ordered_global_path[:, 0] += int(component_slice[0].start)
+        ordered_global_path[:, 1] += int(component_slice[1].start)
+        candidate_path = _attach_junction_anchors_to_arc_path(
+            ordered_global_path,
+            is_loop,
+            junction_cluster_ids,
+            junction_cluster_anchors,
+        )
+        candidate_path, keep_path, same_cluster_id = _classify_fast_path(
+            _materialize_fast_path(candidate_path),
+            min_path_length,
+            junction_cluster_ids,
+            junction_cluster_sizes,
+            junction_cluster_anchors,
+        )
+        if keep_path:
+            paths.append(candidate_path)
+            continue
+
+        if same_cluster_id is not None:
+            cluster_points = discarded_same_cluster_points.setdefault(same_cluster_id, set())
+            for point in candidate_path:
+                cluster_points.add(tuple(point))
+
+    paths.extend(
+        _recover_discarded_same_cluster_paths(
+            discarded_same_cluster_points,
+            min_path_length,
+            junction_cluster_ids,
+            junction_cluster_sizes,
+            junction_cluster_anchors,
+        )
+    )
+
+    print(f"  Vectorized fast path extraction complete: {len(paths)} paths kept (min length: {int(min_path_length)})")
+    return paths
+
+
+def create_fast_paths(skeleton, min_path_length=MIN_PATH_LENGTH):
+    """Extract branch-aware paths from a skeleton while preserving open segments."""
+    ys, xs = np.nonzero(skeleton)
+    if len(ys) == 0:
+        return []
+
+    print(f"  Starting fast path extraction on {len(ys)} skeleton pixels...")
+
+    skeleton_points = set(zip(ys, xs))
+    paths = []
+    neighbors_dict = _build_fast_path_neighbors(skeleton_points)
+    node_points, junction_cluster_ids, junction_cluster_sizes, junction_cluster_anchors = _build_fast_path_junction_state(neighbors_dict)
+
     def edge_key(a, b):
         return tuple(sorted((a, b)))
+
+    visited_edges = set()
+    discarded_same_cluster_points = {}
 
     def release_path_edges(path):
         for start_point, end_point in zip(path, path[1:]):
             visited_edges.discard(edge_key(start_point, end_point))
-
-    def should_keep_path(path):
-        if len(path) < int(min_path_length):
-            return False
-        if len(path) < 2:
-            return False
-
-        start = path[0]
-        end = path[-1]
-        start_cluster = junction_cluster_ids.get(start)
-        end_cluster = junction_cluster_ids.get(end)
-        if (
-            start_cluster is not None
-            and end_cluster is not None
-            and start_cluster == end_cluster
-            and int(junction_cluster_sizes.get(start_cluster, 0)) > 1
-        ):
-            deduped_path = _remove_duplicate_points(path)
-            if len(deduped_path) < max(4, int(min_path_length) + 1):
-                return False
-
-            cluster_anchor = np.asarray(
-                junction_cluster_anchors.get(start_cluster, deduped_path[0]),
-                dtype=float,
-            )
-            pts = np.asarray(deduped_path, dtype=float)
-            spans = np.ptp(pts, axis=0)
-            max_radius = float(np.max(np.linalg.norm(pts - cluster_anchor, axis=1)))
-
-            # Preserve genuine attached loops that leave the junction cluster,
-            # travel a meaningful distance, and return to the same cluster.
-            return bool(max(spans[0], spans[1]) >= 3.0 and max_radius >= 2.0)
-        return True
-
-    def snap_path_to_junction_anchor(path):
-        snapped = list(path)
-        if not snapped:
-            return snapped
-
-        start_cluster = junction_cluster_ids.get(snapped[0])
-        if start_cluster is not None and int(junction_cluster_sizes.get(start_cluster, 0)) > 1:
-            snapped[0] = junction_cluster_anchors.get(start_cluster, snapped[0])
-
-        end_cluster = junction_cluster_ids.get(snapped[-1])
-        if end_cluster is not None and int(junction_cluster_sizes.get(end_cluster, 0)) > 1:
-            snapped[-1] = junction_cluster_anchors.get(end_cluster, snapped[-1])
-
-        return _remove_duplicate_points(snapped)
-
-    visited_edges = set()
-    discarded_same_cluster_points = {}
 
     def trace_edge(start, neighbor):
         """Trace one edge from a node to the next node (or dead-end)."""
@@ -3601,54 +4013,34 @@ def create_fast_paths(skeleton, min_path_length=MIN_PATH_LENGTH):
             if key in visited_edges:
                 continue
             path = trace_edge(node, neighbor)
-            path = snap_path_to_junction_anchor(path)
-            if should_keep_path(path):
+            path, keep_path, same_cluster_id = _classify_fast_path(
+                path,
+                min_path_length,
+                junction_cluster_ids,
+                junction_cluster_sizes,
+                junction_cluster_anchors,
+            )
+            if keep_path:
                 paths.append(path)
                 continue
 
-            start_cluster = junction_cluster_ids.get(path[0]) if path else None
-            end_cluster = junction_cluster_ids.get(path[-1]) if path else None
-            if (
-                start_cluster is not None
-                and end_cluster is not None
-                and start_cluster == end_cluster
-                and int(junction_cluster_sizes.get(start_cluster, 0)) > 1
-            ):
-                cluster_points = discarded_same_cluster_points.setdefault(start_cluster, set())
+            if same_cluster_id is not None:
+                cluster_points = discarded_same_cluster_points.setdefault(same_cluster_id, set())
                 for point in path:
                     cluster_points.add(tuple(point))
                 release_path_edges(path)
 
     # Recover attached loops by isolating the discarded same-cluster subgraph
     # and re-tracing it outside the larger junction context.
-    for cluster_id, cluster_points in discarded_same_cluster_points.items():
-        if len(cluster_points) < max(4, int(min_path_length) + 1):
-            continue
-
-        anchor = junction_cluster_anchors.get(cluster_id)
-        if anchor is not None:
-            cluster_points.add(tuple(anchor))
-
-        ys = [point[0] for point in cluster_points]
-        xs = [point[1] for point in cluster_points]
-        min_y = min(ys)
-        max_y = max(ys)
-        min_x = min(xs)
-        max_x = max(xs)
-
-        local_mask = np.zeros((max_y - min_y + 1, max_x - min_x + 1), dtype=bool)
-        for point_y, point_x in cluster_points:
-            local_mask[point_y - min_y, point_x - min_x] = True
-
-        recovered_paths = skeleton_to_paths_improved(local_mask)
-        for recovered_path in recovered_paths:
-            mapped_path = [
-                (point_y + min_y, point_x + min_x)
-                for point_y, point_x in recovered_path
-            ]
-            mapped_path = snap_path_to_junction_anchor(mapped_path)
-            if should_keep_path(mapped_path):
-                paths.append(mapped_path)
+    paths.extend(
+        _recover_discarded_same_cluster_paths(
+            discarded_same_cluster_points,
+            min_path_length,
+            junction_cluster_ids,
+            junction_cluster_sizes,
+            junction_cluster_anchors,
+        )
+    )
 
     # Handle pure loops (all points degree==2), which have no explicit nodes.
     for point in skeleton_points:
@@ -3683,8 +4075,14 @@ def create_fast_paths(skeleton, min_path_length=MIN_PATH_LENGTH):
                 if current == point:
                     break
 
-            loop_path = snap_path_to_junction_anchor(loop_path)
-            if should_keep_path(loop_path):
+            loop_path, keep_path, _ = _classify_fast_path(
+                loop_path,
+                min_path_length,
+                junction_cluster_ids,
+                junction_cluster_sizes,
+                junction_cluster_anchors,
+            )
+            if keep_path:
                 paths.append(loop_path)
 
     print(f"  Fast path extraction complete: {len(paths)} paths kept (min length: {int(min_path_length)})")
