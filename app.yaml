@@ -1,5 +1,7 @@
 runtime: python311
 
+entrypoint: gunicorn --workers 1 --threads 8 --timeout 300 --bind :$PORT centerline_web_app:app
+
 env_variables:
   FLASK_ENV: production
 

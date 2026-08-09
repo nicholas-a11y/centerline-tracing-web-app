@@ -12,7 +12,7 @@ import logging
 import hashlib
 import mimetypes
 from html.parser import HTMLParser
-from queue import Queue
+from queue import Queue, Empty, Full
 from flask import Flask, render_template, request, jsonify, send_file
 import os
 import numpy as np
@@ -116,8 +116,34 @@ def _test_ui_unavailable_response():
         'detail': detail,
     }), 503
 
+class _SessionRegistry(dict):
+    """Session store that refreshes last-access time on lookup."""
+
+    def __getitem__(self, key):
+        session = super().__getitem__(key)
+        _touch_session(session)
+        return session
+
+    def get(self, key, default=None):
+        session = super().get(key, default)
+        if session is not default:
+            _touch_session(session)
+        return session
+
+
+def _touch_session(session):
+    try:
+        session.last_accessed = time.time()
+    except AttributeError:
+        pass
+
+
 # Global storage for session data
-sessions = {}
+sessions = _SessionRegistry()
+SESSION_TTL_SECONDS = int(os.environ.get('SESSION_TTL_SECONDS', 1800))
+MAX_SESSIONS = int(os.environ.get('MAX_SESSIONS', 12))
+SESSION_SWEEP_INTERVAL_SECONDS = 60
+PROGRESS_QUEUE_MAX_MESSAGES = 500
 SVG_VIEW_PATH_RENDER_LIMIT = 5000
 SVG_PROGRESSIVE_PREVIEW_PATH_LIMIT = 1200
 BENCHMARK_FILENAME_PREFIXES = ('bench__', 'metrics__')
@@ -174,10 +200,26 @@ def _sample_paths_and_hints_for_preview(paths, path_hints, max_paths):
 
     return sampled_paths, sampled_hints
 
+class BoundedProgressQueue(Queue):
+    """Progress queue that drops the oldest message instead of growing unboundedly."""
+
+    def put(self, item, block=True, timeout=None):
+        while True:
+            try:
+                super().put(item, block=False)
+                return
+            except Full:
+                try:
+                    self.get_nowait()
+                except Empty:
+                    pass
+
+
 class CenterlineSession:
     def __init__(self, session_id):
         self.session_id = session_id
         self.created_at = time.time()
+        self.last_accessed = self.created_at
         self.image = None
         self.display_image = None
         self.image_path = None
@@ -188,7 +230,7 @@ class CenterlineSession:
         self.preprocessing_info = {}
         self.results = None
         self.initial_paths = None  # Store raw magenta paths
-        self.progress_queue = Queue()  # For progress updates
+        self.progress_queue = BoundedProgressQueue(maxsize=PROGRESS_QUEUE_MAX_MESSAGES)  # For progress updates
         self.optimization_thread = None
         self.optimization_complete = False
         self.optimization_stopped = False
@@ -221,6 +263,7 @@ class CenterlineSession:
         self.initial_path_hints = []
         self.partial_optimized_path_hints = []
         self.pruning_debug_payload = None
+        self.released = False
         self.live_preview_paths = []
         self.live_preview_kind = None
         self.live_preview_frame_id = 0
@@ -293,6 +336,109 @@ class CenterlineSession:
             'message': 'idle',
             'updated_parameters': dict(self.parameters),
         }
+
+
+def _release_session(session):
+    """Cancel background work and free the session's heavy in-memory data."""
+    if session is None:
+        return
+    with session.lock:
+        session.released = True
+        session.optimization_stopped = True
+        session.optimization_generation += 1
+        session.auto_detect_generation += 1
+        session.auto_detect_active = False
+        session.auto_tune_generation += 1
+        session.auto_tune_active = False
+        session.image = None
+        session.display_image = None
+        session.results = None
+        session.initial_paths = None
+        session.initial_path_hints = []
+        session.partial_optimized_paths = []
+        session.partial_optimized_path_hints = []
+        session.live_preview_paths = []
+        session.pruning_debug_payload = None
+        session.auto_tune_best = None
+        session.benchmark_metrics = None
+        session.svg_cache.clear()
+        session.tile_preview_cache.clear()
+    while True:
+        try:
+            session.progress_queue.get_nowait()
+        except Empty:
+            break
+
+
+def _session_has_active_work(session):
+    for thread_attr in ('optimization_thread', 'auto_detect_thread', 'auto_tune_thread'):
+        thread = getattr(session, thread_attr, None)
+        if thread is not None and thread.is_alive():
+            return True
+    return bool(session.auto_detect_active or session.auto_tune_active)
+
+
+def _evict_stale_sessions(now=None):
+    """Drop sessions idle beyond the TTL, then enforce the max-session cap."""
+    if now is None:
+        now = time.time()
+    evicted = []
+
+    for session_id, session in list(dict.items(sessions)):
+        idle_sec = now - getattr(session, 'last_accessed', session.created_at)
+        if idle_sec <= SESSION_TTL_SECONDS:
+            continue
+        if _session_has_active_work(session) and len(sessions) <= MAX_SESSIONS:
+            continue
+        removed = dict.pop(sessions, session_id, None)
+        if removed is not None:
+            _release_session(removed)
+            evicted.append(session_id)
+
+    if len(sessions) > MAX_SESSIONS:
+        # Evict oldest-accessed first, preferring sessions without active work.
+        candidates = sorted(
+            list(dict.items(sessions)),
+            key=lambda item: (
+                _session_has_active_work(item[1]),
+                getattr(item[1], 'last_accessed', item[1].created_at),
+            ),
+        )
+        overflow = len(sessions) - MAX_SESSIONS
+        for session_id, session in candidates[:overflow]:
+            removed = dict.pop(sessions, session_id, None)
+            if removed is not None:
+                _release_session(removed)
+                evicted.append(session_id)
+
+    if evicted:
+        _log_debug(f"Evicted {len(evicted)} stale session(s): {', '.join(evicted)}")
+    return evicted
+
+
+_session_sweeper_lock = threading.Lock()
+_session_sweeper_started = False
+
+
+def _session_sweeper_loop():
+    while True:
+        time.sleep(SESSION_SWEEP_INTERVAL_SECONDS)
+        try:
+            _evict_stale_sessions()
+        except Exception as exc:  # Never let the sweeper die silently.
+            _log_debug(f"Session sweeper error: {exc}")
+
+
+def _ensure_session_sweeper():
+    global _session_sweeper_started
+    if _session_sweeper_started:
+        return
+    with _session_sweeper_lock:
+        if _session_sweeper_started:
+            return
+        sweeper = threading.Thread(target=_session_sweeper_loop, daemon=True, name='session-sweeper')
+        sweeper.start()
+        _session_sweeper_started = True
 
 
 def _clear_live_preview(session, generation=None):
@@ -2606,10 +2752,13 @@ def _fetch_remote_payload(remote_url, referer=None):
         raise _RemoteFetchError(f'Could not fetch dropped URL: {exc.reason}') from exc
 
 
-def _build_upload_response(upload_bytes, source_name, normalization_mode, normalization_sensitivity):
+def _build_upload_response(upload_bytes, source_name, normalization_mode, normalization_sensitivity, replace_session_id=None):
     cleaned_source_name = os.path.basename(str(source_name or '')).strip() or 'uploaded-file'
     if not upload_bytes:
         return jsonify({'error': 'Uploaded file is empty'})
+
+    _ensure_session_sweeper()
+    _evict_stale_sessions()
 
     session_id = str(uuid.uuid4())
     session = CenterlineSession(session_id)
@@ -2662,6 +2811,12 @@ def _build_upload_response(upload_bytes, source_name, normalization_mode, normal
             metrics['preprocessing'] = dict(session.preprocessing_info)
 
         sessions[session_id] = session
+
+        # The frontend has abandoned the previous session; free its memory now.
+        if replace_session_id and replace_session_id != session_id:
+            previous_session = dict.pop(sessions, replace_session_id, None)
+            if previous_session is not None:
+                _release_session(previous_session)
 
         preview_encode_started_at = time.perf_counter()
         raw_img = Image.fromarray((raw_gray * 255).astype(np.uint8))
@@ -2721,11 +2876,12 @@ def upload_file():
 
     requested_mode = request.form.get('normalization_mode', 'auto')
     requested_sensitivity = request.form.get('normalization_sensitivity', 'medium')
+    replace_session_id = request.form.get('replace_session_id') or None
     upload_bytes = file.read()
     if not _is_supported_upload_source(getattr(file, 'mimetype', None), file.filename):
         return jsonify({'error': 'Please upload an image or PDF file.'}), 400
 
-    return _build_upload_response(upload_bytes, file.filename, requested_mode, requested_sensitivity)
+    return _build_upload_response(upload_bytes, file.filename, requested_mode, requested_sensitivity, replace_session_id=replace_session_id)
 
 
 @app.route('/upload_remote', methods=['POST'])
@@ -2742,13 +2898,14 @@ def upload_remote_file():
 
     requested_mode = str(data.get('normalization_mode', 'auto'))
     requested_sensitivity = str(data.get('normalization_sensitivity', 'medium'))
+    replace_session_id = str(data.get('replace_session_id', '') or '') or None
 
     try:
         upload_bytes, final_url, content_type = _fetch_remote_payload(remote_url)
 
         source_name = _guess_remote_source_name(final_url, content_type=content_type)
         if _is_supported_upload_source(content_type, source_name):
-            return _build_upload_response(upload_bytes, source_name, requested_mode, requested_sensitivity)
+            return _build_upload_response(upload_bytes, source_name, requested_mode, requested_sensitivity, replace_session_id=replace_session_id)
 
         if _looks_like_html_payload(content_type, upload_bytes):
             candidate_urls = _extract_remote_media_candidate_urls(upload_bytes, final_url)
@@ -2760,7 +2917,7 @@ def upload_remote_file():
 
                 candidate_name = _guess_remote_source_name(candidate_final_url, content_type=candidate_content_type)
                 if _is_supported_upload_source(candidate_content_type, candidate_name):
-                    return _build_upload_response(candidate_bytes, candidate_name, requested_mode, requested_sensitivity)
+                    return _build_upload_response(candidate_bytes, candidate_name, requested_mode, requested_sensitivity, replace_session_id=replace_session_id)
 
             return jsonify({'error': 'Dropped webpage did not expose a fetchable image or PDF file'}), 400
 

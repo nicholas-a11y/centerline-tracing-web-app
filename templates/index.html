@@ -4864,12 +4864,16 @@
         function uploadSelectedFile(file) {
             if (!file) return;
             dismissDragOverlay();
+            const previousSessionId = currentSessionId;
             const uploadEpoch = beginUploadRequest(file.name || null);
 
             const formData = new FormData();
             formData.append('file', file);
             formData.append('normalization_mode', document.getElementById('normalizationMode').value);
             formData.append('normalization_sensitivity', document.getElementById('normalizationSensitivity').value);
+            if (previousSessionId) {
+                formData.append('replace_session_id', previousSessionId);
+            }
 
             showMessage('Uploading file...', 'info');
             showLoading(true, 'Loading source image...', 'Reading the upload, normalizing contrast if needed, and preparing the first preview.');
@@ -4902,6 +4906,7 @@
                 // Leave displayName as the raw URL if parsing fails.
             }
 
+            const previousSessionId = currentSessionId;
             const uploadEpoch = beginUploadRequest(displayName);
             showMessage('Fetching dropped image...', 'info');
             showLoading(true, 'Loading dropped image...', 'Fetching the dropped webpage image through the app and preparing the first preview.');
@@ -4915,6 +4920,7 @@
                     url: remoteUrl,
                     normalization_mode: document.getElementById('normalizationMode').value,
                     normalization_sensitivity: document.getElementById('normalizationSensitivity').value,
+                    replace_session_id: previousSessionId || null,
                 })
             })
             .then(response => response.json())

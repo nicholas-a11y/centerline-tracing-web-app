@@ -5,6 +5,7 @@ from io import BytesIO
 
 import centerline_core
 
+import centerline_web_app
 from centerline_web_app import (
     BENCHMARK_FILENAME_PREFIXES,
     CenterlineSession,
@@ -1892,3 +1893,165 @@ def test_generate_svg_view_and_download_share_render_settings(monkeypatch):
         assert captured_calls[0] == captured_calls[1]
     finally:
         sessions.pop(session.session_id, None)
+
+
+class _AliveThreadStub:
+    def is_alive(self):
+        return True
+
+
+def _make_disposable_session(session_id, last_accessed=None):
+    session = CenterlineSession(session_id)
+    session.image = np.ones((8, 8), dtype=np.float32)
+    session.display_image = np.ones((8, 8), dtype=np.float32)
+    session.results = {'paths': []}
+    session.svg_cache['key'] = '<svg/>'
+    session.tile_preview_cache['tile'] = {'valid_count': 1}
+    session.progress_queue.put('message')
+    if last_accessed is not None:
+        session.last_accessed = last_accessed
+    return session
+
+
+def test_release_session_frees_heavy_data():
+    session = _make_disposable_session('release-me')
+
+    centerline_web_app._release_session(session)
+
+    assert session.released is True
+    assert session.image is None
+    assert session.display_image is None
+    assert session.results is None
+    assert session.initial_paths is None
+    assert session.partial_optimized_paths == []
+    assert session.live_preview_paths == []
+    assert session.svg_cache == {}
+    assert session.tile_preview_cache == {}
+    assert session.progress_queue.empty()
+    assert session.optimization_stopped is True
+
+
+def test_session_lookup_refreshes_last_accessed():
+    session = _make_disposable_session('touch-me', last_accessed=time.time() - 999)
+    sessions[session.session_id] = session
+    try:
+        stale_access = session.last_accessed
+        _ = sessions[session.session_id]
+        assert session.last_accessed > stale_access
+    finally:
+        sessions.pop(session.session_id, None)
+
+
+def test_evict_stale_sessions_removes_idle_sessions():
+    stale = _make_disposable_session(
+        'stale-session',
+        last_accessed=time.time() - centerline_web_app.SESSION_TTL_SECONDS - 60,
+    )
+    fresh = _make_disposable_session('fresh-session')
+    sessions[stale.session_id] = stale
+    sessions[fresh.session_id] = fresh
+    try:
+        evicted = centerline_web_app._evict_stale_sessions()
+
+        assert stale.session_id in evicted
+        assert stale.session_id not in sessions
+        assert stale.image is None
+        assert fresh.session_id in sessions
+        assert fresh.image is not None
+    finally:
+        sessions.pop(stale.session_id, None)
+        sessions.pop(fresh.session_id, None)
+
+
+def test_evict_stale_sessions_protects_active_work_under_cap():
+    busy = _make_disposable_session(
+        'busy-session',
+        last_accessed=time.time() - centerline_web_app.SESSION_TTL_SECONDS - 60,
+    )
+    busy.optimization_thread = _AliveThreadStub()
+    sessions[busy.session_id] = busy
+    try:
+        evicted = centerline_web_app._evict_stale_sessions()
+
+        assert busy.session_id not in evicted
+        assert busy.session_id in sessions
+        assert busy.image is not None
+    finally:
+        sessions.pop(busy.session_id, None)
+
+
+def test_evict_enforces_max_sessions_cap(monkeypatch):
+    preexisting = dict(sessions)
+    dict.clear(sessions)
+    monkeypatch.setattr(centerline_web_app, 'MAX_SESSIONS', 2)
+    now = time.time()
+    created = [
+        _make_disposable_session(f'cap-session-{index}', last_accessed=now - 100 + index)
+        for index in range(4)
+    ]
+    try:
+        for session in created:
+            sessions[session.session_id] = session
+
+        evicted = centerline_web_app._evict_stale_sessions()
+
+        assert len(sessions) == 2
+        assert set(evicted) == {'cap-session-0', 'cap-session-1'}
+        assert 'cap-session-2' in sessions
+        assert 'cap-session-3' in sessions
+    finally:
+        dict.clear(sessions)
+        sessions.update(preexisting)
+
+
+def test_upload_releases_replaced_session():
+    previous = _make_disposable_session('previous-upload-session')
+    sessions[previous.session_id] = previous
+    tiny_png = (
+        b'\x89PNG\r\n\x1a\n'
+        b'\x00\x00\x00\rIHDR'
+        b'\x00\x00\x00\x01\x00\x00\x00\x01\x08\x00\x00\x00\x00'
+        b'\x3a\x7e\x9b\x55'
+        b'\x00\x00\x00\x0bIDATx\x9cc`\x00\x02\x00\x00\x05\x00\x01'
+        b'\x0d\x0a\x2d\xb4'
+        b'\x00\x00\x00\x00IEND\xaeB`\x82'
+    )
+    new_session_id = None
+    try:
+        client = app.test_client()
+        response = client.post(
+            '/upload',
+            data={
+                'normalization_mode': 'off',
+                'normalization_sensitivity': 'medium',
+                'replace_session_id': previous.session_id,
+                'file': (BytesIO(tiny_png), 'tiny.png'),
+            },
+            content_type='multipart/form-data',
+        )
+
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload['success'] is True
+        new_session_id = payload['session_id']
+
+        assert previous.session_id not in sessions
+        assert previous.released is True
+        assert previous.image is None
+        assert new_session_id in sessions
+    finally:
+        sessions.pop(previous.session_id, None)
+        if new_session_id:
+            sessions.pop(new_session_id, None)
+
+
+def test_bounded_progress_queue_drops_oldest_when_full():
+    queue = centerline_web_app.BoundedProgressQueue(maxsize=3)
+    for index in range(5):
+        queue.put(index)
+
+    drained = []
+    while not queue.empty():
+        drained.append(queue.get_nowait())
+
+    assert drained == [2, 3, 4]
