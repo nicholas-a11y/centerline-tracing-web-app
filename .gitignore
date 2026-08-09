@@ -53,6 +53,7 @@ deploy.sh
 # Python cache files
 __pycache__/
 *.pyc
+.venv/
 
 # VS Code workspace files
 .vscode/
