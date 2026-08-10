@@ -4,6 +4,7 @@ import numpy as np
 from io import BytesIO
 
 import centerline_core
+import centerline_engine_light as light_engine
 
 import centerline_web_app
 from centerline_web_app import (
@@ -27,6 +28,14 @@ class _StubCircleSystem:
 
     def evaluate_path(self, path):
         return 1.0
+
+
+def _supersampled_mock_path(points, scale_factor):
+    scale = float(scale_factor)
+    return [
+        ((((float(y) + 0.5) * scale) - 0.5), (((float(x) + 0.5) * scale) - 0.5))
+        for y, x in points
+    ]
 
 
 def test_benchmark_filename_prefix_detection():
@@ -608,10 +617,12 @@ def test_centerline_session_defaults_to_disabled_optimization():
 def test_process_immediate_reports_disabled_optimization_state(monkeypatch):
     session = CenterlineSession("immediate-disabled-state")
     session.image = np.zeros((16, 16), dtype=np.float32)
+    native_path = [(0.0, 0.0), (0.0, 1.0), (0.0, 2.0), (0.0, 3.0)]
+    scale_factor = light_engine._resolve_small_image_supersample_factor(session.image.shape)
 
     def _fake_create_fast_paths(skeleton, min_path_length=1):
         return [
-            [[0, 0], [0, 1], [0, 2], [0, 3]],
+            _supersampled_mock_path(native_path, scale_factor=scale_factor),
         ]
 
     monkeypatch.setattr("centerline_engine.create_fast_paths", _fake_create_fast_paths)
@@ -673,10 +684,12 @@ def test_process_immediate_reports_disabled_optimization_state(monkeypatch):
 def test_process_immediate_skips_path_simplification_when_disabled(monkeypatch):
     session = CenterlineSession("immediate-path-simplification-disabled")
     session.image = np.zeros((16, 16), dtype=np.float32)
+    native_path = [(0.0, 0.0), (0.0, 1.0), (0.0, 2.0), (0.0, 3.0)]
+    scale_factor = light_engine._resolve_small_image_supersample_factor(session.image.shape)
 
     def _fake_create_fast_paths(skeleton, min_path_length=1):
         return [
-            [[0, 0], [0, 1], [0, 2], [0, 3]],
+            _supersampled_mock_path(native_path, scale_factor=scale_factor),
         ]
 
     monkeypatch.setattr("centerline_engine.create_fast_paths", _fake_create_fast_paths)
@@ -727,7 +740,12 @@ def test_process_centerlines_skips_pruning_when_path_simplification_disabled(mon
 
     monkeypatch.setattr(
         "centerline_engine.create_fast_paths",
-        lambda *args, **kwargs: [[(0.0, 0.0), (0.0, 1.0), (0.0, 2.0), (0.0, 3.0)]],
+        lambda *args, **kwargs: [
+            _supersampled_mock_path(
+                [(0.0, 0.0), (0.0, 1.0), (0.0, 2.0), (0.0, 3.0)],
+                scale_factor=light_engine._resolve_small_image_supersample_factor(session.image.shape),
+            )
+        ],
     )
 
     results = process_centerlines(session)

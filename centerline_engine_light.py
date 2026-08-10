@@ -67,8 +67,8 @@ BEST_PATH_WIDTH = 1.5
 PRE_OPTIMIZATION_PATH_COLOR = "magenta"
 PRE_OPTIMIZATION_PATH_WIDTH = 0.8
 PRE_OPTIMIZATION_PATH_OPACITY = 0.4
-SMALL_IMAGE_SUPERSAMPLE_TARGET_MAX_DIM = 160
-SMALL_IMAGE_SUPERSAMPLE_MAX_FACTOR = 4
+SMALL_IMAGE_SUPERSAMPLE_TARGET_MAX_DIM = 600
+SMALL_IMAGE_SUPERSAMPLE_MAX_FACTOR = 3
 USE_VECTORIZED_FAST_PATHS = True
 VECTORIZED_FAST_PATHS_MIN_PIXELS = 40000
 
@@ -289,9 +289,27 @@ def extract_skeleton_paths(
 
     working_image = np.asarray(image, dtype=np.float32)
     supersample_factor = 1
+    effective_min_object_size = int(min_object_size)
+    effective_min_path_length = int(min_path_length)
     if enable_small_image_supersample:
         supersample_factor = _resolve_small_image_supersample_factor(working_image.shape)
         if supersample_factor > 1:
+            if effective_min_object_size > 0:
+                effective_min_object_size = max(
+                    1,
+                    int(
+                        round(
+                            float(effective_min_object_size)
+                            * float(supersample_factor)
+                            * float(supersample_factor)
+                        )
+                    ),
+                )
+            if effective_min_path_length > 0:
+                effective_min_path_length = max(
+                    1,
+                    int(round(float(effective_min_path_length) * float(supersample_factor))),
+                )
             working_image = transform.rescale(
                 working_image,
                 supersample_factor,
@@ -305,8 +323,8 @@ def extract_skeleton_paths(
     binary = working_image < dark_threshold
     
     # Remove small objects more efficiently
-    if min_object_size > 0:
-        binary = morphology.remove_small_objects(binary, min_object_size)
+    if effective_min_object_size > 0:
+        binary = morphology.remove_small_objects(binary, effective_min_object_size)
     
     # Skeletonize
     skeleton = morphology.skeletonize(binary)
@@ -319,13 +337,12 @@ def extract_skeleton_paths(
         or skeleton_pixel_count >= int(VECTORIZED_FAST_PATHS_MIN_PIXELS)
     )
     if use_vectorized_fast_paths:
-        paths = create_fast_paths_vectorized(skeleton, min_path_length=min_path_length)
+        paths = create_fast_paths_vectorized(skeleton, min_path_length=effective_min_path_length)
     else:
         legacy_fast_path_extractor = _resolve_legacy_fast_path_extractor()
-        paths = legacy_fast_path_extractor(skeleton, min_path_length=min_path_length)
+        paths = legacy_fast_path_extractor(skeleton, min_path_length=effective_min_path_length)
     if supersample_factor > 1:
         paths = _downscale_extracted_paths(paths, supersample_factor)
-    
     print(f"Extracted {len(paths)} skeleton paths")
     return paths
 
