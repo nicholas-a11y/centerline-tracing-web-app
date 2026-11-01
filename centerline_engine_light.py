@@ -6329,7 +6329,20 @@ def fit_curve_segments(
                         if open_lines:
                             return open_lines
 
-            source_vertices = [_as_float_pair(p) for p in rdp_simplify(source_points, max(0.75, fit_error))]
+            rdp_epsilon = max(0.75, fit_error)
+            if source_closed_loop:
+                # RDP collapses a closed loop (zero-length baseline), so split at the far point.
+                loop_pts = np.asarray(source_points, dtype=float)
+                far_idx = int(np.argmax(np.linalg.norm(loop_pts - loop_pts[0], axis=1)))
+                if 0 < far_idx < len(loop_pts) - 1:
+                    first_half = rdp_simplify(loop_pts[: far_idx + 1], rdp_epsilon)
+                    second_half = rdp_simplify(loop_pts[far_idx:], rdp_epsilon)
+                    simplified_source = list(first_half) + list(second_half)[1:]
+                else:
+                    simplified_source = rdp_simplify(loop_pts, rdp_epsilon)
+            else:
+                simplified_source = rdp_simplify(source_points, rdp_epsilon)
+            source_vertices = [_as_float_pair(p) for p in simplified_source]
             if len(source_vertices) >= 3:
                 if source_closed_loop and float(np.linalg.norm(np.asarray(source_vertices[0], dtype=float) - np.asarray(source_vertices[-1], dtype=float))) <= max(1.5, fit_error * 1.5):
                     source_vertices = [source_vertices[-1]] + source_vertices[1:-1]
@@ -6360,7 +6373,7 @@ def fit_curve_segments(
             vertices.append(_as_float_pair(end_point))
 
         is_closed_loop = (
-            len(vertices) >= 4
+            len(vertices) >= 3
             and float(np.linalg.norm(np.asarray(vertices[0], dtype=float) - np.asarray(vertices[-1], dtype=float))) <= 1.5
         )
 
