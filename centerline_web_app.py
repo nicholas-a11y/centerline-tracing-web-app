@@ -31,6 +31,7 @@ from centerline_engine_light import (
     create_svg_output,
     extract_skeleton_paths,
     prune_extracted_paths,
+    remove_small_objects_preserving_thin_lines,
 )
 
 # Keep legacy optimization functionality on the original engine during migration.
@@ -580,7 +581,7 @@ def _estimate_median_stroke_width(gray_image, dark_threshold, min_object_size=1)
     binary = np.asarray(gray_image) < float(dark_threshold)
     min_object_size = max(1, int(min_object_size or 1))
     if min_object_size > 1:
-        binary = morphology.remove_small_objects(binary, min_object_size)
+        binary = remove_small_objects_preserving_thin_lines(binary, min_object_size)
     if not np.any(binary):
         return None
 
@@ -3035,7 +3036,7 @@ def process_immediate():
         )
         binary = gray < params['dark_threshold']
         if effective_preview_min_object_size > 0:
-            binary = morphology.remove_small_objects(binary, effective_preview_min_object_size)
+            binary = remove_small_objects_preserving_thin_lines(binary, effective_preview_min_object_size)
         skeleton = morphology.skeletonize(binary)
         session.stroke_width_estimate_px = _estimate_median_stroke_width_from_masks(binary, skeleton)
         skeleton_pixels = int(np.count_nonzero(skeleton))

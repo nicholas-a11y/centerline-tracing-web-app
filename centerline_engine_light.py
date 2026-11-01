@@ -37,6 +37,7 @@ __all__ = [
     "extract_skeleton_paths",
     "fit_curve_segments",
     "prune_extracted_paths",
+    "remove_small_objects_preserving_thin_lines",
 ]
 
 # === CONFIGURATION ===
@@ -277,6 +278,42 @@ def _downscale_extracted_paths(paths, scale_factor):
     return scaled_paths
 
 
+def remove_small_objects_preserving_thin_lines(binary, min_size):
+    """Drop small 4-connected specks while keeping 1-px diagonal/curved line pieces.
+
+    A 1-px diagonal stroke is a chain of 4-connected singletons, so a plain
+    4-connected filter erases it. Pieces that diagonally bridge two or more
+    other components are line segments and are restored; specks touching a
+    single stroke corner are still removed so they cannot grow skeleton spurs.
+    """
+    binary = np.asarray(binary, dtype=bool)
+    kept = np.asarray(morphology.remove_small_objects(binary, min_size), dtype=bool)
+    removed = binary & ~kept
+    if not np.any(removed):
+        return kept
+
+    labels, label_count = ndi.label(binary)
+    sources = []
+    targets = []
+    for a, b in (
+        (labels[:-1, :-1], labels[1:, 1:]),
+        (labels[:-1, 1:], labels[1:, :-1]),
+    ):
+        mask = (a > 0) & (b > 0) & (a != b)
+        sources.extend((a[mask], b[mask]))
+        targets.extend((b[mask], a[mask]))
+    if not sources:
+        return kept
+
+    src = np.concatenate(sources).astype(np.int64)
+    dst = np.concatenate(targets).astype(np.int64)
+    unique_pairs = np.unique(src * (label_count + 1) + dst)
+    neighbor_counts = np.bincount(unique_pairs // (label_count + 1), minlength=label_count + 1)
+    bridge_labels = neighbor_counts >= 2
+    bridge_labels[0] = False
+    return kept | (removed & bridge_labels[labels])
+
+
 def extract_skeleton_paths(
     image,
     dark_threshold=0.5,
@@ -324,7 +361,7 @@ def extract_skeleton_paths(
     
     # Remove small objects more efficiently
     if effective_min_object_size > 0:
-        binary = morphology.remove_small_objects(binary, effective_min_object_size)
+        binary = remove_small_objects_preserving_thin_lines(binary, effective_min_object_size)
     
     # Skeletonize
     skeleton = morphology.skeletonize(binary)

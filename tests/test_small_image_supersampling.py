@@ -202,3 +202,17 @@ def test_supersample_timing_prints_mid_band_and_large_case_metrics(capsys):
     assert "factor=3" in captured.out
     assert "size=1500" in captured.out
     assert "factor=1" in captured.out
+
+def test_small_object_filter_keeps_one_pixel_diagonal_lines_but_drops_corner_specks():
+    binary = np.zeros((40, 40), dtype=bool)
+    for i in range(5, 30):
+        binary[i, i] = True
+    binary[5:10, 32:38] = True
+    binary[10, 38] = True
+
+    filtered = engine.remove_small_objects_preserving_thin_lines(binary, 2)
+
+    diagonal = np.array([filtered[i, i] for i in range(5, 30)])
+    assert diagonal[1:-1].all()
+    assert filtered[5:10, 32:38].all()
+    assert not filtered[10, 38]
