@@ -94,7 +94,18 @@ stdlib + numpy only. It never calls `extract_manual_centerlines_from_svg`.
      rotation or skew is rejected (`svg_image_rotated`), aspect ratio must match
      the bitmap within 1 % (`svg_image_aspect`), and more than one image is
      rejected (`svg_multiple_images`). Root `width`/`height` and `viewBox` are
-     not used. **The image data is never decoded**; it only marks the frame.
+     not used. **The image's pixel data is never decoded**; it only marks the
+     frame.
+     * **Stored-size check:** the embedded image's own width/height is read from
+       its header only (PNG `IHDR`, or JPEG `SOF` within the first 256 KB of
+       decoded base64). Each side must be 1..16384 px
+       (`svg_image_dimensions`). If its aspect ratio differs from the bitmap's
+       by more than 1 % the SVG was traced over a different picture
+       (`svg_bitmap_mismatch`). The same aspect ratio but a different pixel size
+       (e.g. a 256×256 trace checked against a 300×300 bitmap) is a **warning**,
+       because the frame alone would fit any bitmap of that shape. A linked,
+       non-base64, non-PNG/JPEG or unreadable image gives a "could not check"
+       warning and registration still uses the frame.
   2. `border-rect`: a `rect` marked `border` (through its transforms).
   3. `size-match`: root `width`/`height` in px (or unitless), or the `viewBox`
      size, equal to the bitmap. A `mm`/`in`/`pt` size alone is never trusted,

@@ -14,7 +14,10 @@ Supported:
       1. ``image-frame``: exactly one ``<image>``; its rectangle, after all
          transforms, is the bitmap's full pixel frame in the bitmap's upright
          orientation (LightBurn exports). Root width/height units and the
-         viewBox are not used. The embedded pixel data is never decoded.
+         viewBox are not used. The embedded pixel data is never decoded; only
+         the PNG IHDR / JPEG SOF header is read for its stored width/height. An
+         aspect ratio more than 1% off the bitmap's is ``svg_bitmap_mismatch``;
+         a different pixel size with the same aspect ratio is a warning.
       2. ``border-rect``: a <rect> marked id/class/data-role="border".
       3. ``size-match``: width/height in CSS px, or the viewBox, equal to the
          bitmap's pixel size.
@@ -26,6 +29,8 @@ Styles and non-rendered subtrees (defs, clipPath, mask, symbol, ...) are ignored
 
 from __future__ import annotations
 
+import base64
+import binascii
 import math
 import re
 import xml.etree.ElementTree as ET
@@ -40,6 +45,8 @@ MAX_SAMPLED_POINTS = 200_000
 MAX_TREE_DEPTH = 64
 SAMPLE_STEP_PX = 0.5
 FRAME_ASPECT_TOLERANCE = 0.01
+MAX_EMBEDDED_IMAGE_DIM = 16384    # cap on the width/height an embedded image header may declare
+EMBEDDED_HEADER_BYTES = 256 * 1024  # bytes of an embedded image decoded from base64 to find its header
 
 _FORBIDDEN_MARKUP = re.compile(rb"<!\s*(DOCTYPE|ENTITY)", re.IGNORECASE)
 _NUMBER = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
@@ -489,15 +496,99 @@ def _aspect_off(lo: np.ndarray, hi: np.ndarray, bw: float, bh: float) -> float:
     return abs((span[0] / span[1]) / (bw / bh) - 1.0)
 
 
-def _href_kind(elem: ET.Element) -> str:
-    href = ""
+def _href(elem: ET.Element) -> str:
     for k, v in elem.attrib.items():
         if k == "href" or k.endswith("}href"):
-            href = v or ""
-            break
+            return v or ""
+    return ""
+
+
+def _href_kind(elem: ET.Element) -> str:
+    href = _href(elem)
     if href.startswith("data:"):
         return href[5:].split(";", 1)[0].split(",", 1)[0] or "data"
     return "external" if href else "none"
+
+
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+# JPEG start-of-frame markers (baseline, progressive, lossless, arithmetic); not DHT/JPG/DAC.
+_JPEG_SOF = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+_JPEG_NO_LENGTH = {0x01, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7}
+
+
+def _header_dimensions(head: bytes) -> tuple[str, int, int] | None:
+    """(format, width, height) from a PNG IHDR or JPEG SOF header; pixel data is never touched."""
+    if head.startswith(_PNG_SIGNATURE):
+        if len(head) >= 24 and head[12:16] == b"IHDR":
+            return "png", int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+        return None
+    if head.startswith(b"\xff\xd8"):
+        i = 2
+        while i + 4 <= len(head):
+            if head[i] != 0xFF:
+                return None
+            marker = head[i + 1]
+            if marker == 0xFF:  # fill byte
+                i += 1
+                continue
+            if marker in _JPEG_NO_LENGTH:
+                i += 2
+                continue
+            if marker in (0xD9, 0xDA):  # EOI / start of scan before any SOF
+                return None
+            if marker in _JPEG_SOF:
+                if i + 9 > len(head):
+                    return None
+                return "jpeg", int.from_bytes(head[i + 7:i + 9], "big"), int.from_bytes(head[i + 5:i + 7], "big")
+            i += 2 + int.from_bytes(head[i + 2:i + 4], "big")
+    return None
+
+
+def _embedded_image_size(elem: ET.Element) -> tuple[str, int, int] | str:
+    """Stored size of a base64 data-URI image, read from its header only.
+
+    Only the first EMBEDDED_HEADER_BYTES are base64-decoded (enough for PNG IHDR and
+    for JPEG SOF after typical EXIF/ICC segments); pixel data is never decoded.
+    Returns (format, width, height), or a reason string when the size cannot be read.
+    """
+    href = _href(elem)
+    if not href.startswith("data:"):
+        return "the image is linked, not embedded" if href else "the image has no href"
+    meta, sep, payload = href.partition(",")
+    if not sep or not meta.lower().endswith(";base64"):
+        return "the embedded image is not base64-encoded"
+    chunk = "".join(payload[:EMBEDDED_HEADER_BYTES * 4 // 3 + 64].split())
+    chunk = chunk[:len(chunk) // 4 * 4]
+    try:
+        head = base64.b64decode(chunk, validate=True)[:EMBEDDED_HEADER_BYTES]
+    except (binascii.Error, ValueError):
+        return "the embedded image's base64 data is malformed"
+    dims = _header_dimensions(head)
+    if dims is None:
+        return "the embedded image is not a PNG or JPEG with a readable header"
+    return dims
+
+
+def _check_stored_size(img: ET.Element, bw: float, bh: float, warnings: list[str]) -> dict:
+    """Compare the embedded image's stored pixel size with the bitmap's (header only)."""
+    info = _embedded_image_size(img)
+    if isinstance(info, str):
+        warnings.append(f"Could not check the embedded image against the bitmap: {info}.")
+        return {"stored_format": None, "stored_size": None}
+    fmt, sw, sh = info
+    if sw <= 0 or sh <= 0 or sw > MAX_EMBEDDED_IMAGE_DIM or sh > MAX_EMBEDDED_IMAGE_DIM:
+        raise SvgReferenceError(
+            f"The embedded {fmt.upper()} declares {sw}x{sh} px; each side must be 1..{MAX_EMBEDDED_IMAGE_DIM}.",
+            "svg_image_dimensions")
+    off = abs((sw / sh) / (bw / bh) - 1.0)
+    if off > FRAME_ASPECT_TOLERANCE:
+        raise SvgReferenceError(
+            f"The embedded image is {sw}x{sh} px but the bitmap is {bw:g}x{bh:g} px (aspect ratio differs "
+            f"by {off:.1%}); the SVG was traced over a different image.", "svg_bitmap_mismatch")
+    if (sw, sh) != (int(bw), int(bh)):
+        warnings.append(f"The embedded image is {sw}x{sh} px but the bitmap is {bw:g}x{bh:g} px (same aspect "
+                        "ratio); check that the SVG was traced over this bitmap.")
+    return {"stored_format": fmt, "stored_size": [sw, sh]}
 
 
 def _size_match_mapping(root: ET.Element, bw: float, bh: float) -> tuple[_Affine, tuple[float, float]]:
@@ -626,6 +717,7 @@ def read_reference_svg(
         frame = {"x0": float(lo[0]), "y0": float(lo[1]), "x1": float(hi[0]), "y1": float(hi[1]),
                  "flip_x": bool(ctm.m[0, 0] < 0), "flip_y": bool(ctm.m[1, 1] < 0),
                  "href": _href_kind(img)}
+        frame.update(_check_stored_size(img, bw, bh, warnings))
         if border:
             warnings.append("Border rectangle ignored: the <image> placement frame is used for registration.")
     elif border:

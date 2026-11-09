@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import base64
+import io
 import math
 
 import numpy as np
 import pytest
+from PIL import Image
 
+from tests.pipeline import svg_reference
 from tests.pipeline.svg_reference import SvgReferenceError, read_reference_svg
 
 
@@ -251,6 +255,102 @@ def test_embedded_base64_counts_against_size_cap():
         read_reference_svg(raw, (100, 100), max_bytes=2000)
     assert exc.value.code == "svg_too_large"
     assert read_reference_svg(raw, (100, 100), max_bytes=5000).alignment == "image-frame"
+
+
+# --- embedded image header check (stored size; pixel data never decoded) -----
+
+def _png_bytes(w, h) -> bytes:
+    buf = io.BytesIO()
+    Image.new("L", (w, h), 255).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _jpeg_bytes(w, h, pad=0) -> bytes:
+    buf = io.BytesIO()
+    Image.new("L", (w, h), 255).save(buf, format="JPEG")
+    data = buf.getvalue()
+    segments = b""
+    while pad > 0:  # COM segments before SOF, like large EXIF/ICC blocks
+        n = min(pad, 65533)
+        segments += b"\xff\xfe" + (n + 2).to_bytes(2, "big") + b"x" * n
+        pad -= n
+    return data[:2] + segments + data[2:]
+
+
+def _framed(data: bytes, mime="image/png", frame=(100, 100)) -> bytes:
+    href = f"data:{mime};base64,{base64.b64encode(data).decode()}"
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" {_XLINK} width="{frame[0]}" height="{frame[1]}">'
+            f'<image width="{frame[0]}" height="{frame[1]}" xlink:href="{href}"/>'
+            '<path d="M0 5 L10 5"/></svg>').encode()
+
+
+def test_stored_png_size_matches_bitmap():
+    ref = read_reference_svg(_framed(_png_bytes(100, 100)), (100, 100))
+    assert ref.frame["stored_format"] == "png" and ref.frame["stored_size"] == [100, 100]
+    assert ref.warnings == []
+
+
+def test_stored_size_same_aspect_different_pixels_warns():
+    ref = read_reference_svg(_framed(_png_bytes(256, 256)), (300, 300))
+    assert ref.alignment == "image-frame"
+    assert any("256x256 px but the bitmap is 300x300 px" in w for w in ref.warnings)
+
+
+def test_stored_aspect_mismatch_rejected():
+    """The frame matches the bitmap's aspect, but the embedded image does not: a different picture."""
+    with pytest.raises(SvgReferenceError, match="different image") as exc:
+        read_reference_svg(_framed(_png_bytes(200, 100)), (100, 100))
+    assert exc.value.code == "svg_bitmap_mismatch"
+
+
+def test_stored_aspect_within_one_percent_warns_only():
+    ref = read_reference_svg(_framed(_png_bytes(1000, 995)), (100, 100))
+    assert ref.frame["stored_size"] == [1000, 995] and len(ref.warnings) == 1
+
+
+def test_stored_size_read_from_header_only():
+    """A valid IHDR followed by garbage is enough: pixel data is never decoded."""
+    ihdr = (b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + (64).to_bytes(4, "big")
+            + (64).to_bytes(4, "big") + b"\x08\x00\x00\x00\x00" + b"\x00" * 4 + b"IDAT-not-a-zlib-stream" * 10)
+    ref = read_reference_svg(_framed(ihdr), (128, 128))
+    assert ref.frame["stored_size"] == [64, 64]
+
+
+def test_stored_dimension_cap():
+    ihdr = (b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + (100_000).to_bytes(4, "big")
+            + (100_000).to_bytes(4, "big") + b"\x08\x00\x00\x00\x00")
+    with pytest.raises(SvgReferenceError) as exc:
+        read_reference_svg(_framed(ihdr), (100, 100))
+    assert exc.value.code == "svg_image_dimensions"
+
+
+def test_stored_jpeg_size_after_large_segments():
+    ref = read_reference_svg(_framed(_jpeg_bytes(64, 32, pad=100_000), "image/jpeg", frame=(128, 64)), (128, 64))
+    assert ref.frame["stored_format"] == "jpeg" and ref.frame["stored_size"] == [64, 32]
+    with pytest.raises(SvgReferenceError) as exc:
+        read_reference_svg(_framed(_jpeg_bytes(64, 64), "image/jpeg", frame=(128, 64)), (128, 64))
+    assert exc.value.code == "svg_bitmap_mismatch"
+
+
+def test_jpeg_header_beyond_window_warns(monkeypatch):
+    monkeypatch.setattr(svg_reference, "EMBEDDED_HEADER_BYTES", 1024)
+    ref = read_reference_svg(_framed(_jpeg_bytes(64, 64, pad=4000), "image/jpeg"), (100, 100))
+    assert ref.frame["stored_size"] is None
+    assert any("readable header" in w for w in ref.warnings)
+
+
+@pytest.mark.parametrize("href, reason", [
+    (_PNG_STUB, "malformed"),
+    ("x.png", "linked"),
+    ("data:image/png,%89PNG", "not base64"),
+    ("data:image/gif;base64,R0lGODlhAQABAAAAACw=", "readable header"),
+])
+def test_unreadable_stored_size_warns(href, reason):
+    raw = (f'<svg xmlns="http://www.w3.org/2000/svg" {_XLINK} width="100" height="100">'
+           f'<image width="100" height="100" xlink:href="{href}"/><path d="M0 5 L10 5"/></svg>').encode()
+    ref = read_reference_svg(raw, (100, 100))
+    assert ref.frame["stored_size"] is None
+    assert any("Could not check" in w and reason in w for w in ref.warnings)
 
 
 def test_border_rect_through_transform():

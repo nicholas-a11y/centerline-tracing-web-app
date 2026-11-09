@@ -39,7 +39,15 @@ def test_registered_by_image_frame():
     assert ref.alignment == "image-frame"
     assert ref.frame["flip_y"] is True and ref.frame["flip_x"] is False
     assert ref.frame["href"] == "image/png"
+    assert ref.frame["stored_format"] == "png" and ref.frame["stored_size"] == [256, 256]
     assert ref.warnings == []
+
+
+def test_wrong_bitmap_same_aspect_warns():
+    """The frame alone fits any square bitmap; the PNG header (256x256) flags a 300x300 bitmap."""
+    ref = read_reference_svg(SAMPLE, (300, 300))
+    assert ref.alignment == "image-frame"
+    assert len(ref.warnings) == 1 and "256x256 px but the bitmap is 300x300 px" in ref.warnings[0]
 
 
 def test_thick_line_row_matches_hand_check():

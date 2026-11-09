@@ -42,6 +42,8 @@ def main(argv=None) -> int:
         f = ref.frame
         print(f"  image frame (canvas units): x {f['x0']:.4f}..{f['x1']:.4f}, y {f['y0']:.4f}..{f['y1']:.4f}, "
               f"flip_x={f['flip_x']} flip_y={f['flip_y']} href={f['href']} (pixel data not decoded)")
+        if f.get("stored_size"):
+            print(f"  embedded image header: {f['stored_format']} {f['stored_size'][0]}x{f['stored_size'][1]} px")
     for i, (pts, closed) in enumerate(zip(ref.paths, ref.closed)):
         pts = np.asarray(pts, dtype=float)
         lo, hi = pts.min(axis=0), pts.max(axis=0)
