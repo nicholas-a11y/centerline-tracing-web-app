@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "id": "cross-t8-w8-a60-equal",
+  "title": "Crossing: 8px over 8px at 60 deg",
+  "category": "crossing",
+  "description": "8px line crossing a 8px horizontal line at 60 degrees on a 256px canvas.",
+  "notes": "",
+  "expected_behaviour": "Both centerlines continue through the crossing in their own direction as single paths (no bridge segment, no kink toward the other line). Lateral error inside the crossing region stays within tolerance.",
+  "source": {
+    "kind": "generated",
+    "generator": "tests/pipeline/generate_lessons.py",
+    "fixture_id": null
+  },
+  "licence": "Generated test data; same licence as this repository.",
+  "consent": {
+    "public": true,
+    "by": "repository maintainer"
+  },
+  "image": {
+    "file": "image.png",
+    "width": 256,
+    "height": 256
+  },
+  "reference": {
+    "file": "reference.svg"
+  },
+  "params": {
+    "dark_threshold": 0.2,
+    "min_path_length": 2,
+    "enable_pruning": false,
+    "normalization_mode": "auto",
+    "normalization_sensitivity": "medium"
+  },
+  "scoring": {
+    "region": {
+      "x0": 102.76,
+      "y0": 102.76,
+      "x1": 153.24,
+      "y1": 153.24
+    },
+    "tolerance_px": 1.0,
+    "min_single_path_coverage": 0.95,
+    "require_single_path": true,
+    "trim_ends_px": 0.0
+  },
+  "status": "baseline"
+}

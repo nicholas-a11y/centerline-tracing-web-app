@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "id": "fixture-curve-true-circle-64px-sw3",
+  "title": "Placement: curve-true-circle (64px, stroke 3)",
+  "category": "placement",
+  "description": "True circle loop \u2014 closed curve target for cubic fitting",
+  "notes": "Ground-truth audit: bias 0.01px, p95 offset 0.35px",
+  "expected_behaviour": "The centerline follows the middle of the stroke as one path within tolerance.",
+  "source": {
+    "kind": "legacy-fixture",
+    "generator": "tests/fixtures/definitions.py",
+    "fixture_id": "curve-true-circle",
+    "size": 64,
+    "stroke_width": 3
+  },
+  "licence": "Generated test data; same licence as this repository.",
+  "consent": {
+    "public": true,
+    "by": "repository maintainer"
+  },
+  "image": {
+    "file": "image.png",
+    "width": 64,
+    "height": 64
+  },
+  "reference": {
+    "file": "reference.svg"
+  },
+  "params": {
+    "dark_threshold": 0.2,
+    "min_path_length": 2,
+    "enable_pruning": false,
+    "normalization_mode": "auto",
+    "normalization_sensitivity": "medium"
+  },
+  "scoring": {
+    "region": null,
+    "tolerance_px": 1.0,
+    "min_single_path_coverage": 0.95,
+    "require_single_path": true,
+    "trim_ends_px": 4.0
+  },
+  "status": "active",
+  "ground_truth_audit": {
+    "bias_px": 0.012770596447615724,
+    "mean_abs_px": 0.1467690684289174,
+    "p95_abs_px": 0.34759237793895875,
+    "max_abs_px": 0.41503417850004054,
+    "off_stroke_fraction": 0.0,
+    "end_mismatch_px": null,
+    "valid_ground_truth": true,
+    "reasons": []
+  }
+}

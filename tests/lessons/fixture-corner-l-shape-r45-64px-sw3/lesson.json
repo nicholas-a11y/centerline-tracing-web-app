@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "id": "fixture-corner-l-shape-r45-64px-sw3",
+  "title": "Placement: corner-l-shape-r45 (64px, stroke 3)",
+  "category": "placement",
+  "description": "L-shaped corner rotated 45\u00b0 clockwise \u2014 two diagonal lines meeting",
+  "notes": "Ground-truth audit: bias -0.01px, p95 offset 0.42px",
+  "expected_behaviour": "The centerline follows the middle of the stroke as one path within tolerance.",
+  "source": {
+    "kind": "legacy-fixture",
+    "generator": "tests/fixtures/definitions.py",
+    "fixture_id": "corner-l-shape-r45",
+    "size": 64,
+    "stroke_width": 3
+  },
+  "licence": "Generated test data; same licence as this repository.",
+  "consent": {
+    "public": true,
+    "by": "repository maintainer"
+  },
+  "image": {
+    "file": "image.png",
+    "width": 64,
+    "height": 64
+  },
+  "reference": {
+    "file": "reference.svg"
+  },
+  "params": {
+    "dark_threshold": 0.2,
+    "min_path_length": 2,
+    "enable_pruning": false,
+    "normalization_mode": "auto",
+    "normalization_sensitivity": "medium"
+  },
+  "scoring": {
+    "region": null,
+    "tolerance_px": 1.0,
+    "min_single_path_coverage": 0.95,
+    "require_single_path": true,
+    "trim_ends_px": 4.0
+  },
+  "status": "baseline",
+  "ground_truth_audit": {
+    "bias_px": -0.01357987053581724,
+    "mean_abs_px": 0.38436336327029597,
+    "p95_abs_px": 0.4246868121609327,
+    "max_abs_px": 2.100452090704575,
+    "off_stroke_fraction": 0.0016666666666667052,
+    "end_mismatch_px": 0.42426406871192957,
+    "valid_ground_truth": true,
+    "reasons": []
+  }
+}

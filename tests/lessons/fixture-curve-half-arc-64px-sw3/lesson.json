@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "id": "fixture-curve-half-arc-64px-sw3",
+  "title": "Placement: curve-half-arc (64px, stroke 3)",
+  "category": "placement",
+  "description": "Semicircle arc, 0\u00b0\u2192180\u00b0 (clockwise in image coords)",
+  "notes": "Ground-truth audit: bias 0.02px, p95 offset 0.31px",
+  "expected_behaviour": "The centerline follows the middle of the stroke as one path within tolerance.",
+  "source": {
+    "kind": "legacy-fixture",
+    "generator": "tests/fixtures/definitions.py",
+    "fixture_id": "curve-half-arc",
+    "size": 64,
+    "stroke_width": 3
+  },
+  "licence": "Generated test data; same licence as this repository.",
+  "consent": {
+    "public": true,
+    "by": "repository maintainer"
+  },
+  "image": {
+    "file": "image.png",
+    "width": 64,
+    "height": 64
+  },
+  "reference": {
+    "file": "reference.svg"
+  },
+  "params": {
+    "dark_threshold": 0.2,
+    "min_path_length": 2,
+    "enable_pruning": false,
+    "normalization_mode": "auto",
+    "normalization_sensitivity": "medium"
+  },
+  "scoring": {
+    "region": null,
+    "tolerance_px": 1.0,
+    "min_single_path_coverage": 0.95,
+    "require_single_path": true,
+    "trim_ends_px": 4.0
+  },
+  "status": "active",
+  "ground_truth_audit": {
+    "bias_px": 0.02219164278155154,
+    "mean_abs_px": 0.13478805987252254,
+    "p95_abs_px": 0.3116822213950748,
+    "max_abs_px": 0.5004795088258175,
+    "off_stroke_fraction": 0.0,
+    "end_mismatch_px": 0.48684557391052263,
+    "valid_ground_truth": true,
+    "reasons": []
+  }
+}

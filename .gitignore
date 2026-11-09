@@ -58,3 +58,14 @@ __pycache__/
 
 # VS Code workspace files
 .vscode/
+
+# Migration test suites (force-included despite test*.py above)
+!tests/pipeline/**/test*.py
+!tests/light_port/**/test*.py
+!tests/lessons/**/test*.py
+!scripts/**/test*.py
+
+# Local environment (never commit secrets)
+.env
+.env.*
+!.env.example

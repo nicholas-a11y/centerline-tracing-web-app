@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "id": "fixture-line-horizontal-64px-sw3",
+  "title": "Placement: line-horizontal (64px, stroke 3)",
+  "category": "placement",
+  "description": "Horizontal line across centre",
+  "notes": "Ground-truth audit: bias 0.01px, p95 offset 0.01px",
+  "expected_behaviour": "The centerline follows the middle of the stroke as one path within tolerance.",
+  "source": {
+    "kind": "legacy-fixture",
+    "generator": "tests/fixtures/definitions.py",
+    "fixture_id": "line-horizontal",
+    "size": 64,
+    "stroke_width": 3
+  },
+  "licence": "Generated test data; same licence as this repository.",
+  "consent": {
+    "public": true,
+    "by": "repository maintainer"
+  },
+  "image": {
+    "file": "image.png",
+    "width": 64,
+    "height": 64
+  },
+  "reference": {
+    "file": "reference.svg"
+  },
+  "params": {
+    "dark_threshold": 0.2,
+    "min_path_length": 2,
+    "enable_pruning": false,
+    "normalization_mode": "auto",
+    "normalization_sensitivity": "medium"
+  },
+  "scoring": {
+    "region": null,
+    "tolerance_px": 1.0,
+    "min_single_path_coverage": 0.95,
+    "require_single_path": true,
+    "trim_ends_px": 4.0
+  },
+  "status": "active",
+  "ground_truth_audit": {
+    "bias_px": 0.013499543934314967,
+    "mean_abs_px": 0.013499543934315263,
+    "p95_abs_px": 0.013636363636352091,
+    "max_abs_px": 0.013636363636352091,
+    "off_stroke_fraction": 0.0033333333333332993,
+    "end_mismatch_px": 0.6000000000000014,
+    "valid_ground_truth": true,
+    "reasons": []
+  }
+}
