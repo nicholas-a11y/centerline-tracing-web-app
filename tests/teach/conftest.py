@@ -111,7 +111,9 @@ def make_teach(tmp_path):
 
 @pytest.fixture
 def teach(make_teach):
-    return make_teach()
+    value = make_teach()
+    yield value
+    value.svc.retention.wait(5)
 
 
 def post(client, url, **kw):

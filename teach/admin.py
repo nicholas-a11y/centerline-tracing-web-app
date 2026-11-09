@@ -107,9 +107,12 @@ def register_admin(bp, svc, windows, environment):
         return limits.client_ip(request.remote_addr, request.headers.get("X-Forwarded-For"), cfg.trusted_proxy_hops)
 
     from .rescore import RescoreManager
+    from .retention import RetentionManager, retention_status
 
     rescores = RescoreManager(svc)
     svc.rescores = rescores
+    retention = RetentionManager(svc)
+    svc.retention = retention
     from .review import register_review
 
     register_review(bp, svc, rescores, client)
@@ -133,6 +136,8 @@ def register_admin(bp, svc, windows, environment):
                 if retry:
                     resp.headers["Retry-After"] = str(retry)
                 return resp
+            if request.path != "/teach/api/admin/retention-sweep":
+                retention.maybe_start()
         return None
 
     @bp.get("/admin")
@@ -159,7 +164,7 @@ def register_admin(bp, svc, windows, environment):
                         "worker_memory_bytes": memory_usage(svc.queue.pid) if getattr(svc.queue, "pid", None) else None,
                         "scoring_queue": getattr(svc.queue, "depth", 0),
                         "quotas": {"hourly": windows.snapshot(), "daily": svc.quota.snapshot()},
-                        "retention": svc.storage.get_json("teach/sweep/last.json", None)})
+                        "retention": retention_status(svc)})
 
     @bp.post("/api/admin/storage-check")
     def admin_storage_check():
@@ -193,6 +198,13 @@ def register_admin(bp, svc, windows, environment):
         if job is None:
             return jsonify({"ok": False, "error": "A re-score job is already running."}), 409
         return jsonify({"ok": True, "job": job}), 202
+
+    @bp.post("/api/admin/retention-sweep")
+    def admin_retention_sweep():
+        result = retention.run_now()
+        if result is None:
+            return jsonify({"ok": False, "error": "A retention sweep is already running."}), 409
+        return jsonify({"ok": True, "result": result})
 
     @bp.get("/api/admin/jobs/<job_id>")
     def admin_job(job_id):

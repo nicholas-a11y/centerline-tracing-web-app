@@ -70,6 +70,16 @@
     button("Rebuild index", async function () {
       var r = await call("rebuild-index", "POST"); message.textContent = "Index rebuilt: " + r.items + " items.";
     }, content);
+    button("Run retention sweep now", async function () {
+      var r = await call("retention-sweep", "POST");
+      message.textContent = "Retention sweep complete: " + r.result.deleted_count + " case(s) removed.";
+      await environment();
+    }, content);
+    button("Re-score all open cases", async function () {
+      var job = (await call("rescore-all", "POST")).job;
+      await waitForJob(job, content);
+      await environment();
+    }, content);
   }
   var labels = {pending: "Awaiting review", accepted: "Accepted", rejected: "Rejected"};
   async function queue(filter, query) {
