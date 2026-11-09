@@ -121,7 +121,10 @@ stdlib + numpy only. It never calls `extract_manual_centerlines_from_svg`.
 ### LightBurn export rules
 
 Tested with `tests/pipeline/samples/lightburn-cross-t2-w8-a35.svg` (lesson
-`user-lightburn-cross-t2-w8-a35`):
+`user-lightburn-cross-t2-w8-a35`, traced over the lesson `image.png`) and
+`tests/pipeline/samples/lightburn-faded-cross-t2-w8-a35.svg` (traced over the
+faded trace-template PNG, with the image placed elsewhere on the canvas). Both
+recover the same two lines within 0.1 px (measured: 0.013 px thick, 0.074 px thin):
 
 * **Keep the image in the export.** Do not hide or delete the traced bitmap
   before exporting; its placement is how the reader aligns your lines. LightBurn
@@ -162,8 +165,18 @@ planned Teach "Download trace template" endpoint.
 
 Round-trip tests (`tests/pipeline/test_trace_template.py`) add traced paths to
 the template in px and in a LightBurn-style mm/Y-up variant (at 96 and 72 dpi
-import) and check the reader recovers them exactly. How a given program imports
-the PNG and SVG has not been verified by these tests; check by hand.
+import) and check the reader recovers them exactly.
+
+Verified in LightBurn by hand:
+
+* **Faded PNG route: verified.** Importing `<name>-faded.png` into LightBurn,
+  tracing, and exporting SVG with the image kept works
+  (`samples/lightburn-faded-cross-t2-w8-a35.svg`). LightBurn embeds the faded PNG
+  unchanged except for being stored vertically flipped, places it at 256 px →
+  67.725 mm (96 dpi), and the reader registers it from the image frame wherever
+  it sits on the canvas.
+* **Template SVG route: untested.** How LightBurn imports `<name>-template.svg`
+  (embedded image, px size) has not been checked yet.
 
 ## Commands
 

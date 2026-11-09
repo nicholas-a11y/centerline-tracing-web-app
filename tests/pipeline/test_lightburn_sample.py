@@ -19,15 +19,17 @@ from PIL import Image
 from tests.pipeline.evaluate import PRIMARY_VARIANT, evaluate
 from tests.pipeline.lesson import LESSONS_DIR, load_lesson
 from tests.pipeline.svg_reference import read_reference_svg
+from tests.pipeline.trace_template import build_template_files
 
 SAMPLE = Path(__file__).parent / "samples" / "lightburn-cross-t2-w8-a35.svg"
+FADED_SAMPLE = Path(__file__).parent / "samples" / "lightburn-faded-cross-t2-w8-a35.svg"
 GENERATED = LESSONS_DIR / "cross-t2-w8-a35"
 USER = LESSONS_DIR / "user-lightburn-cross-t2-w8-a35"
 CENTRE = 127.5  # (256 - 1) / 2, pixel-centre coordinates
 
 
-def _lines():
-    ref = read_reference_svg(SAMPLE, (256, 256))
+def _lines(sample=SAMPLE):
+    ref = read_reference_svg(sample, (256, 256))
     flat = [p for p in ref.paths if np.ptp(p[:, 0]) < 1.0]
     sloped = [p for p in ref.paths if np.ptp(p[:, 0]) >= 1.0]
     assert len(flat) == 1 and len(sloped) == 1
@@ -98,3 +100,51 @@ def test_user_lesson_matches_generated_lesson_baseline():
     gp = ev_gen.variants[PRIMARY_VARIANT].score.summary()["max_p95_px"]
     up = ev_user.variants[PRIMARY_VARIANT].score.summary()["max_p95_px"]
     assert up == pytest.approx(gp, abs=0.1)
+
+
+# --- second export: traced over the faded trace-template PNG (Stage 2c route) ---
+
+def _distance_to_line(pts: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    d = (b - a) / np.linalg.norm(b - a)
+    rel = pts - a
+    return np.abs(rel[:, 0] * d[1] - rel[:, 1] * d[0])
+
+
+def test_faded_sample_registered_by_moved_image_frame():
+    ref, _, _ = _lines(FADED_SAMPLE)
+    assert ref.alignment == "image-frame"
+    assert ref.frame["flip_y"] is True and ref.frame["flip_x"] is False
+    f = ref.frame
+    assert (f["x0"], f["x1"], f["y0"], f["y1"]) == pytest.approx((216.1376, 283.8624, -283.8624, -216.1376), abs=1e-3)
+    assert ref.frame["stored_size"] == [256, 256]
+    assert ref.warnings == []
+
+
+def test_faded_sample_matches_owner_inspect_run():
+    _, thick, thin = _lines(FADED_SAMPLE)
+    assert thick[:, 0].mean() == pytest.approx(127.50, abs=0.1)
+    ends = thin[[0, -1]] if thin[0, 1] < thin[-1, 1] else thin[[-1, 0]]
+    np.testing.assert_allclose(ends, [[217.14, -0.5], [37.93, 255.5]], atol=0.1)  # edge to edge
+
+
+def test_faded_sample_recovers_same_lines_as_first_sample():
+    """Different trace, different canvas position: same two lines within 0.1 px."""
+    _, thick1, thin1 = _lines(SAMPLE)
+    _, thick2, thin2 = _lines(FADED_SAMPLE)
+    for first, second in ((thick1, thick2), (thin1, thin2)):
+        assert _distance_to_line(second, first[0], first[-1]).max() <= 0.1
+        assert _distance_to_line(first, second[0], second[-1]).max() <= 0.1
+        assert np.sort(second[:, 1])[[0, -1]] == pytest.approx(np.sort(first[:, 1])[[0, -1]], abs=0.1)
+
+
+def test_faded_sample_embeds_the_trace_template_png():
+    """Test-only decode: the embedded PNG is the faded template (fade 0.35), stored vertically flipped."""
+    text = FADED_SAMPLE.read_text(encoding="utf-8")
+    b64 = re.search(r'href="data:image/png;base64,([^"]+)"', text).group(1)
+    with Image.open(io.BytesIO(base64.b64decode(b64))) as im:
+        embedded = np.asarray(im.convert("L"), dtype=int)
+    files = build_template_files((GENERATED / "image.png").read_bytes(), "image", fade=0.35)
+    with Image.open(io.BytesIO(files["image-faded.png"])) as im:
+        faded = np.asarray(im.convert("L"), dtype=int)
+    assert not np.array_equal(embedded, faded)
+    assert np.array_equal(embedded, np.flipud(faded))
