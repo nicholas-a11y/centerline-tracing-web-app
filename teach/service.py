@@ -147,6 +147,8 @@ class TeachService:
             "width": img.get("width"), "height": img.get("height"),
             "geometry_sha256": None if deleted else (meta.get("reference") or {}).get("sha256_geometry"),
             "tokens": [] if deleted else meta.get("text_tokens", []),
+            "title_tokens": [] if deleted else tokens(meta.get("title", "")),
+            "has_text": False if deleted else bool(meta.get("description")),
             "retention_status_since": (meta.get("retention") or {}).get("status_since"),
         }
 
@@ -198,6 +200,8 @@ class TeachService:
         return {"image_sha256": sub.bitmap.sha256, "geometry_sha256": sub.reference.sha256_geometry,
                 "phash": phash(sub.bitmap.gray), "width": sub.bitmap.width, "height": sub.bitmap.height,
                 "tokens": tokens(sub.fields.get("title", ""), sub.fields.get("description", "")),
+                "title_tokens": tokens(sub.fields.get("title", "")),
+                "has_text": bool(sub.fields.get("description")),
                 "paths": sub.reference.paths}
 
     def _load_paths(self, entry: dict):

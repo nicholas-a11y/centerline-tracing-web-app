@@ -48,8 +48,9 @@ Agents: read the <a href="{{ url_for('teach.spec') }}">spec</a> or the <a href="
       <legend>Description</legend>
       <p><label for="title">Title (required, {{ text_fields.title[1] }} characters; a cleaned version up to 80 characters is public straight away)</label>
         <input id="title" name="title" maxlength="{{ text_fields.title[1] }}" required></p>
-      <p><label for="description">What's wrong, what you expected, and any notes (required, up to {{ text_fields.description[1] }} characters)</label>
-        <textarea id="description" name="description" maxlength="{{ text_fields.description[1] }}" rows="6" required></textarea></p>
+      <p><label for="description">What's wrong? (optional)</label>
+        <span id="description-help" class="help">What you expected, and any notes. Up to {{ text_fields.description[1] }} characters.</span>
+        <textarea id="description" name="description" maxlength="{{ text_fields.description[1] }}" rows="6" aria-describedby="description-help"></textarea></p>
     </fieldset>
     <fieldset>
       <legend>Settings</legend>

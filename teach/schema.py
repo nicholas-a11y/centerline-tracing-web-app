@@ -19,7 +19,7 @@ MAX_META_BYTES = 64 * 1024
 TEXT_FIELDS = {
     # name: (required, max characters, description)
     "title": (True, 120, "Short title. A sanitised version (<= 80 characters, no links) is public straight away."),
-    "description": (True, 4000, "What's wrong, what you expected, and any notes."),
+    "description": (False, 4000, "Optional. What's wrong, what you expected, and any notes. Empty when omitted."),
     "not_duplicate_reason": (False, 200, "One line on why this is not a duplicate of a similar item (optional)."),
 }
 

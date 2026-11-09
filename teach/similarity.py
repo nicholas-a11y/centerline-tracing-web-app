@@ -8,6 +8,9 @@ PHASH_MAX_HAMMING = 10
 CHAMFER_MAX_PX = 2.0
 TEXT_WITH_GEOMETRY = 0.3
 TEXT_ALONE = 0.8
+# The text signal is only used when both sides have at least this many distinct tokens (after
+# stop words), so very short titles cannot reach a threshold by themselves.
+MIN_TEXT_TOKENS = 4
 
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
 STOP_WORDS = frozenset("""
@@ -70,19 +73,36 @@ def chamfer(paths_a, paths_b) -> float:
     return float((da + db) / 2.0)
 
 
+def text_similarity(new: dict, other: dict) -> float:
+    """Token Jaccard on title + description; on the title only when either side has no description.
+
+    Entries without "title_tokens"/"has_text" (stored before Stage 5d) fall back to "tokens".
+    Returns 0 unless both compared token sets have at least MIN_TEXT_TOKENS tokens.
+    """
+    if new.get("has_text", True) and other.get("has_text", True):
+        a, b = new.get("tokens", ()), other.get("tokens", ())
+    else:
+        a = new.get("title_tokens", new.get("tokens", ()))
+        b = other.get("title_tokens", other.get("tokens", ()))
+    a, b = set(a), set(b)
+    if len(a) < MIN_TEXT_TOKENS or len(b) < MIN_TEXT_TOKENS:
+        return 0.0
+    return jaccard(a, b)
+
+
 def compare(new: dict, other: dict, load_paths=None) -> dict | None:
     """Return the match signals if ``other`` should be shown as similar, else None.
 
-    ``new``/``other``: {"image_sha256", "geometry_sha256", "phash", "width", "height", "tokens"};
-    ``new`` may also carry "paths". ``load_paths(other)`` loads the other item's reference
-    paths, and is only called when the bitmap sizes are equal.
+    ``new``/``other``: {"image_sha256", "geometry_sha256", "phash", "width", "height", "tokens",
+    "title_tokens", "has_text"}; ``new`` may also carry "paths". ``load_paths(other)`` loads the
+    other item's hand traced paths, and is only called when the bitmap sizes are equal.
     """
     exact = (new["image_sha256"] == other.get("image_sha256")
              and new["geometry_sha256"] == other.get("geometry_sha256"))
     if exact:
         return {"exact": True, "image": True, "geometry": True, "text": 1.0}
     image = bool(other.get("phash")) and hamming(new["phash"], other["phash"]) <= PHASH_MAX_HAMMING
-    text = jaccard(new.get("tokens", ()), other.get("tokens", ()))
+    text = text_similarity(new, other)
     geometry = False
     if (not image and text >= TEXT_WITH_GEOMETRY and load_paths is not None and new.get("paths") is not None
             and (new["width"], new["height"]) == (other.get("width"), other.get("height"))):

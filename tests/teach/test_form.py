@@ -1,4 +1,4 @@
-"""The Teach form (Stage 5c): one required text field, no focus box on the page, a read-only
+"""The Teach form (Stage 5c, 5d): one optional text field and a required title, no focus box on the page, a read-only
 "Settings used" line with an Advanced section. The API still accepts focus_box."""
 
 from __future__ import annotations
@@ -12,7 +12,8 @@ from teach.validate import Problems, validate_submission
 
 from .conftest import IMAGE, META, REFERENCE, post, submit
 
-LABEL = "What's wrong, what you expected, and any notes"
+LABEL = "What's wrong? (optional)"
+HINT = "What you expected, and any notes"
 
 
 def _validate(**changes):
@@ -25,16 +26,21 @@ def _validate(**changes):
 
 def test_single_text_field_in_schema():
     assert list(schema.TEXT_FIELDS) == ["title", "description", "not_duplicate_reason"]
-    assert schema.TEXT_FIELDS["description"][:2] == (True, 4000)
+    assert schema.TEXT_FIELDS["description"][:2] == (False, 4000)
     assert schema.TEXT_FIELDS["title"][:2] == (True, 120)
     required = schema.submission_meta_schema()["required"]
-    assert required == ["title", "description", "consent"]
+    assert required == ["title", "consent"]
 
 
-def test_description_required_and_limited():
+def test_description_optional_and_limited():
+    import json
+
+    assert _validate(description="   ").fields["description"] == ""
+    meta = {k: v for k, v in META.items() if k != "description"}
+    assert validate_submission(IMAGE, REFERENCE, json.dumps(meta)).fields["description"] == ""
     with pytest.raises(Problems) as info:
-        _validate(description="   ")
-    assert [(p.field, p.code) for p in info.value.problems] == [("description", "field_missing")]
+        _validate(title="  ")
+    assert [(p.field, p.code) for p in info.value.problems] == [("title", "field_missing")]
     with pytest.raises(Problems) as info:
         _validate(description="x" * 4001)
     assert [(p.field, p.code) for p in info.value.problems] == [("description", "field_too_long")]
@@ -58,7 +64,9 @@ def test_api_still_accepts_focus_box(teach):
 
 def test_page_has_single_field_and_no_focus_box(teach):
     html = teach.client.get("/teach").get_data(as_text=True)
-    assert LABEL in html and 'id="description"' in html and 'maxlength="4000"' in html
+    assert LABEL in html and HINT in html and 'id="description"' in html and 'maxlength="4000"' in html
+    assert not re.search(r'<textarea id="description"[^>]*\brequired\b', html)
+    assert re.search(r'<input id="title"[^>]*\brequired\b', html)
     for gone in ("what_is_wrong", "what_is_expected", 'id="notes"', "fx0", "Focus box"):
         assert gone not in html
     form = html[html.index('<form id="case-form"'):html.index("</form>")]
@@ -93,5 +101,3 @@ def test_consent_and_visibility_unchanged(teach):
 def test_submit_with_single_field_over_http(teach):
     r = post(teach.client, "/teach/api/submissions", description="One field only")
     assert r.status_code == 201
-    r = post(teach.client, "/teach/api/validate", description="")
-    assert r.get_json()["errors"][0]["field"] == "description"

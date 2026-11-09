@@ -42,7 +42,7 @@
     add("Status", (r.status || "").replace(/_/g, " "));
     add("Title", r.title);
     add("Public title", r.title_hidden ? "(hidden by the maintainer)" : r.title_public);
-    add("What's wrong, what you expected, and any notes", r.description);
+    add("What's wrong", r.description);
     add("Maintainer note", r.admin_note_public);
     add("Me too", r.me_too_count);
     var last = (r.results || [])[r.results.length - 1];

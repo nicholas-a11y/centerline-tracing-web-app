@@ -36,7 +36,7 @@ All `POST` endpoints take `multipart/form-data` with:
 | field | required | limit / values |
 |---|---|---|
 | `title` | yes | 120 characters. A sanitised version (no links, at most 80 characters) is public straight away. |
-| `description` | yes | 4000 characters: what's wrong, what you expected, and any notes |
+| `description` | no | 4000 characters: what's wrong, what you expected, and any notes. Stored as an empty string when omitted. |
 | `focus_box` | no | `{"x0","y0","x1","y1"}` in bitmap pixels (x right, y down, pixel edges); the initial scoring region. Default: whole image. Not on the web form; the maintainer sets the region at review. |
 | `settings` | no | The main app's settings (same ranges and defaults): `dark_threshold` 0.05–0.8 (0.2), `min_path_length` 1–20 (2), `enable_pruning` (false), `normalization_mode` auto/on/off (auto), `normalization_sensitivity` low/medium/high (medium), `enable_post_fit_export` (false), `source_smoothing` 0–100 (70), `enable_curve_fitting` (false; only applies with `enable_post_fit_export`), `cubic_fit_tolerance` 0.35–4.0 (0.35), `force_orthogonal_as_lines` (false). Missing settings take these defaults, and all ten are passed to the engine explicitly. With `enable_post_fit_export` true, the result also scores a `post_fit` variant: the SVG the app's Download button produces, with its own overlay. |
 | `public_thumbnail` | no | `true` lets the overlay thumbnail be public once reviewed (default false) |
