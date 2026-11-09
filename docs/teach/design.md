@@ -1,6 +1,6 @@
 # Teach: design (Stage 4)
 
-Status: **design approved (revision 3)**, with the owner's decisions applied. Items
+Status: **design approved (revision 4)**, with the owner's decisions applied. Items
 marked **[unverified]** are assumptions that Stage 5 must check first. Decisions and
 everything still uncertain are collected in
 [§19](#19-uncertainties-and-decisions-needed).
@@ -20,6 +20,18 @@ everything still uncertain are collected in
 * The main app shows a Teach checkbox **only when Teach is enabled**. It offers a
   cropped-image download and a "Send this to Teach" link carrying the settings in a
   URL fragment (§5.1). With Teach off the main page is byte-identical.
+
+**Revision 4 (Stage 5d), approved by the owner:**
+* "Send this to Teach" pre-attaches the cropped bitmap: the fragment also carries the
+  crop fractions and the main-app session id (`&sid=`); the Teach page strips the
+  fragment from the address bar, fetches the crop from the read-only crop route and
+  checks its sha-256 (§5.1). Manual attach stays as before.
+* Users see "Hand traced SVG" instead of "reference SVG" everywhere (page, spec, rules,
+  messages, hints). The machine field stays `reference`; lessonkit file names are
+  unchanged.
+* The text field is optional ("What's wrong? (optional)"); empty is stored as `""`.
+  The title stays required. The duplicate check compares titles only when either side
+  has no text, and ignores the text signal below 4 tokens (§10).
 
 ## 0. Summary
 
@@ -232,9 +244,9 @@ and the page shows a "LOCAL MODE" banner.
    | field | required | notes |
    |---|---|---|
    | bitmap | yes | PNG or JPEG (§9.1). Ideally the cropped image downloaded from the main app (§5.1). |
-   | reference SVG | yes | registered to the bitmap by an embedded `<image>`, a size match or a border rect (§9.2) |
+   | hand traced SVG (field `reference`) | yes | "Attach the SVG you drew by hand over the bitmap." Registered to the bitmap by an embedded `<image>`, a size match or a border rect (§9.2) |
    | title | yes | ≤ 120 characters (a sanitised ≤ 80-character version is public straight away, §11) |
-   | description | yes | "What's wrong, what you expected, and any notes", ≤ 4000 characters |
+   | description | no (revision 4) | "What's wrong? (optional)", hint "What you expected, and any notes", ≤ 4000 characters; stored as `""` when empty |
    | settings used | no | shown as a read-only "Settings used" line with an **Advanced** section to change them. The ten settings and ranges are those of the main UI (below); the page always sends all ten. |
    | public thumbnail | no (off) | allow the overlay thumbnail to be public once reviewed |
    | share full bitmap | no (off) | allow the full bitmap to be public once reviewed |
@@ -321,6 +333,24 @@ or `error`. This is useful information for the owner.
   input (> 2048 characters) or out-of-range values make it ignore the whole fragment
   silently and use the defaults. The fragment is never sent to the server, and the
   server re-validates every setting.
+* **Pre-attach (revision 4).** Where the Send link is offered (the equivalence guard is
+  unchanged), the fragment is `#s=<base64url JSON>&sid=<session id>`, and the JSON also
+  holds `"crop":{"top","bottom","left","right"}` (fractions 0–1) when a crop was
+  applied. `sid` must be a lowercase UUID and needs `image_sha256`; anything else makes
+  the page ignore the fragment. The Teach page (`static/teach/preattach.js`):
+  * removes the fragment with `history.replaceState` straight after parsing (only
+    fragments starting `#s=`), so the session id is not left in history or a copied URL;
+  * fetches `GET /teach/api/crop/<sid>/image.png` with the crop as query values (same
+    origin, read-only; the sid is only ever in this path), checks the bytes' sha-256
+    against the fragment, and shows the file as attached: name, pixel size, a preview
+    (a `data:` URL, allowed by the CSP) and a **Replace** button;
+  * on a failed fetch says "The app's copy of this image is no longer available. Attach
+    the downloaded cropped image instead."; on a hash mismatch, or without SubtleCrypto,
+    shows an error and falls back to manual attach.
+
+  The bitmap still reaches the server through the normal submit body and is
+  re-validated. Request-log lines for the crop routes have the session id replaced by
+  `<sid>` (`teach/crop.py`, a filter on the `werkzeug` and `gunicorn.access` loggers).
 * **Mix-up check.** If the fragment has an image hash, the page hashes the attached
   bitmap with SubtleCrypto and, if it differs, shows the warning "This doesn't look
   like the cropped image from the app." It never blocks submission. (SubtleCrypto
@@ -589,7 +619,7 @@ new case with every non-deleted submission:
 | exact | SHA-256 of the re-encoded PNG **and** of the canonical geometry | equal → **blocked**, offered "me too" |
 | image | 64-bit DCT perceptual hash (numpy + scipy.fft) on a 32×32 downscale | Hamming ≤ **10** |
 | geometry | when sizes are equal: symmetric mean chamfer distance between reference paths | ≤ **2 px** |
-| text | token Jaccard on title + description (lower-cased, stop words removed) | ≥ **0.6** |
+| text | token Jaccard on title + description (lower-cased, stop words removed); on the titles only when either side has no description (revision 4). The signal is 0 unless both token sets have at least **4** tokens (`MIN_TEXT_TOKENS`). | ≥ **0.6** |
 
 A match is shown if:
 * the image signal matches; or
@@ -999,7 +1029,7 @@ lower-case ASCII, at most 40 characters. It is a standard lesson folder
   |---|---|
   | `category` | `"user"` |
   | `title` | the submission title |
-  | `description` | the submitter's single text field ("What's wrong, what you expected, and any notes") |
+  | `description` | the submitter's optional text field ("What's wrong? (optional)"); empty when there is no text, and the admin completes it at review (Stage 6) |
   | `expected_behaviour` | completed by the admin at export (Stage 6) |
   | `notes` | me-too summary + public admin note |
   | `source` | `{"kind": "teach", "submission": 42, "queue_url": "..."}` |
@@ -1079,8 +1109,8 @@ New folder `tests/teach/`, with a `.gitignore` exception like the others:
   LightBurn sample from Stage 2b is a fixed test case.
 * **Trace template (removed in revision 3):** `POST /teach/api/trace-template`
   returns 404, and the spec, OpenAPI and page no longer mention it.
-* **Form and settings (revision 3):** the single `description` field (required,
-  ≤ 4000) and the old three fields being rejected as unknown. The ten-setting
+* **Form and settings (revision 3):** the single `description` field (optional since
+  revision 4, ≤ 4000) and the old three fields being rejected as unknown. The ten-setting
   whitelist, with bounds and defaults equal to `templates/index.html`. All ten are
   passed explicitly, and omitting them would have given different server defaults.
   The second LightBurn sample (image frame moved elsewhere on the canvas) stays a
@@ -1090,6 +1120,14 @@ New folder `tests/teach/`, with a `.gitignore` exception like the others:
   round-trips and matches the Python encoding.
 * **post_fit (revision 3):** the variant is present when post-fit is on and absent
   when it is off; with post-fit off, results equal the pre-revision results.
+* **Revision 4 (Stage 5d):** the page scripts run under a small Node DOM harness
+  (`tests/teach/js/teach_page_harness.js`): pre-attach success (fetched bytes equal the
+  downloaded crop), expired session and network failure, hash mismatch, no
+  SubtleCrypto, Replace, the fragment stripped from the URL, fragments with and without
+  `sid`. Also: the Send link carries `sid` only when equivalent; session ids are
+  redacted from request logs; "hand traced SVG" wording everywhere users see it, with
+  the API still accepting `reference`; submit with and without the text field; the
+  4-token rule and title-only comparison in the duplicate check.
 * **Main-app hand-off (revision 3):**
   * with Teach off, the rendered main page equals the pre-change hash and
     `/teach/api/status` is 404;

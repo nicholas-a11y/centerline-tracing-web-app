@@ -122,7 +122,7 @@ retire `centerline_engine.py`. Stages 0–3 change no shipped code, parameters, 
 ## Teach (feature-flagged, off by default)
 
 Teach (`teach/`, design in [docs/teach/design.md](docs/teach/design.md)) is a public page where people
-submit a bitmap and a reference SVG of the ideal centrelines. Each case is scored in a subprocess
+submit a bitmap and a hand traced SVG of the ideal centrelines. Each case is scored in a subprocess
 against the live `/process_immediate` pipeline and stored for review. It is registered by one line at
 the end of `centerline_web_app.py` and adds nothing to the app unless `TEACH_ENABLED=1`. If the
 configuration is unsafe or incomplete (for example the admin token is missing or shorter than 32
@@ -145,7 +145,8 @@ start again. The Teach tests run with `pytest tests/teach`.
 When Teach is enabled, the main page also shows an unchecked **Teach** checkbox (with Teach off the
 main page is unchanged). Ticking it offers **Download the cropped image**, which gives exactly the
 pixels the engine processed, and after a run a **Send this to Teach** link. The link opens `/teach` with
-the run's settings filled in. To prepare a case: crop to the problem area with the app's crop tools,
+the run's settings filled in and the cropped image already attached (fetched from the app's session copy;
+if that has expired, attach the downloaded file instead), so you only add the hand traced SVG. To prepare a case: crop to the problem area with the app's crop tools,
 leaving a little context, then trace over the cropped image in your vector program. Keep the image in
 the exported SVG (in LightBurn you can disable the image layer's output and it still stays in the
 export). Details are in [docs/teach/design.md](docs/teach/design.md) §5.1.
