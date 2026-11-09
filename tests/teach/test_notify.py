@@ -29,7 +29,7 @@ def make(sender, now):
 def test_unconfigured_does_nothing():
     s = Sender()
     n = Notifier(None, BASE, sender=s, background=False)
-    n.event(1, "pending_review", "T")
+    n.event(1, "pending", "T")
     n.urgent("global_cap")
     assert not n.configured and s.sent == []
 
@@ -37,11 +37,11 @@ def test_unconfigured_does_nothing():
 def test_debounce_and_batch():
     s, now = Sender(), [0.0]
     n = make(s, now)
-    n.event(1, "pending_review", "First")
+    n.event(1, "pending", "First")
     assert len(s.sent) == 1
     now[0] = 60.0
-    n.event(2, "pending_review", "Second")
-    n.event(3, "pending_review", None)
+    n.event(2, "pending", "Second")
+    n.event(3, "pending", None)
     assert len(s.sent) == 1  # held back
     now[0] = 31 * 60.0
     n.flush()
@@ -49,13 +49,13 @@ def test_debounce_and_batch():
     url, body, headers = s.sent[1]
     text = body.decode()
     assert url == URL and headers["Title"] == "Teach: 2 updates"
-    assert "#2 pending_review: Second https://centerline.example/teach/admin#q=2" in text
-    assert "#3 pending_review: title hidden" in text
+    assert "#2 pending: Second https://centerline.example/teach/admin#q=2" in text
+    assert "#3 pending: title hidden" in text
 
 
 def test_fixed_headers_only():
     s, now = Sender(), [0.0]
-    make(s, now).event(1, "pending_review", "T")
+    make(s, now).event(1, "pending", "T")
     headers = s.sent[0][2]
     assert set(headers) == {"Content-Type", "Title", "Tags", "Priority", "Click"}
     assert headers["Click"] == f"{BASE}/teach/admin"
@@ -63,21 +63,21 @@ def test_fixed_headers_only():
 
 def test_more_than_max_items():
     n = Notifier(URL, BASE, sender=Sender(), background=False)
-    body = n.body([(i, "pending_review", "t") for i in range(MAX_ITEMS + 3)]).decode()
+    body = n.body([(i, "pending", "t") for i in range(MAX_ITEMS + 3)]).decode()
     assert body.count("\n") == MAX_ITEMS + 1 and "+3 more" in body
 
 
 def test_failure_logs_class_name_not_url(caplog):
     s, now = Sender(fail=2), [0.0]
     with caplog.at_level(logging.WARNING, logger="teach"):
-        make(s, now).event(1, "pending_review", "T")
+        make(s, now).event(1, "pending", "T")
     assert "Teach alert failed: ConnectionError" in caplog.text
     assert "secret-topic" not in caplog.text and "ntfy" not in caplog.text
 
 
 def test_one_retry():
     s, now = Sender(fail=1), [0.0]
-    make(s, now).event(1, "pending_review", "T")
+    make(s, now).event(1, "pending", "T")
     assert len(s.sent) == 1
 
 

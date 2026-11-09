@@ -1,0 +1,20 @@
+{% extends "teach/base.html" %}
+{% block title %}Teach admin{% endblock %}
+{% block main %}
+<h1>Teach admin</h1>
+<p id="admin-message" role="status" aria-live="polite"></p>
+<form id="admin-signin">
+  <label for="admin-token">Admin token</label>
+  <input id="admin-token" type="password" autocomplete="off" required>
+  <p>The token stays in this tab's session storage. It is never placed in a URL or cookie.</p>
+  <button type="submit">Sign in</button>
+</form>
+<div id="admin-body" hidden>
+  <nav aria-label="Admin">
+    <a href="/teach/admin">Queue</a> <a href="/teach/admin/environment">Environment</a>
+    <button id="admin-signout" type="button">Sign out</button>
+  </nav>
+  <section id="admin-content"></section>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('teach.static', filename='teach/admin.js') }}"></script>{% endblock %}

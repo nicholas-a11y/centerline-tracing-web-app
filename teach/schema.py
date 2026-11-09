@@ -74,7 +74,12 @@ BOOL_FIELDS = {
 }
 
 ME_TOO_NOTE_MAX = 2000
-MANAGE_ANSWER_MAX = 2000
+STATUSES = ("pending", "accepted", "rejected")
+STATUS_LABELS = {"pending": "Awaiting review", "accepted": "Accepted", "rejected": "Rejected", "deleted": "Deleted"}
+
+
+def normalize_status(status: str) -> str:
+    return "pending" if status in ("needs_info", "pending_review", "submitted") else status
 
 CONSENT_TEXT_VERSION = 1
 LICENCE = "CC0-1.0"
@@ -229,8 +234,6 @@ def openapi() -> dict:
             "/teach/api/queue": {"get": {"summary": "Public queue", "responses": {"200": {"description": "items"}}}},
             "/teach/api/manage/{id}": {
                 "get": {"summary": "Your own item (full)", "parameters": manage, "responses": {"200": {"description": "item"}}},
-                "patch": {"summary": "Answer a needs_info question (note and/or replacement hand traced SVG)",
-                          "parameters": manage, "responses": {"200": {"description": "updated"}}},
                 "delete": {"summary": "Delete your item (leaves a tombstone)", "parameters": manage,
                            "responses": {"200": {"description": "deleted"}}},
             },

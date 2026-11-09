@@ -69,6 +69,9 @@ class Notifier:
             if self._pending:
                 self._flush_locked()
 
+    def send_test(self) -> None:
+        self._dispatch(self.headers(1), b"Teach: test alert. No case data is included.")
+
     def urgent(self, kind: str) -> None:
         if not self._url or kind not in URGENT_TEXT:
             return

@@ -59,7 +59,7 @@ def test_rules_and_templates_and_scripts():
 def test_manage_page_wording(teach):
     _, sub_id, _ = submit(teach)
     html = teach.client.get(f"/teach/manage/{sub_id}").get_data(as_text=True)
-    assert "Replacement hand traced SVG (optional)" in html
+    assert "answer-form" not in html
     assert "your hand traced SVG (green)" in html
     _no_old_wording(html, "manage page")
 
@@ -83,12 +83,10 @@ def test_registration_hints_have_no_old_wording():
         _no_old_wording(hint, code)
 
 
-def test_manage_answer_needs_note_or_svg(teach):
+def test_manage_has_no_answer_method(teach):
     _, sub_id, _ = submit(teach)
-    meta = dict(teach.svc.load_meta(sub_id), status="needs_info")
-    with pytest.raises(Problems) as info:
-        teach.svc.manage_answer("1.2.3.4", meta, "", None)
-    assert info.value.problems[0].message == "Add a note or a replacement hand traced SVG."
+    assert not hasattr(teach.svc, "manage_answer")
+    assert teach.client.patch(f"/teach/api/manage/{sub_id}").status_code == 405
 
 
 def test_api_still_accepts_reference_field(teach):

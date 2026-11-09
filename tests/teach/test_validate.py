@@ -202,7 +202,7 @@ def test_invalid_state(teach):
     _body, sub_id, token = submit(teach)
     r = teach.client.patch(f"/teach/api/manage/{sub_id}", json={"note": "more info"},
                            headers={"X-Teach-Manage-Token": token})
-    assert r.status_code == 409 and _first_code(r) == "invalid_state"
+    assert r.status_code == 405
 
 
 def test_not_found(teach):

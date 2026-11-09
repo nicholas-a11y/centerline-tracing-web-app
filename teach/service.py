@@ -105,15 +105,26 @@ class TeachService:
         return number
 
     def admin_index(self) -> dict:
-        return self.storage.get_json(ADMIN_INDEX, None) or {"schema_version": 1, "items": {}}
+        doc = self.storage.get_json(ADMIN_INDEX, None) or {"schema_version": 1, "items": {}}
+        for entry in doc["items"].values():
+            entry["status"] = schema.normalize_status(entry.get("status", "pending"))
+        return doc
 
     def public_index(self) -> dict:
-        return self.storage.get_json(PUBLIC_INDEX, None) or {"schema_version": 1, "items": {}}
+        doc = self.storage.get_json(PUBLIC_INDEX, None) or {"schema_version": 1, "items": {}}
+        for entry in doc["items"].values():
+            entry["status"] = schema.normalize_status(entry.get("status", "pending"))
+        return doc
 
     def load_meta(self, sub_id: str) -> dict | None:
         if not valid_id(sub_id):
             return None
-        return self.storage.get_json(submission_key(sub_id, "meta.json"), None)
+        meta = self.storage.get_json(submission_key(sub_id, "meta.json"), None)
+        if meta:
+            meta["status"] = schema.normalize_status(meta.get("status", "pending"))
+            for entry in meta.get("status_history", []):
+                entry["status"] = schema.normalize_status(entry["status"])
+        return meta
 
     def id_for_number(self, number: int) -> str | None:
         for sub_id, entry in self.admin_index()["items"].items():
@@ -260,9 +271,8 @@ class TeachService:
             while self.storage.get(submission_key(sub_id, "meta.json")) is not None:
                 sub_id = new_id()
             meta = {
-                "schema_version": 1, "id": sub_id, "number": number, "created_at": now, "status": "pending_review",
-                "status_history": [{"status": "submitted", "at": now, "by": "server"},
-                                   {"status": "pending_review", "at": utc_now(), "by": "server"}],
+                "schema_version": 1, "id": sub_id, "number": number, "created_at": now, "status": "pending",
+                "status_history": [{"status": "pending", "at": now, "by": "server"}],
                 "reviewed": False,
                 "title": f["title"], "description": f["description"],
                 "not_duplicate_reason": f.get("not_duplicate_reason", ""),
@@ -380,7 +390,6 @@ class TeachService:
         post_overlay = self.storage.get(submission_key(meta["id"], "overlay_post_fit.png"))
         if post_overlay:
             out["post_fit_overlay_png"] = data_url(post_overlay)
-        out["can_answer"] = meta["status"] == "needs_info"
         return out
 
     def manage_delete(self, meta: dict) -> dict:
@@ -393,47 +402,6 @@ class TeachService:
                     "reviewed": meta.get("reviewed", False), "deleted_at": now, "retention": {"status_since": now}}
             self._save(tomb)
         return {"number": meta["number"], "status": "deleted"}
-
-    def manage_answer(self, ip: str, meta: dict, note: str, reference: bytes | None) -> dict:
-        if meta["status"] != "needs_info":
-            raise Problems([Problem("status", "invalid_state",
-                                    "Only items with status needs_info can be answered.", "")])
-        note = clean_text(note or "")
-        if not note and not reference:
-            raise Problems([Problem("note", "field_missing", "Add a note or a replacement hand traced SVG.", "")])
-        if len(note) > schema.MANAGE_ANSWER_MAX:
-            raise Problems([Problem("note", "field_too_long",
-                                    f"'note' is limited to {schema.MANAGE_ANSWER_MAX} characters.", "")])
-        worker = ref = None
-        if reference:
-            img = meta.get("image") or {}
-            ref = validate_reference(reference, (img["width"], img["height"]))
-            png = self.storage.get(submission_key(meta["id"], "image.png"))
-            worker = self.queue.run(ip, png, ref.as_json(), meta["params"], meta["scoring"])
-        with self._lock:
-            meta = self.load_meta(meta["id"])
-            now = utc_now()
-            meta.setdefault("answers", []).append({"at": now, "note": note, "replaced_reference": bool(ref)})
-            if ref is not None:
-                overlay, thumb = worker.pop("overlay_png", None), worker.pop("thumb_png", None)
-                post_overlay = worker.pop("post_fit_overlay_png", None)
-                self.storage.put(submission_key(meta["id"], "reference.raw.svg"), ref.raw, "text/plain")
-                self.storage.put_json(submission_key(meta["id"], "reference.json"), ref.as_json())
-                if overlay:
-                    self.storage.put(submission_key(meta["id"], "overlay.png"), overlay, "image/png")
-                if thumb:
-                    self.storage.put(submission_key(meta["id"], "thumb.png"), thumb, "image/png")
-                if post_overlay:
-                    self.storage.put(submission_key(meta["id"], "overlay_post_fit.png"), post_overlay, "image/png")
-                meta["reference"] = {"paths": len(ref.paths), "points": ref.points,
-                                     "sha256_geometry": ref.sha256_geometry, "registration": ref.registration}
-                meta["results"].append(result_entry(worker))
-            meta["status"] = "pending_review"
-            meta["status_history"].append({"status": "pending_review", "at": now, "by": "submitter"})
-            meta["retention"] = {"status_since": now}
-            self._save(meta)
-        self.notifier.event(meta["number"], meta["status"], self.public_entry(meta).get("title"))
-        return self.manage_view(meta)
 
 
 def _global_cap() -> int:

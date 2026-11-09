@@ -286,7 +286,7 @@ and the page shows a "LOCAL MODE" banner.
    It also calls `/teach/api/similar`, which may say "looks similar to #N" (§10).
 4. **Submit:** the server validates again (it never trusts the client), stores the
    files, runs the scoring worker, and stores the result and overlay. The status moves
-   to `pending_review`. The response shows the overlay with pass/fail, the submission
+   to `pending` ("Awaiting review"). The response shows the overlay with pass/fail, the submission
    number, the queue URL and a **manage link** (§13.3).
 5. **Queue:** the case appears in the public queue under the visibility rules in §11.
 
@@ -361,24 +361,22 @@ or `error`. This is useful information for the owner.
 ### 6.1 Statuses
 
 ```
-submitted ──(scored)──▶ pending_review ──▶ accepted
+submitted ──(scored)──▶ pending ──▶ accepted
                              │   ▲      └─▶ rejected
                              ▼   │
-                          needs_info
 (any) ──(submitter delete / admin delete)──▶ deleted (tombstone: number + "deleted" only)
 ```
 
 | status | meaning | who sets it |
 |---|---|---|
 | `submitted` | stored; scoring in progress | server |
-| `pending_review` | scored; waiting for the owner | server, or submitter answering `needs_info` |
-| `needs_info` | the owner asked a question (admin note is public on the item) | admin |
+| `pending` | scored; awaiting review | server or admin |
 | `accepted` | will become, or has become, a lesson | admin |
 | `rejected` | not useful, out of scope or a duplicate (reason shown) | admin |
 | `deleted` | content removed; number kept so links don't break | submitter or admin |
 
-A submitter answers `needs_info` through the manage link (add a note or a replacement
-SVG). This moves the case back to `pending_review` and keeps the history.
+There is no information-request workflow. Unusable cases are rejected. Legacy
+information-request and pending-review records load as `pending`.
 
 ### 6.2 `meta.json` (one per submission; comments are illustrative only)
 
@@ -388,7 +386,7 @@ SVG). This moves the case back to `pending_review` and keeps the history.
   "id": "t_6f3k9q2m8w",          // random, unguessable; used in storage keys
   "number": 42,                   // human "#42", sequential (§7.3)
   "created_at": "2026-11-09T01:02:03Z",
-  "status": "pending_review",
+  "status": "pending",
   "status_history": [{"status": "submitted", "at": "...", "by": "server"}],
   "reviewed": false,              // true once the admin has set any status (§11)
   "title": "...", "description": "...",   // one text field since revision 3
@@ -778,8 +776,7 @@ title blocks, names, addresses and logos. Never upload confidential drawings."
   a tombstone (number and "deleted").
 * **Retention rules:**
   * `rejected` items are deleted (tombstoned) **30 days** after they became rejected.
-  * `needs_info` items with no submitter response are deleted **60 days** after the
-    question was asked.
+  * Unreviewed `pending` items are deleted **90 days** after submission.
   * `accepted` items keep their files. After the lesson is merged, deleting the
     private copies is an **admin action** ("Delete private copies" on the item,
     §15.1), never automatic. Afterwards only the metadata and the lesson link are
@@ -800,7 +797,7 @@ title blocks, names, addresses and logos. Never upload confidential drawings."
   4. Deletes at most **200 items** per run; the rest are picked up by the next run.
   5. Writes `sweep/last.json` with the finish time and counts, then releases the lock.
 
-  The sweep logs only counts ("retention: 3 rejected and 1 needs_info item
+  The sweep logs only counts ("retention: 3 rejected and 1 pending item
   tombstoned"). The admin summary shows the last-swept time and the number of items
   due. Because there is no scheduler, nothing is deleted while the app is idle; the
   next startup or admin visit catches up. If the app ever runs more than one process,
@@ -892,7 +889,7 @@ Error codes include:
 Submit returns `201` with:
 
 ```json
-{"ok": true, "number": 42, "status": "pending_review",
+{"ok": true, "number": 42, "status": "pending",
  "queue_url": "https://…/teach/q/42", "manage_url": "https://…/teach/manage/t_6f3k9q2m8w#k=…",
  "result": {...}}
 ```
@@ -1001,7 +998,7 @@ plus `Cache-Control: no-store` on admin responses.
   * Headers (fixed ASCII, no user text): `Title: Teach: N updates`,
     `Tags: inbox_tray`, `Priority: default`, and `Click:` the admin page URL built
     from `TEACH_PUBLIC_BASE_URL` (no token in it).
-  * Body: one line per item, `#42 pending_review: <public title> <base>/teach/admin#q=42`,
+  * Body: one line per item, `#42 pending: <public title> <base>/teach/admin#q=42`,
     using the same sanitised title as the public queue (§11), or "title hidden".
   * Total body at most 3,000 bytes, well under ntfy.sh's 4,096-byte message limit, so
     it is never turned into an attachment.

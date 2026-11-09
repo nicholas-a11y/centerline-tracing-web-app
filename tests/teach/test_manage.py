@@ -1,13 +1,13 @@
-"""Manage link (design 13.3): view, delete, answer needs_info; token stored only as a hash."""
+"""Manage link: view and delete; the retired answer operation is unavailable."""
 
 from __future__ import annotations
 
-import io
 import json
+import pytest
 
 from teach import limits
 
-from .conftest import REFERENCE, submit
+from .conftest import submit
 
 
 def _h(token):
@@ -27,7 +27,7 @@ def test_view(teach):
     r = teach.client.get(f"/teach/api/manage/{sub_id}", headers=_h(token))
     res = r.get_json()["result"]
     assert r.status_code == 200 and res["number"] == body["number"] and res["description"] == "Private detail"
-    assert res["overlay_png"].startswith("data:image/png;base64,") and res["can_answer"] is False
+    assert res["overlay_png"].startswith("data:image/png;base64,") and "can_answer" not in res
     assert "manage_token_sha256" not in res
     assert r.headers["Cache-Control"] == "no-store"
 
@@ -56,53 +56,24 @@ def test_delete_keeps_only_tombstone(teach):
     assert teach.client.get(f"/teach/api/manage/{sub_id}", headers=_h(token)).status_code == 404
 
 
-def _needs_info(t, sub_id):
-    meta = t.svc.load_meta(sub_id)
-    meta["status"] = "needs_info"
-    t.svc._save(meta)
-
-
-def test_answer_only_when_needs_info(teach):
+def test_answer_operation_removed(teach):
     _, sub_id, token = submit(teach)
     r = teach.client.patch(f"/teach/api/manage/{sub_id}", json={"note": "more info"}, headers=_h(token))
-    assert r.status_code == 409 and r.get_json()["errors"][0]["code"] == "invalid_state"
+    assert r.status_code == 405
+    assert "patch" not in teach.client.get("/teach/openapi.json").get_json()["paths"]["/teach/api/manage/{id}"]
 
 
-def test_answer_with_note(teach):
+@pytest.mark.parametrize("old_status", ["needs_info", "pending_review", "submitted"])
+def test_old_records_load_as_pending(teach, old_status):
     _, sub_id, token = submit(teach)
-    _needs_info(teach, sub_id)
-    r = teach.client.patch(f"/teach/api/manage/{sub_id}", json={"note": "It is 35 degrees"}, headers=_h(token))
-    assert r.status_code == 200 and r.get_json()["result"]["status"] == "pending_review"
     meta = teach.svc.load_meta(sub_id)
-    assert meta["answers"][-1]["note"] == "It is 35 degrees" and not meta["answers"][-1]["replaced_reference"]
-    assert len(teach.queue.calls) == 1  # not re-scored
-
-
-def test_answer_empty_is_422(teach):
-    _, sub_id, token = submit(teach)
-    _needs_info(teach, sub_id)
-    r = teach.client.patch(f"/teach/api/manage/{sub_id}", json={"note": "  "}, headers=_h(token))
-    assert r.status_code == 422 and r.get_json()["errors"][0]["code"] == "field_missing"
-
-
-def test_answer_with_replacement_svg_rescores(teach):
-    _, sub_id, token = submit(teach)
-    _needs_info(teach, sub_id)
-    r = teach.client.patch(f"/teach/api/manage/{sub_id}", headers=_h(token), content_type="multipart/form-data",
-                           data={"note": "", "reference": (io.BytesIO(REFERENCE), "new.svg")})
-    assert r.status_code == 200, r.get_json()
-    meta = teach.svc.load_meta(sub_id)
-    assert len(meta["results"]) == 2 and meta["answers"][-1]["replaced_reference"]
-    assert len(teach.queue.calls) == 2
-
-
-def test_answer_with_bad_svg_is_422(teach):
-    _, sub_id, token = submit(teach)
-    _needs_info(teach, sub_id)
-    r = teach.client.patch(f"/teach/api/manage/{sub_id}", headers=_h(token), content_type="multipart/form-data",
-                           data={"reference": (io.BytesIO(b"<svg"), "bad.svg")})
-    assert r.status_code == 422 and r.get_json()["errors"][0]["code"].startswith("svg_")
-    assert teach.svc.load_meta(sub_id)["status"] == "needs_info"
+    meta["status"] = old_status
+    teach.svc._save(meta)
+    assert teach.svc.load_meta(sub_id)["status"] == "pending"
+    assert teach.svc.admin_index()["items"][sub_id]["status"] == "pending"
+    assert teach.svc.public_index()["items"][str(meta["number"])]["status"] == "pending"
+    r = teach.client.get(f"/teach/api/manage/{sub_id}", headers=_h(token))
+    assert r.get_json()["result"]["status"] == "pending"
 
 
 def test_manage_rate_limit(make_teach, monkeypatch):

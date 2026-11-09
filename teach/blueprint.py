@@ -48,7 +48,7 @@ def llms_txt_view():
     return Response(text, mimetype="text/plain")
 
 
-def create_blueprint(cfg, storage, scorer=None, alert_sender=None, notifier=None, queue=None) -> Blueprint:
+def create_blueprint(cfg, storage, scorer=None, alert_sender=None, notifier=None, queue=None, environment=None) -> Blueprint:
     bp = Blueprint("teach", __name__, url_prefix="/teach", template_folder="templates",
                    static_folder="static", static_url_path="/static")
     windows = limits.SlidingWindows()
@@ -75,8 +75,10 @@ def create_blueprint(cfg, storage, scorer=None, alert_sender=None, notifier=None
         resp.headers["Referrer-Policy"] = "no-referrer"
         if request.endpoint in NOINDEX_ENDPOINTS:
             resp.headers["X-Robots-Tag"] = "noindex"
-        if request.path.startswith("/teach/api/") or request.endpoint == "teach.manage_page":
+        if request.path.startswith(("/teach/api/", "/teach/admin")) or request.endpoint == "teach.manage_page":
             resp.headers["Cache-Control"] = "no-store"
+        if request.is_secure:
+            resp.headers["Strict-Transport-Security"] = "max-age=31536000"
         return resp
 
     @bp.errorhandler(413)
@@ -230,6 +232,7 @@ def create_blueprint(cfg, storage, scorer=None, alert_sender=None, notifier=None
             windows.hit((f"validate:{client}",) + limits.VALIDATE_PER_IP, ("global:validate",) + limits.VALIDATE_GLOBAL)
         except RateLimited as exc:
             return _limited(exc)
+        quota.record_validation(client)
         image, reference = _files()
         try:
             sub = validate_submission(image, reference, request.form.get("meta"))
@@ -353,7 +356,7 @@ def create_blueprint(cfg, storage, scorer=None, alert_sender=None, notifier=None
                                     "This manage link is not valid, or the item was deleted.", "")])
         return meta
 
-    @bp.route("/api/manage/<sub_id>", methods=["GET", "PATCH", "DELETE"])
+    @bp.route("/api/manage/<sub_id>", methods=["GET", "DELETE"])
     def api_manage(sub_id):
         try:
             meta = _manage_meta(sub_id)
@@ -361,9 +364,6 @@ def create_blueprint(cfg, storage, scorer=None, alert_sender=None, notifier=None
                 return jsonify({"ok": True, "errors": [], "warnings": [], "result": svc.manage_view(meta)})
             if request.method == "DELETE":
                 return jsonify({"ok": True, "errors": [], "warnings": [], "result": svc.manage_delete(meta)})
-            note, reference = _patch_inputs()
-            return jsonify({"ok": True, "errors": [], "warnings": [],
-                            "result": svc.manage_answer(ip(), meta, note, reference)})
         except RateLimited as exc:
             return _limited(exc)
         except Busy as exc:
@@ -374,11 +374,7 @@ def create_blueprint(cfg, storage, scorer=None, alert_sender=None, notifier=None
             resp.status_code = code
             return resp
 
-    def _patch_inputs():
-        if request.is_json:
-            body = request.get_json(silent=True) or {}
-            return str(body.get("note") or ""), None
-        ref = request.files.get("reference")
-        return request.form.get("note") or "", (ref.read() if ref else None)
+    from .admin import register_admin
 
+    register_admin(bp, svc, windows, environment or {})
     return bp

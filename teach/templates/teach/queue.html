@@ -16,7 +16,7 @@
     <tr>
       <td><a href="{{ url_for('teach.item_page', number=item.number) }}">#{{ item.number }}</a></td>
       <td>{% if item.title_hidden %}<em>(title hidden)</em>{% else %}{{ item.title }}{% endif %}</td>
-      <td>{{ item.status|replace('_', ' ') }}</td>
+      <td>{{ 'Awaiting review' if item.status == 'pending' else item.status|capitalize }}</td>
       <td>{{ item.me_too_count }}</td>
       <td>{{ (item.created_at or '')[:10] }}</td>
     </tr>

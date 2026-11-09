@@ -45,7 +45,7 @@ def register_teach(app, env: Mapping[str, str] | None = None, **overrides) -> bo
 
         from .blueprint import create_blueprint, llms_txt_view
 
-        bp = create_blueprint(cfg, storage, **overrides)
+        bp = create_blueprint(cfg, storage, environment={"RAILWAY_GIT_COMMIT_SHA": env.get("RAILWAY_GIT_COMMIT_SHA")}, **overrides)
         app.register_blueprint(bp)
         from .crop import install_log_redaction
 

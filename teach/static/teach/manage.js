@@ -7,7 +7,6 @@
   var body = document.getElementById("manage-body");
   var facts = document.getElementById("manage-facts");
   var overlay = document.getElementById("manage-overlay");
-  var answerForm = document.getElementById("answer-form");
   var deleteForm = document.getElementById("delete-form");
   var match = /(?:^#|&)k=([^&]+)/.exec(window.location.hash);
   var token = match ? decodeURIComponent(match[1]) : "";
@@ -39,7 +38,7 @@
   function render(r) {
     facts.textContent = "";
     add("Number", "#" + r.number);
-    add("Status", (r.status || "").replace(/_/g, " "));
+    add("Status", r.status === "pending" ? "Awaiting review" : r.status);
     add("Title", r.title);
     add("Public title", r.title_hidden ? "(hidden by the maintainer)" : r.title_public);
     add("What's wrong", r.description);
@@ -51,7 +50,6 @@
       overlay.src = r.overlay_png;
       overlay.hidden = false;
     }
-    answerForm.hidden = !r.can_answer;
     body.hidden = false;
   }
 
@@ -66,16 +64,6 @@
       render(data.result);
     }).catch(function () { status.textContent = "Network error; please reload."; });
   }
-
-  answerForm.addEventListener("submit", function (ev) {
-    ev.preventDefault();
-    var fd = new FormData(answerForm);
-    status.textContent = "Sending…";
-    call("PATCH", fd).then(function (data) {
-      status.textContent = data.ok ? "Answer sent." : errorText(data);
-      if (data.ok) load();
-    }).catch(function () { status.textContent = "Network error; please try again."; });
-  });
 
   deleteForm.addEventListener("submit", function (ev) {
     ev.preventDefault();

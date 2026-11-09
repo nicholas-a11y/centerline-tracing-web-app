@@ -6,7 +6,7 @@
 <p>This item was deleted.</p>
 {% else %}
 <dl>
-  <dt>Status</dt><dd>{{ item.status|replace('_', ' ') }}</dd>
+  <dt>Status</dt><dd>{{ 'Awaiting review' if item.status == 'pending' else item.status|capitalize }}</dd>
   <dt>Submitted</dt><dd>{{ item.created_at }}</dd>
   <dt>Me too</dt><dd>{{ item.me_too_count }}</dd>
 </dl>

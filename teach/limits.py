@@ -87,6 +87,20 @@ class SlidingWindows:
             for key, _limit, _window in checks:
                 self._hits[key].append(now)
 
+    def snapshot(self) -> dict:
+        with self._lock:
+            now = self._clock()
+            counts = {key: len(self._prune(key, HOUR, now)) for key in list(self._hits)}
+            return {
+                "validate_hour": counts.get("global:validate", 0),
+                "validate_hour_limit": VALIDATE_GLOBAL[0],
+                "submit_hour": sum(n for k, n in counts.items() if k.startswith("submit:")),
+                "submit_visitor_hour_limit": SUBMIT_PER_IP_HOUR[0],
+                "validate_visitor_hour_limit": VALIDATE_PER_IP[0],
+                "busiest_validate_visitor_hour": max((n for k, n in counts.items() if k.startswith("validate:")), default=0),
+                "busiest_submit_visitor_hour": max((n for k, n in counts.items() if k.startswith("submit:")), default=0),
+            }
+
 
 QUOTA_SALT_KEY = "teach/quota/salt.json"
 
@@ -127,6 +141,27 @@ class DailyQuota:
         data.setdefault("bytes", 0)
         data.setdefault("per_ip", {})
         return data
+
+    def record_validation(self, ip: str) -> None:
+        with self._lock:
+            data = self._load()
+            data["validations"] = data.get("validations", 0) + 1
+            mine = data["per_ip"].setdefault(self.ip_key(ip), {"submissions": 0, "bytes": 0})
+            mine["validations"] = mine.get("validations", 0) + 1
+            self.storage.put_json(self._key(), data)
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            data = self._load()
+            visitors = list(data["per_ip"].values())
+            return {"date": self._utcnow().strftime("%Y-%m-%d"),
+                    "submissions": data["submissions"], "submission_limit": SUBMIT_GLOBAL_DAY,
+                    "validations": data.get("validations", 0), "validation_day_limit": None,
+                    "bytes": data["bytes"], "byte_limit": BYTES_GLOBAL_DAY,
+                    "visitor_submission_limit": SUBMIT_PER_IP_DAY,
+                    "visitor_byte_limit": BYTES_PER_IP_DAY,
+                    "busiest_visitor_submissions": max((e.get("submissions", 0) for e in visitors), default=0),
+                    "busiest_visitor_validations": max((e.get("validations", 0) for e in visitors), default=0)}
 
     def check(self, ip: str, add_bytes: int = 0) -> None:
         with self._lock:

@@ -45,7 +45,7 @@ def test_unreviewed_item_is_title_only(teach):
                              description="SECRET-DESCRIPTION SECRET-NOTES", public_thumbnail=True)
     n = body["number"]
     item = teach.client.get(f"/teach/api/submissions/{n}").get_json()
-    assert item["title"] == "Kink at [link removed] crossing" and item["status"] == "pending_review"
+    assert item["title"] == "Kink at [link removed] crossing" and item["status"] == "pending"
     assert item["details"] == "awaiting review" and "thumbnail_url" not in item
     for url in ("/teach/api/queue", f"/teach/api/submissions/{n}", "/teach/queue", f"/teach/q/{n}"):
         text = teach.client.get(url).get_data(as_text=True)
@@ -149,7 +149,7 @@ def test_similarity_signals():
 
 
 def test_public_entry_is_the_only_builder():
-    meta = {"number": 3, "status": "pending_review", "title_public": "T", "reviewed": False,
+    meta = {"number": 3, "status": "pending", "title_public": "T", "reviewed": False,
             "description": "W", "visibility": {"thumbnail_opt_in": True, "thumbnail_public": True}}
     entry = TeachService.public_entry(meta)
     assert "description" not in entry and "thumbnail_url" not in entry
