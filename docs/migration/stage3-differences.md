@@ -361,3 +361,8 @@ rejection reason. Expected rejections today:
 * a `DOCTYPE` or `ENTITY` declaration.
 
 Affine transforms and physical units must be supported before the public Teach feature.
+
+> **Update (Stage 2b):** transforms, physical units and `<image>`-frame registration
+> are now supported, and the owner's LightBurn export
+> (`tests/pipeline/samples/lightburn-cross-t2-w8-a35.svg`) is accepted with no
+> rejections. See `docs/migration/lesson-format.md` (SVG reader, LightBurn export rules).

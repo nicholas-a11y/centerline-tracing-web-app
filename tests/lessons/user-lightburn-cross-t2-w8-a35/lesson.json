@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "id": "user-lightburn-cross-t2-w8-a35",
+  "title": "Crossing: 2px over 8px at 35 deg (LightBurn reference)",
+  "category": "crossing",
+  "description": "Same bitmap as cross-t2-w8-a35; the reference centerlines were traced by hand in LightBurn over the bitmap and exported as SVG (mm units, Y-flipped image placement).",
+  "notes": "Registration uses the <image> placement frame. The embedded PNG is stored vertically flipped and is never decoded by the reader. Hand check: thick line row 127.51 (true 127.5), thin line 35.0 deg through the true stroke centre.",
+  "expected_behaviour": "Both centerlines continue through the crossing in their own direction as single paths (no bridge segment, no kink toward the other line). Lateral error inside the crossing region stays within tolerance.",
+  "source": {
+    "kind": "user-supplied",
+    "tool": "LightBurn",
+    "based_on": "cross-t2-w8-a35",
+    "sample": "tests/pipeline/samples/lightburn-cross-t2-w8-a35.svg"
+  },
+  "licence": "Supplied by the repository owner; same licence as this repository.",
+  "consent": {
+    "public": true,
+    "by": "repository owner"
+  },
+  "image": {
+    "file": "image.png",
+    "width": 256,
+    "height": 256
+  },
+  "reference": {
+    "file": "reference.svg"
+  },
+  "params": {
+    "dark_threshold": 0.2,
+    "min_path_length": 2,
+    "enable_pruning": false,
+    "normalization_mode": "auto",
+    "normalization_sensitivity": "medium"
+  },
+  "scoring": {
+    "region": {
+      "x0": 103.28,
+      "y0": 103.28,
+      "x1": 152.72,
+      "y1": 152.72
+    },
+    "tolerance_px": 1.0,
+    "min_single_path_coverage": 0.95,
+    "require_single_path": true,
+    "trim_ends_px": 0.0
+  },
+  "status": "baseline"
+}

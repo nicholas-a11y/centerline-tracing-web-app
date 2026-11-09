@@ -23,7 +23,7 @@ tests/lessons/<id>/
 | `title`, `description`, `notes` | free text |
 | `category` | `crossing`, `placement` or `user` |
 | `expected_behaviour` | plain-language statement of what correct output looks like |
-| `source` | `{kind: generated/fixture/user, generator, fixture_id}` |
+| `source` | `{kind: generated/fixture/user/user-supplied, generator, fixture_id}`; hand-traced references add `tool` (e.g. `LightBurn`) |
 | `licence`, `consent` | licence text and `{public, by}` |
 | `image` | `{file, width, height}`; width/height are checked against the PNG |
 | `reference` | `{file}` |
@@ -46,9 +46,11 @@ vary with both (for example, images under 600 px are supersampled).
   `(v + 0.5)/s − 0.5`.
 * SVG uses pixel-edge coordinates: `x = col + 0.5`, `y = row + 0.5`, the same
   convention as the app's SVG export. The reader inverts this.
-* The SVG must match the bitmap's pixel size: either `width`/`height` (or
-  `viewBox`) equal to the image, or a border rectangle
-  (`id`, `class` or `data-role` = `border`) spanning the image for alignment.
+* The SVG must be registered onto the bitmap in one of three ways (tried in this
+  order): an embedded `<image>` of the bitmap (its placed rectangle is the
+  bitmap frame), a border rectangle (`id`, `class` or `data-role` = `border`)
+  spanning the image, or `width`/`height` (or `viewBox`) equal to the image's
+  pixel size. See [SVG reader](#svg-reader-testspipelinesvg_referencepy).
 
 ## Scoring
 
@@ -73,18 +75,55 @@ junctions (clustered at 1.5 px, image-border endpoints ignored), and short paths
 stdlib + numpy only. It never calls `extract_manual_centerlines_from_svg`.
 
 * Refuses any `<!DOCTYPE` / `<!ENTITY` before parsing.
-* Caps: 2 MB file, 200 shape elements, 200 000 sampled points.
+* Caps: 2 MB file (the whole file, so an embedded base64 image counts), 200 shape
+  elements, 200 000 sampled points, nesting depth 64.
 * Supports path commands M/L/H/V/C/S/Q/T/A/Z, relative and absolute, with
-  compact numbers and arc flags. Curves are sampled at a 0.5 px step. Also
-  supports `line`, `polyline`, `polygon`, `rect`, `circle` and `ellipse`.
-* Applies `viewBox` scaling.
-* **Rejects** `transform` attributes, `<use>`, nested `<svg>`, and units other
-  than px, each with a clear error.
+  compact numbers and arc flags. Curves are sampled at a 0.5 **bitmap** px step
+  (after transforms). Also supports `line`, `polyline`, `polygon`, `rect`,
+  `circle` and `ellipse`.
+* **Transforms** (Stage 2b): `matrix`, `translate`, `scale`, `rotate` (with
+  optional centre), `skewX`, `skewY`, as lists and on nested groups, composed in
+  document order. Malformed or degenerate transforms are rejected
+  (`svg_transform_invalid`).
+* **Units** (Stage 2b): unitless/`px`, `mm`, `cm`, `in`, `pt`, `pc` at 96 px/in.
+  Percentages are only accepted on the root when a `viewBox` is present.
+* **Registration**, in order:
+  1. `image-frame`: exactly one rendered `<image>`. Its `x/y/width/height`
+     rectangle, pushed through all transforms, is mapped onto the bitmap's full
+     pixel size with the rendered top-left as pixel edge (0, 0). Flips are fine;
+     rotation or skew is rejected (`svg_image_rotated`), aspect ratio must match
+     the bitmap within 1 % (`svg_image_aspect`), and more than one image is
+     rejected (`svg_multiple_images`). Root `width`/`height` and `viewBox` are
+     not used. **The image data is never decoded**; it only marks the frame.
+  2. `border-rect`: a `rect` marked `border` (through its transforms).
+  3. `size-match`: root `width`/`height` in px (after unit conversion) or the
+     `viewBox` size equal to the bitmap.
+  4. Otherwise `svg_no_registration` with a hint to keep the image in the export
+     or start from the [trace template](#trace-template).
+* Ignores styles, `<text>` and non-rendered subtrees (`defs`, `clipPath`,
+  `mask`, `pattern`, `marker`, `symbol`, `metadata`, ...).
+* **Rejects** `<!DOCTYPE`/`<!ENTITY`, `<use>` and nested `<svg>`, each with a
+  clear error and a stable `code` (`SvgReferenceError.code`, matching
+  `docs/teach/design.md` §14.4).
 
-> **Required before the public Teach feature:** support affine `transform`s
-> (matrix/translate/scale/rotate/skew, nested groups) and `mm`/`cm`/`in`/`pt`
-> units. CAD and Inkscape exports commonly include both, so today they would be
-> rejected.
+### LightBurn export rules
+
+Tested with `tests/pipeline/samples/lightburn-cross-t2-w8-a35.svg` (lesson
+`user-lightburn-cross-t2-w8-a35`):
+
+* **Keep the image in the export.** Do not hide or delete the traced bitmap
+  before exporting; its placement is how the reader aligns your lines. LightBurn
+  writes it with `matrix(1,0,0,-1,…)` and stores the PNG upside down so it renders
+  upright; only the rendered rectangle matters.
+* **Ungrouped paths**: draw one open path per stroke along the stroke centre.
+  (Groups and transforms are read correctly, but ungrouped is what has been
+  tested.)
+* Document units **mm or px are both fine**; the image frame removes any
+  dependence on units, dpi or the export's `viewBox`.
+* Do not rotate, stretch or crop the bitmap in LightBurn after placing it.
+
+Inspect any export with
+`.venv\Scripts\python.exe -m tests.pipeline.inspect_svg <file.svg> --bitmap <image.png>`.
 
 ## Commands
 

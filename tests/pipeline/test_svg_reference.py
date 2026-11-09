@@ -48,26 +48,200 @@ def test_rejects_too_many_points():
         read_reference_svg(_svg('<path d="M0 0 L99 99"/>'), (100, 100), max_points=50)
 
 
-def test_rejects_transform():
-    with pytest.raises(SvgReferenceError, match="transform"):
-        _one('<g transform="translate(1,1)"><path d="M0 0 L5 5"/></g>')
-
-
 def test_rejects_use():
-    with pytest.raises(SvgReferenceError, match="use"):
+    with pytest.raises(SvgReferenceError, match="use") as exc:
         _one('<path id="a" d="M0 0 L5 5"/><use href="#a"/>')
-
-
-@pytest.mark.parametrize("unit", ["mm", "in", "cm", "pt", "%"])
-def test_rejects_physical_units(unit):
-    with pytest.raises(SvgReferenceError, match="unit"):
-        read_reference_svg(f'<svg xmlns="http://www.w3.org/2000/svg" width="100{unit}" height="100{unit}">'
-                           '<path d="M0 0 L5 5"/></svg>'.encode(), (100, 100))
+    assert exc.value.code == "svg_use_unsupported"
 
 
 def test_rejects_size_mismatch_with_fix_hint():
-    with pytest.raises(SvgReferenceError, match="does not match the bitmap size"):
+    with pytest.raises(SvgReferenceError, match="does not match the bitmap size") as exc:
         read_reference_svg(_svg('<path d="M0 0 L5 5"/>', 50, 50), (100, 100))
+    assert exc.value.code == "svg_no_registration"
+    assert "trace template" in str(exc.value)
+
+
+# --- transforms -------------------------------------------------------------
+
+def _ends(body, size=(100, 100)):
+    return _xy(_one(body, size).paths[0])[[0, -1]]
+
+
+@pytest.mark.parametrize("body, expected", [
+    ('<g transform="translate(10,20)"><path d="M0 0 L10 0"/></g>', [[10, 20], [20, 20]]),
+    ('<g transform="translate(10)"><path d="M0 0 L10 0"/></g>', [[10, 0], [20, 0]]),
+    ('<path transform="scale(2)" d="M1 1 L5 1"/>', [[2, 2], [10, 2]]),
+    ('<path transform="scale(2,3)" d="M1 1 L5 1"/>', [[2, 3], [10, 3]]),
+    ('<path transform="rotate(90)" d="M10 0 L20 0"/>', [[0, 10], [0, 20]]),
+    ('<path transform="rotate(90 50 50)" d="M60 50 L70 50"/>', [[50, 60], [50, 70]]),
+    ('<path transform="skewX(45)" d="M0 10 L0 20"/>', [[10, 10], [20, 20]]),
+    ('<path transform="skewY(45)" d="M10 0 L20 0"/>', [[10, 10], [20, 20]]),
+    ('<path transform="matrix(1,0,0,-1,0,100)" d="M10 20 L30 20"/>', [[10, 80], [30, 80]]),
+    # a list applies right-to-left to the points: scale first, then translate
+    ('<path transform="translate(10,0) scale(2)" d="M1 1 L2 1"/>', [[12, 2], [14, 2]]),
+    ('<path transform="scale(2) translate(10,0)" d="M1 1 L2 1"/>', [[22, 2], [24, 2]]),
+    # nested groups compose outer-to-inner, same as the list form
+    ('<g transform="translate(10,0)"><g transform="scale(2)"><path d="M1 1 L2 1"/></g></g>', [[12, 2], [14, 2]]),
+    ('<g transform="translate(5 5)"><line transform="translate(1,1)" x1="0" y1="0" x2="4" y2="0"/></g>',
+     [[6, 6], [10, 6]]),
+])
+def test_transforms(body, expected):
+    np.testing.assert_allclose(_ends(body), expected, atol=1e-9)
+
+
+@pytest.mark.parametrize("t", ["translate(1,2,3)", "rotate(1,2)", "perspective(1)", "scale(0)",
+                               "translate(1) junk", "matrix(1,0,0,1,0)", "skewX(1,2)", "rotate(a)"])
+def test_invalid_transform_rejected(t):
+    with pytest.raises(SvgReferenceError, match="transform|argument") as exc:
+        _one(f'<path transform="{t}" d="M0 0 L5 5"/>')
+    assert exc.value.code == "svg_transform_invalid"
+
+
+def test_sampling_step_is_in_bitmap_pixels_under_scale():
+    xy = _xy(_one('<g transform="scale(10)"><path d="M0 1 Q4.5 9 9 1"/></g>').paths[0])
+    assert np.max(np.hypot(*np.diff(xy, axis=0).T)) <= 0.51
+
+
+def test_non_rendered_and_style_ignored():
+    body = ('<style>path{stroke:red}</style><defs><path d="M0 0 L9 9"/></defs>'
+            '<clipPath><rect x="0" y="0" width="5" height="5"/></clipPath><text x="1" y="1">hi</text>'
+            '<path style="stroke:#000" class="a" d="M10 10 L20 10"/>')
+    ref = _one(body)
+    assert len(ref.paths) == 1
+    np.testing.assert_allclose(_xy(ref.paths[0])[[0, -1]], [[10, 10], [20, 10]])
+
+
+# --- units ------------------------------------------------------------------
+
+@pytest.mark.parametrize("w", ["26.458333mm", "2.6458333cm", "1.0416667in", "75pt", "6.25pc", "100px", "100"])
+def test_physical_units_size_match(w):
+    """100 px at 96 px/in, in each unit."""
+    raw = f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{w}"><path d="M10 20 L30 20"/></svg>'
+    ref = read_reference_svg(raw.encode(), (100, 100))
+    assert ref.alignment == "size-match"
+    np.testing.assert_allclose(_xy(ref.paths[0])[[0, -1]], [[10, 20], [30, 20]], atol=1e-3)
+
+
+def test_mm_canvas_with_pixel_viewbox():
+    raw = (b'<svg xmlns="http://www.w3.org/2000/svg" width="80mm" height="80mm" viewBox="0 0 100 100">'
+           b'<path d="M10 20 L30 20"/></svg>')
+    ref = read_reference_svg(raw, (100, 100))
+    np.testing.assert_allclose(_xy(ref.paths[0])[[0, -1]], [[10, 20], [30, 20]])
+
+
+def test_mm_without_registration_rejected():
+    raw = b'<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm"><path d="M0 0 L5 5"/></svg>'
+    with pytest.raises(SvgReferenceError) as exc:
+        read_reference_svg(raw, (100, 100))
+    assert exc.value.code == "svg_no_registration"
+
+
+def test_percent_size_needs_viewbox():
+    with pytest.raises(SvgReferenceError, match="percentage") as exc:
+        read_reference_svg(b'<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">'
+                           b'<path d="M0 0 L5 5"/></svg>', (100, 100))
+    assert exc.value.code == "svg_units_unsupported"
+    ref = read_reference_svg(b'<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" '
+                             b'viewBox="0 0 100 100"><path d="M10 20 L30 20"/></svg>', (100, 100))
+    np.testing.assert_allclose(_xy(ref.paths[0])[[0, -1]], [[10, 20], [30, 20]])
+
+
+def test_unknown_unit_rejected():
+    with pytest.raises(SvgReferenceError, match="unit") as exc:
+        read_reference_svg(b'<svg xmlns="http://www.w3.org/2000/svg" width="100em" height="100em">'
+                           b'<path d="M0 0 L5 5"/></svg>', (100, 100))
+    assert exc.value.code == "svg_units_unsupported"
+
+
+# --- <image> registration ---------------------------------------------------
+
+_XLINK = 'xmlns:xlink="http://www.w3.org/1999/xlink"'
+_PNG_STUB = "data:image/png;base64,!!not-decoded!!"
+
+
+def _lightburn_like(paths: str, image_attrs: str | None = None, extra_images: str = "") -> bytes:
+    """mm canvas, offset viewBox, Y-flipped image and paths, like a LightBurn export (bitmap 100x100)."""
+    image_attrs = image_attrs or ('transform="matrix(1,0,0,-1,1025,-475)" x="-25" y="-25" '
+                                  'width="50" height="50"')
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" {_XLINK} width="50mm" height="50mm" '
+            f'viewBox="1000 -500 50 50"><image {image_attrs} xlink:href="{_PNG_STUB}"/>{extra_images}'
+            f'{paths}</svg>').encode()
+
+
+def test_image_frame_registration_with_flip_and_mm():
+    raw = _lightburn_like('<path transform="matrix(1,0,0,-1,0,0)" d="M1000 475 L1050 475"/>'
+                          '<path transform="matrix(1,0,0,-1,0,0)" d="M1010 500 L1010 450"/>')
+    ref = read_reference_svg(raw, (100, 100))
+    assert ref.alignment == "image-frame"
+    assert ref.frame["flip_y"] is True and ref.frame["flip_x"] is False
+    assert ref.frame["href"] == "image/png"
+    assert ref.svg_size == pytest.approx((50.0, 50.0))
+    np.testing.assert_allclose(_xy(ref.paths[0])[[0, -1]], [[0, 50], [100, 50]], atol=1e-9)
+    np.testing.assert_allclose(_xy(ref.paths[1])[[0, -1]], [[20, 0], [20, 100]], atol=1e-9)
+    np.testing.assert_allclose(ref.paths[0][0], [49.5, -0.5])  # pixel-centre (row, col)
+
+
+def test_image_frame_overrides_wrong_root_size():
+    raw = (f'<svg xmlns="http://www.w3.org/2000/svg" {_XLINK} width="999" height="7">'
+           f'<image x="10" y="10" width="20" height="10" xlink:href="{_PNG_STUB}"/>'
+           '<path d="M10 15 L30 15"/></svg>').encode()
+    ref = read_reference_svg(raw, (200, 100))
+    np.testing.assert_allclose(_xy(ref.paths[0])[[0, -1]], [[0, 50], [200, 50]])
+
+
+def test_image_href_plain_attribute_and_scale_frame():
+    raw = (b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><g transform="scale(0.1)">'
+           b'<image width="100" height="100" href="x.png"/></g><path d="M0 5 L10 5"/></svg>')
+    ref = read_reference_svg(raw, (100, 100))
+    assert ref.frame["href"] == "external"
+    np.testing.assert_allclose(_xy(ref.paths[0])[[0, -1]], [[0, 50], [100, 50]])
+
+
+def test_image_in_defs_is_not_a_frame():
+    raw = (f'<svg xmlns="http://www.w3.org/2000/svg" {_XLINK} width="100" height="100"><defs>'
+           f'<image width="5" height="5" xlink:href="{_PNG_STUB}"/></defs><path d="M10 20 L30 20"/></svg>').encode()
+    assert read_reference_svg(raw, (100, 100)).alignment == "size-match"
+
+
+def test_rotated_image_rejected():
+    raw = _lightburn_like('<path d="M1000 -475 L1050 -475"/>',
+                          'transform="rotate(30 1025 -475)" x="1000" y="-500" width="50" height="50"')
+    with pytest.raises(SvgReferenceError, match="rotated") as exc:
+        read_reference_svg(raw, (100, 100))
+    assert exc.value.code == "svg_image_rotated"
+
+
+def test_image_aspect_mismatch_rejected():
+    raw = _lightburn_like('<path d="M1000 -475 L1050 -475"/>', 'x="1000" y="-500" width="50" height="40"')
+    with pytest.raises(SvgReferenceError, match="aspect") as exc:
+        read_reference_svg(raw, (100, 100))
+    assert exc.value.code == "svg_image_aspect"
+
+
+def test_multiple_images_rejected():
+    raw = _lightburn_like('<path d="M1000 -475 L1050 -475"/>',
+                          extra_images=f'<image x="0" y="0" width="5" height="5" xlink:href="{_PNG_STUB}"/>')
+    with pytest.raises(SvgReferenceError, match="exactly one") as exc:
+        read_reference_svg(raw, (100, 100))
+    assert exc.value.code == "svg_multiple_images"
+
+
+def test_embedded_base64_counts_against_size_cap():
+    big = "data:image/png;base64," + "A" * 4000
+    raw = (f'<svg xmlns="http://www.w3.org/2000/svg" {_XLINK} width="100" height="100">'
+           f'<image width="100" height="100" xlink:href="{big}"/><path d="M0 0 L5 5"/></svg>').encode()
+    with pytest.raises(SvgReferenceError, match="embedded images count") as exc:
+        read_reference_svg(raw, (100, 100), max_bytes=2000)
+    assert exc.value.code == "svg_too_large"
+    assert read_reference_svg(raw, (100, 100), max_bytes=5000).alignment == "image-frame"
+
+
+def test_border_rect_through_transform():
+    body = ('<g transform="translate(50,50) scale(2)"><rect id="border" width="100" height="50"/>'
+            '<path d="M0 25 L100 25"/></g>')
+    ref = read_reference_svg(_svg(body, 400, 300), (100, 50))
+    assert ref.alignment == "border-rect"
+    np.testing.assert_allclose(_xy(ref.paths[0])[[0, -1]], [[0, 25], [100, 25]])
 
 
 def test_px_unit_accepted():
