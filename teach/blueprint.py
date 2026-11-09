@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from flask import Blueprint, Response, abort, jsonify, render_template, request
+from flask import Blueprint, Response, abort, current_app, jsonify, render_template, request
 
-from . import limits, schema
+from . import crop, limits, schema
 from .limits import QuotaExceeded, RateLimited
 from .notify import Notifier
 from .scoring_worker import Busy, ScoringQueue
@@ -164,6 +164,53 @@ def create_blueprint(cfg, storage, scorer=None, alert_sender=None, notifier=None
         return render_template("teach/manage.html", sub_id=sub_id, local_mode=cfg.local_mode)
 
     # ------------------------------------------------------------------ public API
+
+    @bp.app_context_processor
+    def _main_ui_flag():
+        # Lets templates/index.html render its Teach additions; registered only with Teach on.
+        return {"teach_main_ui": True}
+
+    @bp.get("/api/status")
+    def api_status():
+        return jsonify({"teach": "enabled"})
+
+    def _crop_request(sid):
+        try:
+            windows.hit((f"crop:{ip()}",) + limits.CROP_PER_IP)
+        except RateLimited as exc:
+            return None, None, _limited(exc)
+        try:
+            region = crop.parse_region(request.args)
+        except ValueError as exc:
+            return None, None, _problem(400, "crop_region", "invalid_crop_region", str(exc))
+        session = crop.find_session(current_app, sid)
+        if session is None:
+            return None, None, _problem(404, "session_id", "not_found", "That session does not exist or has expired.",
+                                        "Upload the image again in the app.")
+        return session, region, None
+
+    @bp.get("/api/crop/<sid>")
+    def api_crop(sid):
+        session, region, error = _crop_request(sid)
+        if error is not None:
+            return error
+        info = crop.assess(session, region)
+        if info is None:
+            return _problem(404, "session_id", "not_found", "That session has no image.")
+        return jsonify(info)
+
+    @bp.get("/api/crop/<sid>/image.png")
+    def api_crop_image(sid):
+        session, region, error = _crop_request(sid)
+        if error is not None:
+            return error
+        out = crop.cropped_png(session, region)
+        if out is None:
+            return _problem(404, "session_id", "not_found", "That session has no image.")
+        png, (y1, y2, x1, x2, _applied) = out
+        resp = Response(png, mimetype="image/png")
+        resp.headers["Content-Disposition"] = f'attachment; filename="cropped-{x2 - x1}x{y2 - y1}.png"'
+        return resp
 
     @bp.get("/api/queue")
     def api_queue():

@@ -4,9 +4,13 @@ and a fake scoring queue so most tests never start the subprocess worker."""
 from __future__ import annotations
 
 import base64
+import contextlib
+import importlib.util
 import io
 import json
+import os
 import struct
+import sys
 import zlib
 from pathlib import Path
 from types import SimpleNamespace
@@ -120,3 +124,37 @@ def submit(t, **kw):
     sub_id = body["manage_url"].split("/teach/manage/")[1].split("#")[0]
     token = body["manage_url"].split("#k=")[1]
     return body, sub_id, token
+
+
+# ------------------------------------------------------------------ the real main app
+
+
+def _load_fresh_app(env_extra: dict | None, tmp_path):
+    saved = {k: os.environ.get(k) for k in ("TEACH_ENABLED",)}
+    os.environ["TEACH_ENABLED"] = "0"
+    try:
+        name = f"_cwa_teach_test_{len(sys.modules)}"
+        spec = importlib.util.spec_from_file_location(name, REPO / "centerline_web_app.py")
+        mod = importlib.util.module_from_spec(spec)
+        with contextlib.redirect_stdout(io.StringIO()):
+            spec.loader.exec_module(mod)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    mod.app.config["TESTING"] = True
+    if env_extra is not None:
+        assert register_teach(mod.app, env=base_env(tmp_path, **env_extra), queue=FakeQueue())
+    return mod
+
+
+@pytest.fixture(scope="module")
+def main_on(tmp_path_factory):
+    return _load_fresh_app({}, tmp_path_factory.mktemp("teach_main"))
+
+
+@pytest.fixture(scope="module")
+def main_off(tmp_path_factory):
+    return _load_fresh_app(None, tmp_path_factory.mktemp("teach_main_off"))

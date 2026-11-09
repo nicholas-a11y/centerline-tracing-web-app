@@ -18,6 +18,7 @@ VALIDATE_GLOBAL = (600, HOUR)
 SIMILAR_PER_IP = (60, HOUR)
 SUBMIT_PER_IP_HOUR = (5, HOUR)        # submissions + me-too
 MANAGE_PER_IP = (30, HOUR)
+CROP_PER_IP = (120, HOUR)             # /api/crop (main app's Teach checkbox; read-only)
 
 SUBMIT_PER_IP_DAY = 20
 SUBMIT_GLOBAL_DAY = 200

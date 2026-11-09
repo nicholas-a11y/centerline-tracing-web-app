@@ -60,7 +60,19 @@
     return { settings: out, imageSha256: sha };
   }
 
-  var api = { parseSettingsFragment: parseSettingsFragment, MAX_FRAGMENT_CHARS: MAX_FRAGMENT_CHARS };
+  // Inverse of parseSettingsFragment, used by the main app's "Send this to Teach" link.
+  function buildSettingsFragment(settings, imageSha256) {
+    var doc = { v: 1, settings: settings };
+    if (imageSha256) doc.image_sha256 = imageSha256;
+    var bytes = new TextEncoder().encode(JSON.stringify(doc));
+    var bin = "";
+    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    var b64 = typeof btoa === "function" ? btoa(bin) : Buffer.from(bin, "binary").toString("base64");
+    return "#s=" + b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+
+  var api = { parseSettingsFragment: parseSettingsFragment, buildSettingsFragment: buildSettingsFragment,
+              MAX_FRAGMENT_CHARS: MAX_FRAGMENT_CHARS };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TeachFragment = api;
 })(typeof window !== "undefined" ? window : this);

@@ -153,3 +153,22 @@ def test_page_text_for_preparing_a_case(teach):
     for text in ("use the crop tools to crop to the problem area", "leaving a little context",
                  "trace over that original (cropped) image", "Keep the image in the exported SVG"):
         assert text in html, text
+
+
+def test_build_fragment_round_trips_and_matches_python_encoding():
+    """The main app's encoder (buildSettingsFragment) produces what the Teach page parses."""
+    if not NODE:
+        pytest.skip("node is not installed")
+    settings = dict(schema.default_settings(), dark_threshold=0.35, normalization_mode="off", source_smoothing=40)
+    script = ("const f=require(process.argv[1]);let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{"
+              "const a=JSON.parse(d);const h=f.buildSettingsFragment(a.s,a.sha);"
+              "process.stdout.write(JSON.stringify({h:h,p:f.parseSettingsFragment(h,a.specs)}));});")
+    proc = subprocess.run([NODE, "-e", script, str(FRAGMENT_JS)],
+                          input=json.dumps({"s": settings, "sha": SHA, "specs": specs()}),
+                          capture_output=True, text=True, timeout=60, check=True)
+    out = json.loads(proc.stdout)
+    assert out["p"] == {"settings": settings, "imageSha256": SHA}
+    raw = out["h"][3:]
+    doc = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
+    assert doc == {"v": 1, "settings": settings, "image_sha256": SHA}
+    assert len(out["h"]) < 2048

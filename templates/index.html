@@ -1597,7 +1597,22 @@
                     </div>
                 </div>
 
-                <div class="action-buttons">
+                {% if teach_main_ui %}<div class="parameter-group" id="teachPanel" hidden>
+                    <div class="parameter">
+                        <label>
+                            <input type="checkbox" id="teachToggle">
+                            Teach
+                        </label>
+                        <small style="color: #666; font-size: 0.8em;">Send a case that traces badly, to help improve the tracer.</small>
+                    </div>
+                    <div class="parameter" id="teachTools" hidden>
+                        <button type="button" class="btn btn-secondary" id="teachDownloadCropBtn">Download the cropped image</button>
+                        <p id="teachSendWrap" hidden><a id="teachSendLink" href="/teach" target="_blank" rel="noopener noreferrer">Send this to Teach</a></p>
+                        <p id="teachNote" role="status" style="color: #666; font-size: 0.85em;" hidden></p>
+                    </div>
+                </div>
+
+                {% endif %}<div class="action-buttons">
                     <button class="btn btn-secondary" id="resetBtn" onclick="resetApplicationState()">↺ Reset</button>
                     <button class="btn btn-warning" id="stopOptBtn" onclick="stopOptimization()" style="display: none;">⏹️ Stop Optimization</button>
                 </div>
@@ -7190,5 +7205,7 @@
             revokeSvgExportUrl();
         });
     </script>
-</body>
+{% if teach_main_ui %}    <script src="/teach/static/teach/fragment.js"></script>
+    <script src="/teach/static/teach/main_teach.js"></script>
+{% endif %}</body>
 </html>
