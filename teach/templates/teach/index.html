@@ -31,8 +31,14 @@ Agents: read the <a href="{{ url_for('teach.spec') }}">spec</a> or the <a href="
   <form id="case-form" novalidate>
     <fieldset>
       <legend>Files</legend>
-      <p><label for="image">Bitmap (PNG or JPEG, up to {{ (limits.MAX_IMAGE_BYTES // 1048576) }} MB, 32–2048 px per side)</label>
+      <p id="image-pick"><label for="image">Bitmap (PNG or JPEG, up to {{ (limits.MAX_IMAGE_BYTES // 1048576) }} MB, 32–2048 px per side)</label>
         <input id="image" name="image" type="file" accept="image/png,image/jpeg" required></p>
+      <div id="preattach" hidden>
+        <p>Bitmap, attached from the app: <strong id="preattach-name"></strong>, <span id="preattach-size"></span></p>
+        <p><img id="preattach-preview" alt="Preview of the cropped image attached from the app"></p>
+        <p><button type="button" id="preattach-replace">Replace</button></p>
+      </div>
+      <p id="preattach-status" role="status" hidden></p>
       <p id="mixup-warning" class="warn" role="status" hidden>This doesn't look like the cropped image from the app.</p>
       <p><label for="reference">Reference SVG (up to {{ (limits.MAX_SVG_BYTES // 1024) }} KB including any embedded image)</label>
         <input id="reference" name="reference" type="file" accept=".svg,image/svg+xml" required></p>
@@ -91,4 +97,5 @@ Agents: read the <a href="{{ url_for('teach.spec') }}">spec</a> or the <a href="
 </section>
 {% endblock %}
 {% block scripts %}<script src="{{ url_for('teach.static', filename='teach/fragment.js') }}"></script>
+<script src="{{ url_for('teach.static', filename='teach/preattach.js') }}"></script>
 <script src="{{ url_for('teach.static', filename='teach/teach.js') }}"></script>{% endblock %}

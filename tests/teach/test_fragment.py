@@ -61,9 +61,45 @@ def test_valid_fragment_round_trips():
     no_sha = good()
     del no_sha["image_sha256"]
     a, b, c = parse_all([encode(good()), encode(custom), encode(no_sha)])
-    assert a == {"settings": schema.default_settings(), "imageSha256": SHA}
+    assert a == {"settings": schema.default_settings(), "imageSha256": SHA, "crop": None, "sid": None}
     assert b["settings"] == custom["settings"]
-    assert c == {"settings": schema.default_settings(), "imageSha256": None}
+    assert c == {"settings": schema.default_settings(), "imageSha256": None, "crop": None, "sid": None}
+
+
+SID = "0123abcd-0000-4000-8000-00000000beef"
+CROP = {"top": 0.1, "bottom": 0.83, "left": 0.2, "right": 0.9}
+
+
+def test_fragment_with_sid_and_crop():
+    with_crop = {**good(), "crop": CROP}
+    a, b, c = parse_all([encode(good()) + "&sid=" + SID, encode(with_crop) + "&sid=" + SID, encode(with_crop)])
+    assert a == {"settings": schema.default_settings(), "imageSha256": SHA, "crop": None, "sid": SID}
+    assert b == {"settings": schema.default_settings(), "imageSha256": SHA, "crop": CROP, "sid": SID}
+    assert c["crop"] == CROP and c["sid"] is None
+
+
+BAD_SID_OR_CROP = {
+    "sid uppercase": encode(good()) + "&sid=" + SID.upper(),
+    "sid short": encode(good()) + "&sid=" + SID[:-1],
+    "sid empty": encode(good()) + "&sid=",
+    "sid not uuid": encode(good()) + "&sid=../../admin",
+    "sid escaped": encode(good()) + "&sid=" + SID.replace("-", "%2D"),
+    "sid twice": encode(good()) + "&sid=" + SID + "&sid=" + SID,
+    "sid first": "#sid=" + SID + "&" + encode(good())[1:],
+    "sid without sha": encode({k: v for k, v in good().items() if k != "image_sha256"}) + "&sid=" + SID,
+    "crop missing key": encode({**good(), "crop": {k: v for k, v in CROP.items() if k != "left"}}),
+    "crop extra key": encode({**good(), "crop": {**CROP, "x": 0}}),
+    "crop out of range": encode({**good(), "crop": {**CROP, "right": 1.2}}),
+    "crop negative": encode({**good(), "crop": {**CROP, "top": -0.1}}),
+    "crop string": encode({**good(), "crop": {**CROP, "top": "0.1"}}),
+    "crop array": encode({**good(), "crop": [0.1, 0.8, 0.2, 0.9]}),
+    "crop null": encode({**good(), "crop": None}),
+}
+
+
+@pytest.mark.parametrize("label", list(BAD_SID_OR_CROP))
+def test_invalid_sid_or_crop_is_ignored(label):
+    assert parse_all([BAD_SID_OR_CROP[label]]) == [None]
 
 
 MALFORMED = {
@@ -124,14 +160,16 @@ def test_invalid_content_is_ignored(label):
 def test_page_loads_fragment_parser_without_inline_script(teach):
     html = teach.client.get("/teach").get_data(as_text=True)
     scripts = [s for s in html.split("<script")[1:]]
-    assert len(scripts) == 2 and all(s.lstrip().startswith("src=") for s in scripts)
+    assert len(scripts) == 3 and all(s.lstrip().startswith("src=") for s in scripts)
     assert html.index("teach/fragment.js") < html.index("teach/teach.js")
     assert teach.client.get("/teach/static/teach/fragment.js").status_code == 200
+    assert teach.client.get("/teach/static/teach/preattach.js").status_code == 200
 
 
 def test_fragment_is_never_sent():
     js = TEACH_JS.read_text(encoding="utf-8")
-    # The hash is read once, for parsing, and is not put in any request.
+    # The hash is read once, for parsing, and is not put in any request (it is then removed
+    # from the address bar; see test_preattach.py).
     assert js.count("location.hash") == 1
     assert "parseSettingsFragment(window.location.hash" in js
     assert "imageSha256" in js and "fd.append(\"sha" not in js
@@ -167,8 +205,25 @@ def test_build_fragment_round_trips_and_matches_python_encoding():
                           input=json.dumps({"s": settings, "sha": SHA, "specs": specs()}),
                           capture_output=True, text=True, timeout=60, check=True)
     out = json.loads(proc.stdout)
-    assert out["p"] == {"settings": settings, "imageSha256": SHA}
+    assert out["p"] == {"settings": settings, "imageSha256": SHA, "crop": None, "sid": None}
     raw = out["h"][3:]
     doc = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
     assert doc == {"v": 1, "settings": settings, "image_sha256": SHA}
     assert len(out["h"]) < 2048
+
+
+def test_build_fragment_with_crop_and_sid_round_trips():
+    if not NODE:
+        pytest.skip("node is not installed")
+    sid = "0123abcd-0000-4000-8000-00000000beef"
+    crop = {"top": 0.123456789, "bottom": 0.9, "left": 0.0019, "right": 1}
+    script = ("const f=require(process.argv[1]);let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{"
+              "const a=JSON.parse(d);const h=f.buildSettingsFragment(a.s,a.sha,a.crop,a.sid);"
+              "process.stdout.write(JSON.stringify({h:h,p:f.parseSettingsFragment(h,a.specs)}));});")
+    proc = subprocess.run([NODE, "-e", script, str(FRAGMENT_JS)],
+                          input=json.dumps({"s": schema.default_settings(), "sha": SHA, "crop": crop, "sid": sid,
+                                            "specs": specs()}),
+                          capture_output=True, text=True, timeout=60, check=True)
+    out = json.loads(proc.stdout)
+    assert out["h"].endswith("&sid=" + sid) and len(out["h"]) < 2048
+    assert out["p"] == {"settings": schema.default_settings(), "imageSha256": SHA, "crop": crop, "sid": sid}

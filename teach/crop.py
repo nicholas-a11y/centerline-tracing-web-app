@@ -20,6 +20,7 @@ Nothing here creates, modifies or touches a session: the registry is read with
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import re
 from io import BytesIO
@@ -38,6 +39,27 @@ NOTE_LARGE = ("This image is large, so the app sizes its settings from the whole
 NOTE_PIXELS = ("The app adjusted this image when it loaded it, so the cropped piece may trace differently on its "
                "own. To teach with it: download the cropped image, upload it to the app as a new image, check "
                "that the problem still shows, then tick Teach again.")
+
+REQUEST_LOGGERS = ("werkzeug", "gunicorn.access")
+_CROP_PATH = re.compile(r"(/teach/api/crop/)[^/?\s\"']+")
+
+
+class RedactCropSessionIds(logging.Filter):
+    """Request-log filter: the session id in /teach/api/crop/<sid> paths is never written to a log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = _CROP_PATH.sub(r"\1<sid>", record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(_CROP_PATH.sub(r"\1<sid>", a) if isinstance(a, str) else a for a in record.args)
+        return True
+
+
+def install_log_redaction() -> None:
+    for name in REQUEST_LOGGERS:
+        logger = logging.getLogger(name)
+        if not any(isinstance(f, RedactCropSessionIds) for f in logger.filters):
+            logger.addFilter(RedactCropSessionIds())
 
 
 def parse_region(args) -> dict | None:

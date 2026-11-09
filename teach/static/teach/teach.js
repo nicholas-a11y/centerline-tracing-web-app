@@ -69,6 +69,7 @@
     var img = document.getElementById("image").files[0];
     var ref = document.getElementById("reference").files[0];
     if (img) fd.append("image", img);
+    else if (preAttached) fd.append("image", preAttached.blob, preAttached.name);
     if (ref) fd.append("reference", ref);
     fd.append("meta", JSON.stringify(buildMeta()));
     return fd;
@@ -205,11 +206,61 @@
   }
 
   var handover = window.TeachFragment ? window.TeachFragment.parseSettingsFragment(window.location.hash, settingSpecs()) : null;
+  // Remove the hand-over fragment (it may hold the app's session id) from the address bar at once.
+  if (window.TeachPreattach) window.TeachPreattach.stripFragment(window.location, window.history);
   var expectedSha = null;
   if (handover) {
     writeSettings(handover.settings);
     expectedSha = handover.imageSha256;
     document.getElementById("settings-source").hidden = false;
+  }
+
+  // ---- Pre-attached bitmap: the same cropped image "Download the cropped image" gives.
+  var preAttached = null;
+  var pick = document.getElementById("image-pick");
+  var panel = document.getElementById("preattach");
+  var status = document.getElementById("preattach-status");
+
+  function showStatus(text, cls) {
+    status.textContent = text || "";
+    status.className = cls || "";
+    status.hidden = !text;
+  }
+
+  function showPreAttached(got) {
+    preAttached = { blob: new Blob([got.bytes], { type: "image/png" }), name: got.name };
+    document.getElementById("preattach-name").textContent = got.name;
+    document.getElementById("preattach-size").textContent = got.width + " × " + got.height + " px";
+    var preview = document.getElementById("preattach-preview");
+    var reader = new FileReader();  // a data: URL, which the page's Content-Security-Policy allows
+    reader.onload = function () { preview.src = String(reader.result); };
+    reader.readAsDataURL(preAttached.blob);
+    pick.hidden = true;
+    panel.hidden = false;
+    showStatus("");
+  }
+
+  document.getElementById("preattach-replace").addEventListener("click", function () {
+    preAttached = null;
+    panel.hidden = true;
+    pick.hidden = false;
+    showStatus("");
+    var input = document.getElementById("image");
+    input.focus();
+    input.click();
+  });
+
+  if (handover && handover.sid && window.TeachPreattach) {
+    showStatus("Fetching the cropped image from the app…");
+    var subtle = window.crypto && window.crypto.subtle;
+    window.TeachPreattach.fetchCropped(handover, {
+      fetch: function (url, opts) { return window.fetch(url, opts); },
+      digest: subtle ? function (buf) { return subtle.digest("SHA-256", buf); } : null
+    }).then(function (got) {
+      if (!got) return showStatus("");
+      if (got.ok && !document.getElementById("image").files[0]) return showPreAttached(got);
+      showStatus(got.ok ? "" : got.message, got.ok ? "" : "error");
+    });
   }
 
   function hex(buf) {

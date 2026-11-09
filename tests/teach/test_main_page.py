@@ -57,3 +57,14 @@ def test_main_page_script_only_reads():
     assert "window.open" not in js and "alert(" not in js  # no automatic pop-ups
     # It shows the checkbox only after the status check returns 200.
     assert 'fetch("/teach/api/status"' in js and "r.status === 200" in js
+
+
+def test_send_link_carries_sid_and_crop_only_when_equivalent():
+    """Stage 5d: the link gets "&sid=" (and the run's crop) only where it was already offered."""
+    js = MAIN_JS.read_text(encoding="utf-8")
+    refresh = js[js.index("function refresh"):js.index("function download")]
+    guard = refresh.index("if (!info.equivalent)")
+    build = refresh.index("buildSettingsFragment(")
+    assert guard < build and refresh.index("return;", guard) < build
+    assert re.search(r"buildSettingsFragment\(\s*settings, info\.image_sha256, lastRun\.crop, lastRun\.sid\)", refresh)
+    assert js.count("buildSettingsFragment(") == 1

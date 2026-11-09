@@ -68,7 +68,9 @@
           return;
         }
         var settings = effectiveSettings(lastRun.params, info);
-        sendLink.href = "/teach" + window.TeachFragment.buildSettingsFragment(settings, info.image_sha256);
+        // The session id and crop let the Teach page fetch this same cropped image (pre-attach).
+        sendLink.href = "/teach" + window.TeachFragment.buildSettingsFragment(
+          settings, info.image_sha256, lastRun.crop, lastRun.sid);
         sendWrap.hidden = false;
       })
       .catch(function () {});

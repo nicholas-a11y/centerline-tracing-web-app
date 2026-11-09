@@ -47,6 +47,9 @@ def register_teach(app, env: Mapping[str, str] | None = None, **overrides) -> bo
 
         bp = create_blueprint(cfg, storage, **overrides)
         app.register_blueprint(bp)
+        from .crop import install_log_redaction
+
+        install_log_redaction()
         if cfg.llms_txt:
             app.add_url_rule("/llms.txt", endpoint="teach_llms_txt", view_func=llms_txt_view)
         log.info("Teach enabled (%s storage)", cfg.storage_mode)
