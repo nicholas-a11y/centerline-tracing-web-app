@@ -509,19 +509,25 @@ def _size_match_mapping(root: ET.Element, bw: float, bh: float) -> tuple[_Affine
               f"{bw:g}x{bh:g} px. Keep the bitmap in the export (it is used only for alignment) or "
               "start from the trace template.")
     try:
+        w_parts = _split_length(root.get("width"), "width")
+        h_parts = _split_length(root.get("height"), "height")
         width = _parse_length(root.get("width"), "width")
         height = _parse_length(root.get("height"), "height")
     except SvgReferenceError:
         if not vb:
             raise
+        w_parts = h_parts = None
         width = height = None
     if vb:
         width = vb[2] if width is None else width
         height = vb[3] if height is None else height
     if width is None or height is None:
         raise SvgReferenceError(no_reg, "svg_no_registration")
+    # Physical units only equal pixels through an assumed dpi, so a mm/in size is never
+    # trusted to match the bitmap on its own; only px/unitless sizes (or the viewBox) are.
+    physical = any(p is not None and p[1] not in ("", "px") for p in (w_parts, h_parts))
 
-    if abs(width - bw) <= 0.5 and abs(height - bh) <= 0.5:
+    if not physical and abs(width - bw) <= 0.5 and abs(height - bh) <= 0.5:
         view = _Affine()
         if vb:
             sx, sy = width / vb[2], height / vb[3]

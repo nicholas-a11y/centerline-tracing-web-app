@@ -64,6 +64,7 @@ __pycache__/
 !tests/light_port/**/test*.py
 !tests/lessons/**/test*.py
 !scripts/**/test*.py
+!tests/pipeline/trace_template.py
 
 # Local environment (never commit secrets)
 .env

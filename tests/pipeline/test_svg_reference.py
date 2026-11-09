@@ -113,13 +113,30 @@ def test_non_rendered_and_style_ignored():
 
 # --- units ------------------------------------------------------------------
 
-@pytest.mark.parametrize("w", ["26.458333mm", "2.6458333cm", "1.0416667in", "75pt", "6.25pc", "100px", "100"])
-def test_physical_units_size_match(w):
-    """100 px at 96 px/in, in each unit."""
+@pytest.mark.parametrize("w", ["100px", "100"])
+def test_pixel_size_match(w):
     raw = f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{w}"><path d="M10 20 L30 20"/></svg>'
     ref = read_reference_svg(raw.encode(), (100, 100))
     assert ref.alignment == "size-match"
     np.testing.assert_allclose(_xy(ref.paths[0])[[0, -1]], [[10, 20], [30, 20]], atol=1e-3)
+
+
+@pytest.mark.parametrize("w", ["26.458333mm", "2.6458333cm", "1.0416667in", "75pt", "6.25pc"])
+def test_physical_size_alone_is_not_trusted(w):
+    """100 px at 96 px/in in each unit: equal only through an assumed dpi, so not a registration."""
+    raw = f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{w}"><path d="M10 20 L30 20"/></svg>'
+    with pytest.raises(SvgReferenceError) as exc:
+        read_reference_svg(raw.encode(), (100, 100))
+    assert exc.value.code == "svg_no_registration"
+
+
+@pytest.mark.parametrize("w", ["26.458333mm", "1.0416667in", "75pt"])
+def test_physical_units_scale_geometry(w):
+    """Units are converted (96 px/in) when the frame comes from a border rect."""
+    raw = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{w}">'
+           f'<rect id="border" x="0" y="0" width="{w}" height="{w}"/><line x1="0" y1="{w}" x2="{w}" y2="0"/></svg>')
+    ref = read_reference_svg(raw.encode(), (100, 100))
+    np.testing.assert_allclose(_xy(ref.paths[0])[[0, -1]], [[0, 100], [100, 0]], atol=1e-3)
 
 
 def test_mm_canvas_with_pixel_viewbox():

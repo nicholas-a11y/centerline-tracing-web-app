@@ -96,8 +96,9 @@ stdlib + numpy only. It never calls `extract_manual_centerlines_from_svg`.
      rejected (`svg_multiple_images`). Root `width`/`height` and `viewBox` are
      not used. **The image data is never decoded**; it only marks the frame.
   2. `border-rect`: a `rect` marked `border` (through its transforms).
-  3. `size-match`: root `width`/`height` in px (after unit conversion) or the
-     `viewBox` size equal to the bitmap.
+  3. `size-match`: root `width`/`height` in px (or unitless), or the `viewBox`
+     size, equal to the bitmap. A `mm`/`in`/`pt` size alone is never trusted,
+     because it equals pixels only through an assumed dpi.
   4. Otherwise `svg_no_registration` with a hint to keep the image in the export
      or start from the [trace template](#trace-template).
 * Ignores styles, `<text>` and non-rendered subtrees (`defs`, `clipPath`,
@@ -124,6 +125,34 @@ Tested with `tests/pipeline/samples/lightburn-cross-t2-w8-a35.svg` (lesson
 
 Inspect any export with
 `.venv\Scripts\python.exe -m tests.pipeline.inspect_svg <file.svg> --bitmap <image.png>`.
+
+## Trace template
+
+To hand-trace a reference in a CAD/vector program (LightBurn, Inkscape, ...), start
+from a template so the exported SVG registers onto the bitmap:
+
+```powershell
+.venv\Scripts\python.exe -m tests.pipeline.trace_template path\to\image.png [--fade 0.35] [--out <folder>]
+```
+
+Default output folder: `%TEMP%\centerline-trace-templates` (outside the repo).
+
+| file | content |
+|---|---|
+| `<name>-faded.png` | the bitmap moved towards white by `--fade` (`v + (255 − v)·fade`), so black traced lines stand out. Exact original pixel size, 96 dpi metadata (PNG stores 3780 px/m, read back as 96.012 dpi, the same as the LightBurn export) |
+| `<name>-template.svg` | `width`/`height` = bitmap px, `viewBox="0 0 W H"`, the faded PNG embedded as one `<image>` at 0,0 W×H, no other shapes |
+| `<name>-README.txt` | draw one open path per stroke along the centre; keep the image in the export; export SVG |
+
+Import either the faded PNG or the template SVG, trace, and export **with the
+image still in the drawing**. The reader then uses the image's placed rectangle
+as the frame, so document units, import dpi, origin and Y-axis direction do not
+matter. `build_template_files()` is stateless (bytes in, bytes out) for the
+planned Teach "Download trace template" endpoint.
+
+Round-trip tests (`tests/pipeline/test_trace_template.py`) add traced paths to
+the template in px and in a LightBurn-style mm/Y-up variant (at 96 and 72 dpi
+import) and check the reader recovers them exactly. How a given program imports
+the PNG and SVG has not been verified by these tests; check by hand.
 
 ## Commands
 
