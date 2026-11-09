@@ -1,8 +1,7 @@
-# Teach: design (Stage 4)
+# Teach: design (Stage 6)
 
-Status: **design approved (revision 4)**, with the owner's decisions applied. Items
-marked **[unverified]** are assumptions that Stage 5 must check first. Decisions and
-everything still uncertain are collected in
+Status: **implemented (revision 5)**. Items marked **[unverified]** remain
+deployment-specific checks. Decisions and everything still uncertain are collected in
 [§19](#19-uncertainties-and-decisions-needed).
 
 **Revision 3 (Stage 5c), approved by the owner:**
@@ -32,6 +31,19 @@ everything still uncertain are collected in
 * The text field is optional ("What's wrong? (optional)"); empty is stored as `""`.
   The title stays required. The duplicate check compares titles only when either side
   has no text, and ignores the text signal below 4 tokens (§10).
+
+**Revision 5 (Stage 6), approved by the owner:**
+* Review statuses are only `pending`, `accepted` and `rejected`. Deleted cases are
+  tombstones; legacy information-request records load as pending.
+* The admin area provides sign-in, a searchable queue, case review, environment
+  diagnostics, re-scoring and progress, lesson export, and AI bundles (§15–16).
+  Admin access fails closed when Teach is disabled or its token is invalid.
+* Re-scoring records engine commits and history and privately stores the live
+  pipeline's `app_centerline.svg`. Lesson exports include a `teach` metadata block;
+  the optional AI bundle contains the image, both SVGs, overlay and reproduction
+  metadata.
+* Rejected cases are tombstoned after 30 days and unreviewed pending cases after
+  90 days. Accepted cases are never automatically removed (§13.3).
 
 ## 0. Summary
 
@@ -361,22 +373,22 @@ or `error`. This is useful information for the owner.
 ### 6.1 Statuses
 
 ```
-submitted ──(scored)──▶ pending ──▶ accepted
-                             │   ▲      └─▶ rejected
-                             ▼   │
-(any) ──(submitter delete / admin delete)──▶ deleted (tombstone: number + "deleted" only)
+pending ──▶ accepted
+   └──────▶ rejected
+any case ──(submitter delete / admin delete / retention)──▶ deleted tombstone
 ```
 
-| status | meaning | who sets it |
+The only review statuses are `pending` (Awaiting review), `accepted` and `rejected`.
+Deleted cases retain only a tombstone with their number; deletion is not a review
+status. Older information-request records are normalized to `pending` when loaded.
+
+| review status | meaning | who sets it |
 |---|---|---|
-| `submitted` | stored; scoring in progress | server |
 | `pending` | scored; awaiting review | server or admin |
 | `accepted` | will become, or has become, a lesson | admin |
 | `rejected` | not useful, out of scope or a duplicate (reason shown) | admin |
-| `deleted` | content removed; number kept so links don't break | submitter or admin |
 
-There is no information-request workflow. Unusable cases are rejected. Legacy
-information-request and pending-review records load as `pending`.
+There is no information-request workflow. Unusable cases are rejected.
 
 ### 6.2 `meta.json` (one per submission; comments are illustrative only)
 
@@ -387,7 +399,7 @@ information-request and pending-review records load as `pending`.
   "number": 42,                   // human "#42", sequential (§7.3)
   "created_at": "2026-11-09T01:02:03Z",
   "status": "pending",
-  "status_history": [{"status": "submitted", "at": "...", "by": "server"}],
+  "status_history": [{"status": "pending", "at": "...", "by": "server"}],
   "reviewed": false,              // true once the admin has set any status (§11)
   "title": "...", "description": "...",   // one text field since revision 3
   "title_public": "...",          // sanitised title (§11), computed at submit time
@@ -428,9 +440,12 @@ The detail page derives:
 * **failing since:** the first commit in the latest unbroken run of failures;
 * **now passing (since X):** when the latest result passes but an earlier one failed.
 
-Re-scoring is triggered by the admin ("re-score all open items at the current
-commit"). It runs sequentially in the background using the same worker and limits.
-There is no automatic re-score on deploy, to avoid a CPU spike after every release.
+Each scoring run also stores `app_centerline.svg` privately with the case; it is never
+served publicly. Older cases without a stored centerline get one regenerated on
+demand. Re-scoring runs sequentially in the background using the same worker and
+limits. "Re-score all open cases" skips cases already scored by the current engine
+commit and reports progress. There is no automatic re-score on deploy, to avoid a CPU
+spike after every release.
 
 ## 7. Storage
 
@@ -617,7 +632,7 @@ new case with every non-deleted submission:
 | exact | SHA-256 of the re-encoded PNG **and** of the canonical geometry | equal → **blocked**, offered "me too" |
 | image | 64-bit DCT perceptual hash (numpy + scipy.fft) on a 32×32 downscale | Hamming ≤ **10** |
 | geometry | when sizes are equal: symmetric mean chamfer distance between reference paths | ≤ **2 px** |
-| text | token Jaccard on title + description (lower-cased, stop words removed); on the titles only when either side has no description (revision 4). The signal is 0 unless both token sets have at least **4** tokens (`MIN_TEXT_TOKENS`). | ≥ **0.6** |
+| text | token Jaccard on title + description (lower-cased, stop words removed); on titles only when either side has no description (revision 4). The signal is 0 unless both token sets have at least **4** tokens (`MIN_TEXT_TOKENS`). | ≥ **0.3** with a geometry match; ≥ **0.8** by itself |
 
 A match is shown if:
 * the image signal matches; or
@@ -703,7 +718,7 @@ derived), and reset on restart. The daily counters are also persisted in
 `quota/<date>.json`, so a restart does not reset the daily caps. The persisted
 counters are keyed by an HMAC-SHA-256 of the IP, never the raw IP. The HMAC key is a
 random salt created once in storage (`quota/salt.json`). It is not derived from the
-admin token, which is used only for the startup check until Stage 6.
+admin token, which is used only for admin authentication.
 
 | action | per IP | global |
 |---|---|---|
@@ -713,7 +728,7 @@ admin token, which is used only for the startup check until Stage 6.
 | submissions + me-too | 5 / hour, 20 / day | **200 / day** |
 | stored bytes | **20 MB / day** | **500 MB / day** |
 | manage-link actions | 30 / hour | – |
-| admin auth failures | see §15.4 | see §15.4 |
+| admin auth failures | 5 / 15 minutes; 15-minute lockout | – |
 
 When a global cap is reached, Teach submissions close for the rest of the UTC day
 with a clear message, and the admin is alerted. Validation keeps working.
@@ -777,30 +792,27 @@ title blocks, names, addresses and logos. Never upload confidential drawings."
 * **Retention rules:**
   * `rejected` items are deleted (tombstoned) **30 days** after they became rejected.
   * Unreviewed `pending` items are deleted **90 days** after submission.
-  * `accepted` items keep their files. After the lesson is merged, deleting the
-    private copies is an **admin action** ("Delete private copies" on the item,
-    §15.1), never automatic. Afterwards only the metadata and the lesson link are
-    kept, and `lesson.private_copies_deleted_at` is set.
-* **Retention mechanism (no scheduler):** a sweep (`teach/retention.py`) runs
-  * once at startup, in a background thread so startup is never delayed, and
-  * on every admin summary request (`GET /teach/api/admin/summary`, which the admin
-    page calls on load), after the response data has been gathered.
+  * `accepted` items are never removed automatically. After an export is merged, the
+    admin marks the case Merged by hand; deletion remains an explicit tombstone action.
+* **Retention mechanism:** the admin API checks whether a sweep is due on authenticated
+  requests. If 24 hours have elapsed since the previous sweep (or none has run), it
+  starts one in a background thread; the first admin visit therefore catches up after
+  an idle period without delaying the request. The admin can also run a sweep
+  immediately from the Environment page.
 
   Each run:
-  1. Takes a **non-blocking in-process lock**. If another sweep holds it, it returns
-     at once.
-  2. Reads `sweep/last.json` from storage. If the last sweep finished less than
-     **6 hours** ago, it releases the lock and returns. This keeps admin page loads
-     and restarts cheap.
+  1. Takes an in-process lock. If another sweep is running, it returns at once.
+  2. Reads `sweep/last.json` from storage to determine when the next scheduled sweep
+     is due.
   3. Finds candidates from `index/admin.json` (status plus `retention.status_since`),
      without listing every object in the bucket.
-  4. Deletes at most **200 items** per run; the rest are picked up by the next run.
-  5. Writes `sweep/last.json` with the finish time and counts, then releases the lock.
+  4. Tombstones every due case and writes `sweep/last.json` with the finish time and
+     count, then releases the lock.
 
-  The sweep logs only counts ("retention: 3 rejected and 1 pending item
-  tombstoned"). The admin summary shows the last-swept time and the number of items
-  due. Because there is no scheduler, nothing is deleted while the app is idle; the
-  next startup or admin visit catches up. If the app ever runs more than one process,
+  The sweep logs only the number of cases tombstoned. The Environment page shows the
+  last-swept time, next run and number of items due.
+  Because there is no external scheduler, nothing is deleted while the app is idle; the
+  next authenticated admin API visit catches up. If the app ever runs more than one process,
   the lock moves to a storage lease with the D1 migration (§7.4).
 
 ### 13.4 Logging
@@ -924,23 +936,36 @@ It also shows the expected response, including the failing result.
 
 ### 15.1 Pages
 
-`/teach/admin` is a static shell page, so loading it reveals nothing. All data comes
-from `/teach/api/admin/*` with `Authorization: Bearer <token>`. The shell keeps the
-token in `sessionStorage`, which is cleared when the tab closes. Because there are no
-cookies, there is no CSRF exposure, and the token is never put in a URL.
+`/teach/admin` serves a sign-in shell. The token is sent only in an
+`Authorization: Bearer` header and kept in `sessionStorage` until sign-out or tab
+closure. Admin pages use the system font stack and no third-party scripts or fonts.
+Admin responses are `no-store` and carry the same CSP, `nosniff` and `no-referrer`
+headers as other Teach responses. With Teach disabled, both `/teach` and `/teach/admin`
+return 404.
 
-The admin can:
-* view the queue, filtered by status, with the **count awaiting review**;
-* open the detail view: overlay, the submitter's text, the raw SVG (download only),
-  the results history and me-too entries;
-* set the status and public and private notes;
-* set the scoring **tolerance** and **region**, and re-score;
-* toggle thumbnail and bitmap visibility (only within the submitter's opt-ins);
-* **hide or unhide the public title** with one click, from the queue list or the
-  detail view (§11);
-* after a lesson is merged, **delete private copies** with one click (§13.3);
-* export as a lesson (§16), delete, rebuild the index, and see quota usage and the
-  last retention sweep.
+The admin area has these screens:
+
+* **Queue:** cards and filter counts for Awaiting review, Accepted and Rejected;
+  search by title or number; rows show current result, failing-since/now-passing
+  history, me-too count, settings, date and Merged state. Each row has a Review/Open
+  link and its own hide/unhide-title control. The footer shows the number displayed
+  and the last retention sweep. "Re-score all open cases" starts a background job.
+* **Case:** overlay, available coverage/gap/path metrics, score history, submitter
+  text, bitmap dimensions and crop context, consent and all ten settings. Admin
+  controls set one of the three review statuses, public/private notes, tolerance
+  (default 1 px) and optional region, re-score the case, and toggle title/thumbnail/
+  bitmap visibility. Thumbnail and bitmap visibility cannot exceed the submitter's
+  opt-ins. The submitted SVG is available only as a text attachment. The case can be
+  deleted to a tombstone or opened for lesson export and AI-bundle download.
+* **Export:** editable lesson id, description, expected behaviour, role, tolerance
+  and region, with checks and warnings before the lesson ZIP is offered.
+* **Environment:** proxy/IP diagnostics (masked), commit and storage mode, a
+  write/read/delete storage check, public-base-URL and alert configuration, token
+  length, app/worker memory, quotas and scoring queue. It offers test-alert, index
+  rebuild, retention-sweep and re-score-all actions.
+
+The token is never stored in a URL or cookie. After export, the admin marks a case
+Merged by hand; no commit link is recorded.
 
 ### 15.2 Token check
 
@@ -949,6 +974,8 @@ The admin can:
   Bytes are used because `compare_digest` raises `TypeError` on non-ASCII strings.
 * A missing or malformed header is treated as a failure, with the same timing path.
 * The 32-character minimum length is enforced at startup (§4).
+* Five wrong attempts from one IP within 15 minutes lock that IP out for 15 minutes.
+  The comparison is constant-time. There is no global admin lockout.
 
 ### 15.3 HTTPS only
 
@@ -969,11 +996,10 @@ plus `Cache-Control: no-store` on admin responses.
   the blueprint only; no global `ProxyFix`. The admin page has a "what IP do you see
   for me" diagnostic, to confirm the hop count after deploy **[unverified: Railway
   hop count]**.
-* **Per IP:** 5 failed attempts in 15 minutes locks that IP out of admin for **1 hour**
-  (`429`). Successful requests do not reset the window.
-* **Global:** 30 failed attempts in 1 hour locks admin for everyone for 1 hour and
-  sends an alert. A locked request is refused **before** the token is compared.
-* Failures are logged with a truncated IP hash and a reason code only.
+* **Per IP:** five failed attempts in 15 minutes lock that IP out for **15 minutes**
+  (`429`). A locked request is refused before comparing the token.
+* There is no global admin lockout. Failures are logged with a truncated HMAC-keyed
+  IP identifier and never include the token or raw IP.
 
 ### 15.5 Notifications
 
@@ -991,8 +1017,8 @@ plus `Cache-Control: no-store` on admin responses.
   variable is needed **[unverified: check in Stage 5]**.
 * **Debounce:** at most **one message per 30 minutes**. Events in between are
   collected in memory and the next message summarises them ("+N more" beyond 10
-  items). Alerts about a global cap being hit or an admin lockout bypass the
-  debounce, but are limited to one per hour per kind.
+  items). Alerts about a global submission cap bypass the debounce, but are limited
+  to one per hour.
 * **Message content (title, status and link only):**
   * Request: `POST <TEACH_ALERT_WEBHOOK_URL>`, body `text/plain; charset=utf-8`.
   * Headers (fixed ASCII, no user text): `Title: Teach: N updates`,
@@ -1012,33 +1038,34 @@ plus `Cache-Control: no-store` on admin responses.
 
 ### 16.1 What export produces
 
-The lesson ID is `teach-<number>-<slug>`, where the slug comes from the title:
-lower-case ASCII, at most 40 characters. It is a standard lesson folder
+The default lesson ID is `teach-<number>-<slug>`, where the slug comes from the title;
+the admin may edit it. IDs are unique, safe folder names of at most 64 lowercase
+letters, digits or hyphens. It is a standard lesson folder
 (`docs/migration/lesson-format.md`):
 
 * `image.png`: the stored re-encoded bitmap.
-* `reference.svg`: **re-serialised from the parsed geometry**
-  (`write_reference_svg`), not the user's raw file. It is therefore normalised, safe
-  and readable by the lesson suite.
+* `reference.svg`: the submitted hand-traced SVG. Export checks its registration and
+  the existing lesson loader reads it through the safe SVG reader.
 * `lesson.json`:
 
   | field | value |
   |---|---|
   | `category` | `"user"` |
   | `title` | the submission title |
-  | `description` | the submitter's optional text field ("What's wrong? (optional)"); empty when there is no text, and the admin completes it at review (Stage 6) |
-  | `expected_behaviour` | completed by the admin at export (Stage 6) |
-  | `notes` | me-too summary + public admin note |
-  | `source` | `{"kind": "teach", "submission": 42, "queue_url": "..."}` |
-  | `licence` | e.g. `"CC0-1.0 (submitted via Teach)"` |
-  | `consent` | `{"public": true, "by": "submitter via Teach form, consent text v1, <date>"}`. No personal data. |
+  | `description` | admin-editable; defaults to the submitter's optional text and stays empty when none was supplied |
+  | `expected_behaviour` | admin-editable; defaults to the submitter's text or, if empty, the title |
+  | `notes` | empty string |
+  | `source` | `{"kind": "teach", "case_number": 42}` |
+  | `licence` | `"CC0-1.0"` |
   | `params` | the submission's pinned params |
   | `scoring` | the **admin's** region and tolerance |
-  | `status` | `baseline` if the latest result fails, `active` if it passes. The admin can override this in the export dialog. |
-  | `last_run` | the latest result's commit, date and outcome |
+  | `status` | `baseline` for the Known problem role; `active` for Must pass |
+  | `teach` | case number, submission date, submitter text, all ten settings, score history, engine commit at export, licence, me-too count and consent/visibility flags |
 
-* Before writing, export runs `validate_meta` on the result and refuses to export if it
-  fails.
+Before offering the ZIP, the export page checks SVG registration, CC0 licence and
+identical results from two consecutive runs. A possible duplicate is shown as a
+warning; failed checks block export. The `teach` block is extra metadata and is ignored
+by the existing lesson loader.
 
 ### 16.2 Two ways to get the lesson out
 
@@ -1048,9 +1075,25 @@ lower-case ASCII, at most 40 characters. It is a standard lesson folder
    `python -m teach.export_lesson <number> --dest tests/lessons`. It reads from R2,
    using the `R2_*` variables from your shell environment, or from `TEACH_LOCAL_DIR`.
 
-The server never writes to the repo and never commits.
+The server never writes to the repo and never commits. The CLI and web download use
+the same builder and validation.
 
-### 16.3 Exact commit workflow after an export
+### 16.3 AI review bundle
+
+Any non-deleted case, regardless of review status, can be downloaded from the case or
+export page as an AI bundle. `python -m teach.export_bundle <number> --dest <folder>`
+uses the same builder. The ZIP contains exactly:
+
+* `bitmap.png` (the stored, cropped image);
+* `hand_traced.svg` (the submitted SVG, included as-is);
+* `app_centerline.svg` (the live pipeline's output in bitmap coordinates);
+* `overlay.png`, `metadata.json` and a short `README.md` describing the issue,
+  expected result, files, tolerance and reproduction settings.
+
+The admin UI never renders the untrusted submitted SVG; it is available only as a
+text attachment or inside the ZIP.
+
+### 16.4 Exact commit workflow after an export
 
 ```powershell
 git switch main; git pull --ff-only
@@ -1087,7 +1130,7 @@ bitmap, raw SVG and variants and keeps the metadata and lesson link.
   licence allows it.
 * Rendering uses the Teach templates only. `/test-ui` is unchanged.
 
-## 18. Testing plan (Stage 5)
+## 18. Teach tests
 
 New folder `tests/teach/`, with a `.gitignore` exception like the others:
 * **App setup:** each test builds a **fresh** `Flask` app and calls
@@ -1141,18 +1184,20 @@ New folder `tests/teach/`, with a `.gitignore` exception like the others:
   with a forced sleep.
 * **Limits:** per-IP and global limits, quota persistence across a simulated restart,
   the `X-Forwarded-For` hop logic, and spoofed left-most entries being ignored.
-* **Admin:** HTTPS enforcement, lockout, `compare_digest` being used (patched to
-  record calls), no cookies set, and `Cache-Control: no-store`.
+* **Admin:** fail-closed access, bearer auth and token redaction, five-attempt
+  per-IP lockout, HTTPS enforcement, `compare_digest`, no cookies, response security
+  headers, environment diagnostics and storage/alert controls.
 * **Visibility:** unreviewed items expose only the number, status, dates and the
   sanitised title; the sanitiser removes URLs, e-mail addresses, control and bidi
   characters and truncates to 80; hiding a title removes it from the index, the
   duplicate check and alerts; opt-in rules; the manage token in the fragment works;
   deletion leaves a tombstone.
-* **Retention:** the sweep honours the 6-hour guard and the lock (two concurrent
-  calls delete once), deletes at most 200 per run, never touches accepted items, and
-  "Delete private copies" works only after a merge is recorded.
-* **Export:** the exported folder passes `validate_meta`, is picked up by
-  `discover_lessons`, and gives the same result in `run_lessons`.
+* **Retention:** age boundaries are tested for rejected and pending cases; accepted
+  cases are never swept; legacy statuses normalize to pending; sweeps are idempotent
+  and leave tombstones.
+* **Export and AI bundle:** the lesson ZIP loads with the existing lesson loader,
+  including its extra `teach` metadata; web and CLI paths share the builder; bundle
+  contents are checked, and the submitted SVG is never served inline.
 * **Notifications:** the ntfy request contains only titles, statuses and links, with
   fixed ASCII headers; the debounce works; the URL never appears in logs.
 
@@ -1168,13 +1213,12 @@ New folder `tests/teach/`, with a `.gitignore` exception like the others:
    thumbnails and bitmaps stay private until review (§11).
 4. All five optional environment variables are approved.
    `TEACH_ALERT_WEBHOOK_URL` is a secret (§4).
-5. A missing or short admin token disables all of Teach; `/teach` returns 404 and the
-   log line says why (§4).
+5. A missing or short admin token disables all of Teach; `/teach` and `/teach/admin`
+   return 404 and the log line says why (§4).
 6. The limits in §12 are approved, with `/teach/api/validate` raised to 60/hour per
    IP and 600/hour globally.
-7. Retention uses a sweep at startup and on admin summary requests, guarded by a lock
-   and a last-swept timestamp; deleting private copies after a merge is an admin
-   action (§13.3).
+7. Retention checks for a due sweep on authenticated admin API requests and can also
+   be run manually. Accepted cases are never automatically removed (§13.3).
 8. Alerts go to ntfy, debounced, with title, status and link only (§15.5).
 9. Registration from the `<image>` placement frame, and transforms and units, are
    required before Stage 5 starts (§9.2; implemented in Stage 2b).
@@ -1182,7 +1226,7 @@ New folder `tests/teach/`, with a `.gitignore` exception like the others:
     validated.~~ Withdrawn in revision 3: the trace template is removed; users trace
     over the original (cropped) image and keep it in the export.
 
-**Unverified (check first in Stage 5):**
+**Deployment-specific checks (not verifiable in local tests):**
 11. **[unverified]** Railway sets `X-Forwarded-Proto` and appends exactly one
     `X-Forwarded-For` hop, and exposes `RAILWAY_GIT_COMMIT_SHA`.
 12. **[unverified]** The Railway plan's memory can hold the live app plus one scoring
@@ -1204,7 +1248,7 @@ New folder `tests/teach/`, with a `.gitignore` exception like the others:
     A persistent worker process is an optimisation for later.
 18. **Scoring only fits stroke-crossing cases well today.** For other kinds of problem
     (noise, gaps, wrong threshold), single-path coverage plus p95 may not express what
-    is wrong. The admin can still accept these as `draft` lessons with notes.
+    is wrong. The admin can still export a Known problem baseline with notes.
 19. **SVG transforms, units and `<image>` registration (§9.2)** are required before
     Stage 5 starts. Stage 2b implements them and tests them on the owner's LightBurn
     export; exports from other programs (Inkscape, CAD) have not been tested yet.
@@ -1215,15 +1259,12 @@ New folder `tests/teach/`, with a `.gitignore` exception like the others:
 
 ## 20. Rollout
 
-0. Before Stage 5: Stage 2b (SVG transforms, units, `<image>` registration) is
-   merged, and the `lessonkit/` move is its own commit. (Stage 2c's trace template
-   was removed in revision 3.)
-1. Stage 5 lands with `TEACH_ENABLED` unset. Deploy, and confirm the url_map is
-   unchanged and `/teach` returns 404.
-2. Create a separate Railway environment (staging) with its own R2 bucket and
-   `TEACH_ENABLED=1`. Run the checks in §19 items 11–14 there.
-3. Stage 6 (admin review and export) is completed and tested on staging.
-4. Enable on production. Keep the global caps low for the first week.
+1. Keep `TEACH_ENABLED` unset until the deployment's proxy, commit SHA, R2 behavior,
+   memory headroom and alert delivery have been checked.
+2. Enable Teach in a staging environment with a separate R2 bucket and confirm the
+   deployment-specific checks in §19.
+3. Enable in production only after the staging checks pass. Monitor quotas and queue
+   load during initial use.
 
 ---
 

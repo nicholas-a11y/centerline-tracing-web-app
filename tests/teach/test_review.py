@@ -24,7 +24,7 @@ def test_review_status_notes_and_privacy(teach, status):
 
 
 @pytest.mark.parametrize("data", [
-    {"status": "other"}, {"status": "needs_info"}, {"tolerance_px": 0},
+    {"status": "other"}, {"status": "unknown"}, {"tolerance_px": 0},
     {"tolerance_px": True}, {"region": {"x0": 0}}, {"unknown": 1},
     {"thumbnail_public": True}, {"bitmap_public": True},
 ])

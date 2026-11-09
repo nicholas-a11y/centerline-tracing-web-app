@@ -102,7 +102,7 @@ several pieces at the crossing: four arms plus a bridge, sometimes with tiny stu
 sideways. Near 90° it is usually four arms meeting at one point. The exact count depends on image size and
 threshold. There is no committed fix; this is documented so test cases can track it.
 
-## Migration plan (in progress)
+## Migration plan
 
 Goal: a test suite that exercises the real engine and the live `/process_immediate` path, and then
 retire `centerline_engine.py`. Stages 0–3 change no shipped code, parameters, API responses or UI.
@@ -113,11 +113,10 @@ retire `centerline_engine.py`. Stages 0–3 change no shipped code, parameters, 
    pipeline via Flask's test client; generated crossing lessons; existing fixtures converted to lessons;
    currently failing lessons marked xfail.
 3. Port legacy tests and rig logic to the light engine (copies only) and document every old-vs-new difference.
-4. Design doc for a "Teach" submission area (users submit a bitmap + ideal SVG into a review queue).
-   It is feature-flagged off by default and never changes any user's results.
-5–6. Teach implementation and admin review/export into lessons (after approval).
-7. Switch the five legacy imports to `centerline_engine_light` (after approval).
-8. Remove `centerline_engine.py` and dead test/rig code once nothing imports it (after approval).
+4–6. Teach submission, review and lesson export are implemented on `test-suite-migration`.
+   Teach is feature-flagged off by default and never changes any user's results.
+7. Switch the five legacy imports to `centerline_engine_light` (awaiting approval).
+8. Remove `centerline_engine.py` and dead test/rig code once nothing imports it (awaiting approval).
 
 ## Teach (feature-flagged, off by default)
 
@@ -126,8 +125,9 @@ submit a bitmap and a hand traced SVG of the ideal centrelines. Each case is sco
 against the live `/process_immediate` pipeline and stored for review. It is registered by one line at
 the end of `centerline_web_app.py` and adds nothing to the app unless `TEACH_ENABLED=1`. If the
 configuration is unsafe or incomplete (for example the admin token is missing or shorter than 32
-characters), Teach stays off, `/teach` returns 404 and one log line says why. Admin review and lesson
-export come in a later stage.
+characters), Teach stays off, `/teach` and `/teach/admin` return 404, and one log line says why.
+The admin area at `/teach/admin` provides the review queue, environment checks, re-scoring,
+lesson export and AI review bundles. Its bearer token is kept in tab-scoped `sessionStorage`.
 
 Try it locally (PowerShell):
 
@@ -140,7 +140,9 @@ python centerline_web_app.py
 
 With no `R2_*` variables set, data is stored in a local folder: `TEACH_LOCAL_DIR` if set, otherwise
 `~/.centerline-teach` (outside the repo). The page shows a "LOCAL MODE" banner. Delete that folder to
-start again. The Teach tests run with `pytest tests/teach`.
+start again. The Teach tests run with `pytest tests/teach`. Admin tools are available at
+`/teach/admin`; the lesson and AI-bundle CLIs are `python -m teach.export_lesson` and
+`python -m teach.export_bundle`.
 
 When Teach is enabled, the main page also shows an unchecked **Teach** checkbox (with Teach off the
 main page is unchanged). Ticking it offers **Download the cropped image**, which gives exactly the
