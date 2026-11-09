@@ -119,6 +119,29 @@ retire `centerline_engine.py`. Stages 0–3 change no shipped code, parameters, 
 7. Switch the five legacy imports to `centerline_engine_light` (after approval).
 8. Remove `centerline_engine.py` and dead test/rig code once nothing imports it (after approval).
 
+## Teach (feature-flagged, off by default)
+
+Teach (`teach/`, design in [docs/teach/design.md](docs/teach/design.md)) is a public page where people
+submit a bitmap and a reference SVG of the ideal centrelines. Each case is scored in a subprocess
+against the live `/process_immediate` pipeline and stored for review. It is registered by one line at
+the end of `centerline_web_app.py` and adds nothing to the app unless `TEACH_ENABLED=1`. If the
+configuration is unsafe or incomplete (for example the admin token is missing or shorter than 32
+characters), Teach stays off, `/teach` returns 404 and one log line says why. Admin review and lesson
+export come in a later stage.
+
+Try it locally (PowerShell):
+
+```powershell
+$env:TEACH_ENABLED = "1"
+$env:TEACH_ADMIN_TOKEN = (py -c "import secrets; print(secrets.token_urlsafe(32))")
+python centerline_web_app.py
+# open http://localhost:5002/teach
+```
+
+With no `R2_*` variables set, data is stored in a local folder: `TEACH_LOCAL_DIR` if set, otherwise
+`~/.centerline-teach` (outside the repo). The page shows a "LOCAL MODE" banner. Delete that folder to
+start again. The Teach tests run with `pytest tests/teach`.
+
 ## Deployment
 
 ### Heroku

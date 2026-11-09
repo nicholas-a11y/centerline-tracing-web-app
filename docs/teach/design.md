@@ -175,7 +175,7 @@ optional names are approved.
 
    The public side is not run without a working admin, because nothing could ever be
    reviewed or deleted. A token can be generated with
-   `python -c "import secrets; print(secrets.token_urlsafe(32))"` (43 characters).
+   `py -c "import secrets; print(secrets.token_urlsafe(32))"` (43 characters).
    Every other "disabled" reason below uses the same `Teach disabled: <reason>` form
    and also leaves `/teach` as a 404.
 3. **Storage selection:**
@@ -196,7 +196,7 @@ locally against a folder:
 
 ```powershell
 $env:TEACH_ENABLED = "1"
-$env:TEACH_ADMIN_TOKEN = (python -c "import secrets; print(secrets.token_urlsafe(32))")
+$env:TEACH_ADMIN_TOKEN = (py -c "import secrets; print(secrets.token_urlsafe(32))")
 .venv\Scripts\python.exe centerline_web_app.py     # http://localhost:5002/teach
 ```
 
@@ -587,7 +587,10 @@ The submitter always sees their own full case through the manage link.
 
 All limits are kept in memory, keyed by client IP (§15.4 explains how the IP is
 derived), and reset on restart. The daily counters are also persisted in
-`quota/<date>.json`, so a restart does not reset the daily caps.
+`quota/<date>.json`, so a restart does not reset the daily caps. The persisted
+counters are keyed by an HMAC-SHA-256 of the IP, never the raw IP. The HMAC key is a
+random salt created once in storage (`quota/salt.json`). It is not derived from the
+admin token, which is used only for the startup check until Stage 6.
 
 | action | per IP | global |
 |---|---|---|
@@ -603,14 +606,25 @@ with a clear message, and the admin is alerted. Validation keeps working.
 
 The validate limits are deliberately generous so agents can iterate on a submission.
 CPU is still bounded by the scoring queue (§8: one job at a time, queue ≤ 3, then
-`503 busy` with `Retry-After`), not by the rate limit: 600 validations an hour is one
-every 6 s, which a single worker at roughly 2–5 s per job can sustain.
+`503 busy` with `Retry-After`), not by the rate limit. Each client IP may have at most
+one scoring job running or queued, and a second request gets `503 busy`. 600
+validations an hour is one every 6 s, which a single worker at roughly 2–5 s per job
+can sustain.
 
 ### 12.3 Fallback (documented only)
 
 If abuse gets past these limits, add Cloudflare Turnstile to submit and me-too only.
 This needs a site key and a secret (two new environment variables) and a server-side
 Siteverify call. It is not built now.
+
+### 12.4 Response headers (all Teach pages and APIs)
+
+Every `/teach` response carries
+`Content-Security-Policy: default-src 'self'; img-src 'self' data:; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`,
+`X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`.
+Templates contain no inline script, event-handler attributes or inline styles; page
+JavaScript lives in `teach/static/teach/`. Queue, item and manage pages also send
+`X-Robots-Tag: noindex`, and API and manage responses send `Cache-Control: no-store`.
 
 ## 13. Privacy, consent, licence and deletion
 
@@ -856,7 +870,7 @@ plus `Cache-Control: no-store` on admin responses.
   built; the summary endpoint can be added later.
 * **Why the URL is a secret:** ntfy has no sign-up, so on ntfy.sh the topic name
   works as the password: anyone who knows it can read and publish. Generate the topic
-  with `python -c "import secrets; print('teach-' + secrets.token_urlsafe(18))"`. If
+  with `py -c "import secrets; print('teach-' + secrets.token_urlsafe(18))"`. If
   a protected topic or self-hosted server with an access token is used, ntfy's
   documented `auth` query parameter keeps the token inside the same URL, so no extra
   variable is needed **[unverified: check in Stage 5]**.
