@@ -5,6 +5,8 @@ import math
 from flask import Response, abort, jsonify, render_template, request
 
 from . import schema
+from .exporting import (ExportError, build_ai_bundle, build_lesson_archive, check_lesson_export, export_defaults,
+                        record_lesson_export)
 from .sanitize import clean_text
 from .service import data_url, utc_now
 from .storage import submission_key
@@ -42,12 +44,13 @@ def case_view(svc, meta):
     out["me_too_count"] = len(meta.get("me_too") or [])
     out["history_label"] = history_label(meta.get("results"))
     out["app_centerline_available"] = svc.storage.get(submission_key(meta["id"], "app_centerline.svg")) is not None
+    out["export_defaults"] = export_defaults(meta)
     return out
 
 
 def review_update(svc, number, data):
     allowed = {"status", "admin_note_public", "admin_note_private", "tolerance_px", "region",
-               "title_hidden", "thumbnail_public", "bitmap_public"}
+               "title_hidden", "thumbnail_public", "bitmap_public", "merged"}
     if not isinstance(data, dict) or set(data) - allowed:
         raise ValueError("Unknown review field.")
     with svc._lock:
@@ -73,6 +76,10 @@ def review_update(svc, number, data):
                 if data[name] and not vis.get(opt):
                     raise ValueError("The submitter did not consent to that visibility.")
                 vis[name] = data[name]
+        if "merged" in data:
+            if not isinstance(data["merged"], bool):
+                raise ValueError("Merged must be true or false.")
+            meta["merged"] = data["merged"]
         scoring = meta["scoring"]
         if "tolerance_px" in data:
             v = data["tolerance_px"]
@@ -92,7 +99,7 @@ def review_update(svc, number, data):
             meta["retention"] = {"status_since": now}
         meta["status"] = status
         # Hiding a title alone does not constitute review.
-        if set(data) != {"title_hidden"}:
+        if set(data) - {"title_hidden", "merged"}:
             meta["reviewed"] = True
         svc._save(meta)
     return meta
@@ -177,6 +184,48 @@ def register_review(bp, svc, rescores, client_ip):
         resp = Response(raw, content_type="text/plain; charset=utf-8")
         resp.headers["Content-Disposition"] = f'attachment; filename="app_centerline-{number}.svg"'
         return resp
+
+    @bp.get("/admin/cases/<int:number>/export")
+    def admin_export_page(number):
+        case_for_number(svc, number)
+        return render_template("teach/admin.html", local_mode=svc.cfg.local_mode)
+
+    @bp.post("/api/admin/cases/<int:number>/export-check")
+    def admin_export_check(number):
+        values = request.get_json(silent=True)
+        if not isinstance(values, dict):
+            return jsonify({"ok": True, "checks": {"ok": False, "errors": ["Export fields must be an object."],
+                                                     "warnings": []}})
+        try:
+            checks = check_lesson_export(svc, number, values, ip=client_ip())
+        except ExportError as exc:
+            checks = {"ok": False, **exc.checks}
+        return jsonify({"ok": True, "checks": checks})
+
+    @bp.post("/api/admin/cases/<int:number>/export-lesson")
+    def admin_export_lesson(number):
+        values = request.get_json(silent=True)
+        if not isinstance(values, dict):
+            return jsonify({"ok": False, "error": "Export fields must be an object."}), 422
+        try:
+            raw, checks = build_lesson_archive(svc, number, values, ip=client_ip())
+            record_lesson_export(svc, number, checks["fields"])
+        except ExportError as exc:
+            return jsonify({"ok": False, "error": str(exc), "checks": exc.checks}), 422
+        lesson_id = checks["fields"]["lesson_id"]
+        response = Response(raw, content_type="application/zip")
+        response.headers["Content-Disposition"] = f'attachment; filename="{lesson_id}.zip"'
+        return response
+
+    @bp.get("/api/admin/cases/<int:number>/ai-bundle.zip")
+    def admin_ai_bundle(number):
+        try:
+            raw = build_ai_bundle(svc, number, client_ip())
+        except ExportError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 422
+        response = Response(raw, content_type="application/zip")
+        response.headers["Content-Disposition"] = f'attachment; filename="teach-{number}-ai-bundle.zip"'
+        return response
 
     @bp.post("/api/admin/rebuild-index")
     def admin_rebuild():

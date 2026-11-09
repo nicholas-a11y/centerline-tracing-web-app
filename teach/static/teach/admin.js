@@ -128,14 +128,22 @@
     if (type === "textarea") { el.rows = 3; el.maxLength = 4000; }
     return el;
   }
-  async function download(path, filename) {
-    var resp = await fetch("/teach/api/admin/" + path, {headers: {Authorization: "Bearer " + token}, cache: "no-store"});
+  async function download(path, filename, method, data) {
+    var opts = {method: method || "GET", headers: {Authorization: "Bearer " + token}, cache: "no-store"};
+    if (data !== undefined) {
+      opts.headers["Content-Type"] = "application/json";
+      opts.body = JSON.stringify(data);
+    }
+    var resp = await fetch("/teach/api/admin/" + path, opts);
     if (resp.status === 202) {
       var pending = await resp.json();
       await waitForJob(pending.job, content);
-      return download(path, filename);
+      return download(path, filename, method, data);
     }
-    if (!resp.ok) throw new Error("Download failed (HTTP " + resp.status + ").");
+    if (!resp.ok) {
+      var error = await resp.json().catch(function () { return {}; });
+      throw new Error(error.error || "Download failed (HTTP " + resp.status + ").");
+    }
     var url = URL.createObjectURL(await resp.blob());
     var a = node("a"); a.href = url; a.download = filename; a.click();
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
@@ -163,6 +171,15 @@
     node("h3", "Ten settings used", content); facts(r.params, content);
     node("h3", "Score history", content);
     node("p", r.history_label || "Not recorded", content); facts({entries: r.results}, content);
+    button("Export as a lesson", function () { location.assign("/teach/admin/cases/" + number + "/export"); }, content);
+    button("Download AI bundle (.zip)", function () {
+      return download("cases/" + number + "/ai-bundle.zip", "teach-" + number + "-ai-bundle.zip");
+    }, content);
+    var merged = field(content, "merged", "Merged (lesson added to the suite)", r.merged, "checkbox");
+    merged.addEventListener("change", async function () {
+      try { await call("cases/" + number, "PATCH", {merged: merged.checked}); }
+      catch (e) { message.textContent = e.message; merged.checked = !merged.checked; }
+    });
     button("Re-score this case", async function () {
       var job = (await call("cases/" + number + "/rescore", "POST")).job;
       await waitForJob(job, content);
@@ -191,7 +208,8 @@
       try {
         await call("cases/" + number, "PATCH", {status: select.value, admin_note_public: pub.value,
           admin_note_private: priv.value, tolerance_px: Number(tol.value), region: region.value.trim() ? JSON.parse(region.value) : null,
-          title_hidden: hide.checked, thumbnail_public: thumb.checked, bitmap_public: bitmap.checked});
+          title_hidden: hide.checked, thumbnail_public: thumb.checked, bitmap_public: bitmap.checked,
+          merged: merged.checked});
         message.textContent = "Review saved."; await casePage(number);
       } catch (e) { message.textContent = e.message; }
     });
@@ -201,9 +219,64 @@
       await call("cases/" + number, "DELETE"); location.assign("/teach/admin");
     }, content);
   }
+  async function exportPage(number) {
+    var r = (await call("cases/" + number)).case;
+    content.textContent = "";
+    node("h2", "Export case #" + number + " as a lesson", content);
+    var back = node("a", "Back to case", content); back.href = "/teach/admin/cases/" + number;
+    var defaults = r.export_defaults;
+    var form = node("form", undefined, content);
+    var id = field(form, "lesson-id", "Lesson id (safe folder name)", defaults.lesson_id, "text");
+    id.maxLength = 64;
+    var description = field(form, "description", "Description", defaults.description, "textarea");
+    var expected = field(form, "expected", "Expected behaviour", defaults.expected_behaviour, "textarea");
+    var roleWrap = node("p", undefined, form);
+    var roleLabel = node("label", "Role", roleWrap);
+    roleLabel.htmlFor = "export-role";
+    var role = node("select", undefined, roleWrap); role.id = "export-role";
+    [["must_pass", "Must pass"], ["known_problem", "Known problem (allowed to fail)"]].forEach(function (item) {
+      var opt = node("option", item[1], role); opt.value = item[0]; opt.selected = item[0] === defaults.role;
+    });
+    var tolerance = field(form, "tolerance", "Tolerance (px)", defaults.tolerance_px, "number");
+    tolerance.min = "0.05"; tolerance.max = "100"; tolerance.step = "0.05";
+    var region = field(form, "region", "Region (JSON x0, y0, x1, y1; blank = whole bitmap)",
+      defaults.region ? JSON.stringify(defaults.region) : "", "textarea");
+    var checksPanel = node("section", undefined, content);
+    var checkButton = node("button", "Run export checks", form); checkButton.type = "submit";
+    var bundleButton = node("button", "Download AI bundle (.zip)", undefined, content);
+    bundleButton.type = "button";
+    bundleButton.addEventListener("click", function () {
+      download("cases/" + number + "/ai-bundle.zip", "teach-" + number + "-ai-bundle.zip")
+        .catch(function (e) { message.textContent = e.message; });
+    });
+    function values() {
+      return {lesson_id: id.value, description: description.value, expected_behaviour: expected.value,
+        role: role.value, tolerance_px: Number(tolerance.value),
+        region: region.value.trim() ? JSON.parse(region.value) : null};
+    }
+    form.addEventListener("submit", async function (ev) {
+      ev.preventDefault(); checkButton.disabled = true; checksPanel.textContent = "";
+      try {
+        var result = await call("cases/" + number + "/export-check", "POST", values());
+        var checks = result.checks;
+        node("h3", checks.ok ? "Checks passed" : "Export blocked", checksPanel);
+        (checks.errors || []).forEach(function (text) { node("p", "Error: " + text, checksPanel); });
+        (checks.warnings || []).forEach(function (text) { node("p", "Note: " + text, checksPanel); });
+        if (checks.registration) node("p", "SVG registration: " + checks.registration, checksPanel);
+        if (checks.ok) {
+          button("Download lesson (.zip)", function () {
+            return download("cases/" + number + "/export-lesson", id.value + ".zip", "POST", values());
+          }, checksPanel);
+        }
+      } catch (e) { message.textContent = e.message; }
+      finally { checkButton.disabled = false; }
+    });
+  }
   async function load() {
+    var exportMatch = /^\/teach\/admin\/cases\/(\d+)\/export$/.exec(location.pathname);
     var match = /^\/teach\/admin\/cases\/(\d+)$/.exec(location.pathname);
-    if (match) await casePage(Number(match[1]));
+    if (exportMatch) await exportPage(Number(exportMatch[1]));
+    else if (match) await casePage(Number(match[1]));
     else if (location.pathname === "/teach/admin/environment") await environment();
     else await queue();
     form.hidden = true; body.hidden = false;
