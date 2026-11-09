@@ -180,6 +180,7 @@ class TeachService:
             "title_hidden": hidden,
             "reviewed": bool(meta.get("reviewed")),
             "url": f"/teach/q/{number}",
+            "admin_note_public": meta.get("admin_note_public", ""),
         }
         if meta.get("reviewed"):
             vis = meta.get("visibility") or {}
@@ -187,6 +188,8 @@ class TeachService:
             entry["admin_note_public"] = meta.get("admin_note_public", "")
             if vis.get("thumbnail_opt_in") and vis.get("thumbnail_public"):
                 entry["thumbnail_url"] = f"/teach/q/{number}/thumb.png"
+            if vis.get("bitmap_opt_in") and vis.get("bitmap_public"):
+                entry["bitmap_url"] = f"/teach/q/{number}/image.png"
         else:
             entry["details"] = "awaiting review"
         return entry
@@ -392,13 +395,13 @@ class TeachService:
             out["post_fit_overlay_png"] = data_url(post_overlay)
         return out
 
-    def manage_delete(self, meta: dict) -> dict:
+    def manage_delete(self, meta: dict, by: str = "submitter") -> dict:
         with self._lock:
             sub_id = meta["id"]
             self.storage.delete_prefix(PREFIX + f"submissions/{sub_id}/", keep=(submission_key(sub_id, "meta.json"),))
             now = utc_now()
             tomb = {"schema_version": 1, "id": sub_id, "number": meta["number"], "created_at": meta.get("created_at"),
-                    "status": "deleted", "status_history": [{"status": "deleted", "at": now, "by": "submitter"}],
+                    "status": "deleted", "status_history": [{"status": "deleted", "at": now, "by": by}],
                     "reviewed": meta.get("reviewed", False), "deleted_at": now, "retention": {"status_since": now}}
             self._save(tomb)
         return {"number": meta["number"], "status": "deleted"}

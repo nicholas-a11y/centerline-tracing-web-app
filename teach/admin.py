@@ -102,6 +102,9 @@ def register_admin(bp, svc, windows, environment):
     cfg = svc.cfg
     auth = AdminAuth(cfg.admin_token, svc.quota)
     svc.admin_auth = auth
+    from .review import register_review
+
+    register_review(bp, svc)
 
     def client():
         return limits.client_ip(request.remote_addr, request.headers.get("X-Forwarded-For"), cfg.trusted_proxy_hops)

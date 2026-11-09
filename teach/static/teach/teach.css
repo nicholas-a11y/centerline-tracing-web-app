@@ -21,3 +21,7 @@ img { max-width: 100%; image-rendering: pixelated; border: 1px solid #ccc; }
 #preattach-preview { max-width: 16rem; max-height: 16rem; }
 code.link { word-break: break-all; }
 .help { display: block; font-size: 0.9em; }
+.admin-table { overflow-x: auto; }
+.admin-cards { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0; }
+#admin-content { overflow-wrap: anywhere; }
+#admin-content dl { margin-bottom: 1rem; }

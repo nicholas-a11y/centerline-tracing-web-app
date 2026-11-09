@@ -12,6 +12,7 @@ from .limits import QuotaExceeded, RateLimited
 from .notify import Notifier
 from .scoring_worker import Busy, ScoringQueue
 from .service import TeachService, data_url, public_result
+from .storage import submission_key
 from .validate import Problem, Problems, validate_submission
 
 log = logging.getLogger("teach")
@@ -164,6 +165,16 @@ def create_blueprint(cfg, storage, scorer=None, alert_sender=None, notifier=None
     @bp.get("/manage/<sub_id>")
     def manage_page(sub_id):
         return render_template("teach/manage.html", sub_id=sub_id, local_mode=cfg.local_mode)
+
+    @bp.get("/q/<int:number>/image.png")
+    def item_bitmap(number):
+        entry = svc.public_item(number)
+        if not entry or not entry.get("bitmap_url"):
+            abort(404)
+        png = storage.get(submission_key(svc.id_for_number(number), "image.png"))
+        if png is None:
+            abort(404)
+        return Response(png, mimetype="image/png")
 
     # ------------------------------------------------------------------ public API
 
