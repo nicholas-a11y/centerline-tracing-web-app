@@ -18,7 +18,7 @@ from . import schema
 from .sanitize import clean_text, sanitize_title
 from .similarity import compare, phash, tokens
 from .storage import PREFIX, submission_key
-from .validate import Problem, Problems, TRACE_TEMPLATE_URL, validate_bitmap, validate_reference
+from .validate import Problem, Problems, validate_bitmap, validate_reference
 
 ID_ALPHABET = string.ascii_lowercase + string.digits
 ID_LEN = 12
@@ -67,7 +67,6 @@ def public_result(worker: dict, registration: str | None, overlay_url: str | Non
         "timed_out": bool(worker.get("timed_out")),
         "error": worker.get("error"),
         "registration": registration,
-        "trace_template_url": TRACE_TEMPLATE_URL,
         "overlay_png": overlay_url,
     }
 

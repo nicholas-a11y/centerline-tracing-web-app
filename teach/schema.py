@@ -60,10 +60,10 @@ ADVICE_TEXT = (
 RULES = (
     "One problem per submission.",
     "Search the queue first. If your case is already there, use \"me too\".",
-    "The SVG must be registered to the bitmap. Best: keep the traced image in the export (LightBurn "
-    "does this as long as the image is not hidden or deleted), or start from the trace template. "
-    "Otherwise match the bitmap's pixel size or include a border rect. Draw one open path per "
-    "stroke, along the ideal centre.",
+    "The SVG must be registered to the bitmap. Best: trace over the original (cropped) image and keep "
+    "the image in the exported SVG (in LightBurn you may disable the image layer's output; the image "
+    "stays in the export). Otherwise make the SVG width/height/viewBox equal the bitmap's pixel size, "
+    "with coordinates in pixels. Draw one open path per stroke, along the ideal centre.",
     "Crop to the problem area with some context. No confidential or personal content.",
     "You cannot set the scoring tolerance; the maintainer does.",
     "Run /teach/api/validate first and fix every error before submitting.",
@@ -159,8 +159,6 @@ def openapi() -> dict:
             }
         }
     }
-    image_only = {"multipart/form-data": {"schema": {
-        "type": "object", "properties": {"image": {"type": "string", "format": "binary"}}, "required": ["image"]}}}
     json_resp = {"application/json": {"schema": _response_schema()}}
     std = {"200": {"description": "Validation response", "content": json_resp},
            "413": {"description": "request_too_large"}, "429": {"description": "rate_limited"},
@@ -175,11 +173,6 @@ def openapi() -> dict:
         "paths": {
             "/teach/api/validate": {"post": {"summary": "Dry run: validate and score; stores nothing",
                                              "requestBody": {"content": multipart}, "responses": std}},
-            "/teach/api/trace-template": {"post": {
-                "summary": "Bitmap only -> zip of faded PNG, template SVG and README; stores nothing",
-                "requestBody": {"content": image_only},
-                "responses": {"200": {"description": "zip", "content": {"application/zip": {}}},
-                              "422": {"description": "image errors", "content": json_resp}}}},
             "/teach/api/similar": {"post": {"summary": "Duplicate check only",
                                             "requestBody": {"content": multipart}, "responses": std}},
             "/teach/api/submissions": {"post": {

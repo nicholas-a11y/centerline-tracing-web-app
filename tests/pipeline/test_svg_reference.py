@@ -62,7 +62,8 @@ def test_rejects_size_mismatch_with_fix_hint():
     with pytest.raises(SvgReferenceError, match="does not match the bitmap size") as exc:
         read_reference_svg(_svg('<path d="M0 0 L5 5"/>', 50, 50), (100, 100))
     assert exc.value.code == "svg_no_registration"
-    assert "trace template" in str(exc.value)
+    assert "trace template" not in str(exc.value)
+    assert "width/height/viewBox equal the bitmap's pixel size" in str(exc.value)
 
 
 # --- transforms -------------------------------------------------------------

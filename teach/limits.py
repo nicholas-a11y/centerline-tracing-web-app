@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 HOUR = 3600.0
 
 # (limit, window seconds); per IP unless the key says global
-VALIDATE_PER_IP = (60, HOUR)          # shared by /api/validate and /api/trace-template
+VALIDATE_PER_IP = (60, HOUR)          # /api/validate
 VALIDATE_GLOBAL = (600, HOUR)
 SIMILAR_PER_IP = (60, HOUR)
 SUBMIT_PER_IP_HOUR = (5, HOUR)        # submissions + me-too

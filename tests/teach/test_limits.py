@@ -152,20 +152,13 @@ def test_second_request_from_same_ip_gets_503(make_teach):
     assert t.storage.list("teach/submissions/") == []
 
 
-def test_validate_and_trace_template_share_a_counter(make_teach, monkeypatch):
-    import io
-
-    from .conftest import IMAGE
-
+def test_validate_per_ip_limit(make_teach, monkeypatch):
     monkeypatch.setattr(limits, "VALIDATE_PER_IP", (2, limits.HOUR))
     t = make_teach()
     assert post(t.client, "/teach/api/validate").status_code == 200
-    r = t.client.post("/teach/api/trace-template", data={"image": (io.BytesIO(IMAGE), "a.png")},
-                      content_type="multipart/form-data")
-    assert r.status_code == 200
-    r = t.client.post("/teach/api/trace-template", data={"image": (io.BytesIO(IMAGE), "a.png")},
-                      content_type="multipart/form-data")
-    assert r.status_code == 429
+    assert post(t.client, "/teach/api/validate").status_code == 200
+    r = post(t.client, "/teach/api/validate")
+    assert r.status_code == 429 and r.get_json()["errors"][0]["code"] == "rate_limited"
 
 
 def test_submission_limit_per_hour(make_teach, monkeypatch):

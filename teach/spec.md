@@ -12,10 +12,11 @@ Machine-readable versions: `/teach/openapi.json` (OpenAPI 3.1) and
 
 1. One problem per submission.
 2. Search the queue first (`/teach/queue`). If your case is already there, use "me too".
-3. The SVG must be registered to the bitmap. Best: keep the traced image in the export
-   (LightBurn does this as long as the image is not hidden or deleted), or start from
-   the trace template. Otherwise match the bitmap's pixel size or include a border
-   rect. Draw one open path per stroke, along the ideal centre.
+3. The SVG must be registered to the bitmap. Best: trace over the original (cropped)
+   image and keep the image in the exported SVG (in LightBurn you may disable the image
+   layer's output; the image stays in the export). Otherwise make the SVG
+   width/height/viewBox equal the bitmap's pixel size, with coordinates in pixels.
+   Draw one open path per stroke, along the ideal centre.
 4. Crop to the problem area with some context. No confidential or personal content.
 5. You cannot set the scoring tolerance; the maintainer does.
 6. Run `/teach/api/validate` first and fix every error before submitting.
@@ -58,7 +59,6 @@ manage link.*
 | method and path | purpose |
 |---|---|
 | `POST /teach/api/validate` | dry run: validate and score; stores nothing |
-| `POST /teach/api/trace-template` | `image` only; returns a zip with a faded PNG, a template SVG and a README; stores nothing |
 | `POST /teach/api/similar` | duplicate check only |
 | `POST /teach/api/submissions` | submit (201) |
 | `POST /teach/api/submissions/<number>/me-too` | `meta` = `{"note": "...", "consent": true}`, optionally with a variant `image` and `reference` |
@@ -80,22 +80,9 @@ manage link.*
   (`px`, `mm`, `cm`, `in`, `pt`, `pc`) are supported.
 * Not supported: `<use>`, DOCTYPE/ENTITY declarations, linked (non-embedded) images.
   Styles, text and other non-geometry elements are ignored.
-* **LightBurn:** keep the image in the export (do not hide or delete it) and leave the
+* **LightBurn:** trace over the original image and keep it in the export (do not delete it;
+  disabling the image layer's output is fine, the image stays in the exported SVG). Leave the
   traced paths ungrouped. Document units mm or px are both fine.
-
-## Trace template (recommended for agents)
-
-When you have a bitmap but no SVG yet, `POST` the bitmap alone to
-`/teach/api/trace-template`. The zip contains:
-
-* `<name>-faded.png`: the bitmap faded towards white, same pixel size, 96 dpi;
-* `<name>-template.svg`: `width`/`height` in px equal to the bitmap, `viewBox="0 0 W H"`,
-  the faded PNG embedded at `0,0 W×H`, and nothing else;
-* `<name>-README.txt`.
-
-Add one open `<path>` per stroke to the template SVG, in its pixel coordinates (pixel
-edges), keep the `<image>`, and submit that file as `reference`. This is the most
-reliable way to produce a correctly registered SVG.
 
 ## Worked example
 
@@ -117,7 +104,6 @@ which is exactly the kind of case Teach is for:
             "summary": {"passed": false, "min_single_coverage": 0.386, "max_p95_px": 32.631,
                         "path_count": 5, "junctions_in_region": 2, "...": "..."},
             "registration": "size_match", "engine_commit": "...",
-            "trace_template_url": "/teach/api/trace-template",
             "overlay_png": "data:image/png;base64,..."}}
 ```
 
@@ -154,7 +140,7 @@ Other statuses: 409 `duplicate_exact`, 413 `request_too_large`, 422 validation e
 
 ## Limits
 
-* Validate and trace template together: 60 per hour per IP, 600 per hour overall.
+* Validate: 60 per hour per IP, 600 per hour overall.
 * Similar: 60 per hour per IP.
 * Submissions and "me too" together: 5 per hour and 20 per day per IP, 200 per day overall;
   20 MB per day per IP and 500 MB per day overall.

@@ -19,7 +19,6 @@ from PIL import Image
 from tests.pipeline.evaluate import PRIMARY_VARIANT, evaluate
 from tests.pipeline.lesson import LESSONS_DIR, load_lesson
 from tests.pipeline.svg_reference import read_reference_svg
-from tests.pipeline.trace_template import build_template_files
 
 SAMPLE = Path(__file__).parent / "samples" / "lightburn-cross-t2-w8-a35.svg"
 FADED_SAMPLE = Path(__file__).parent / "samples" / "lightburn-faded-cross-t2-w8-a35.svg"
@@ -111,7 +110,7 @@ def test_user_lesson_matches_generated_lesson_baseline():
     assert up == pytest.approx(gp, abs=0.1)
 
 
-# --- second export: traced over the faded trace-template PNG (Stage 2c route) ---
+# --- second export: traced over a faded copy of the image, placed elsewhere on the canvas ---
 
 def _distance_to_line(pts: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
     d = (b - a) / np.linalg.norm(b - a)
@@ -146,14 +145,16 @@ def test_faded_sample_recovers_same_lines_as_first_sample():
         assert np.sort(second[:, 1])[[0, -1]] == pytest.approx(np.sort(first[:, 1])[[0, -1]], abs=0.1)
 
 
-def test_faded_sample_embeds_the_trace_template_png():
-    """Test-only decode: the embedded PNG is the faded template (fade 0.35), stored vertically flipped."""
+def test_faded_sample_embeds_a_lighter_flipped_copy():
+    """Test-only decode: the embedded PNG is a lighter copy of image.png, stored vertically flipped."""
     text = FADED_SAMPLE.read_text(encoding="utf-8")
     b64 = re.search(r'href="data:image/png;base64,([^"]+)"', text).group(1)
     with Image.open(io.BytesIO(base64.b64decode(b64))) as im:
-        embedded = np.asarray(im.convert("L"), dtype=int)
-    files = build_template_files((GENERATED / "image.png").read_bytes(), "image", fade=0.35)
-    with Image.open(io.BytesIO(files["image-faded.png"])) as im:
-        faded = np.asarray(im.convert("L"), dtype=int)
-    assert not np.array_equal(embedded, faded)
-    assert np.array_equal(embedded, np.flipud(faded))
+        embedded = np.flipud(np.asarray(im.convert("L"), dtype=int))
+    with Image.open(GENERATED / "image.png") as im:
+        lesson = np.asarray(im.convert("L"), dtype=int)
+    assert embedded.shape == lesson.shape
+    assert embedded.min() > lesson.min()                         # faded towards white
+    assert np.all(embedded >= lesson)
+    ink = lesson < 128
+    assert embedded[ink].mean() < embedded[~ink].mean() - 50    # same strokes, same place

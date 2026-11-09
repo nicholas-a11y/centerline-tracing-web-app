@@ -607,8 +607,8 @@ def _size_match_mapping(root: ET.Element, bw: float, bh: float) -> tuple[_Affine
         raise SvgReferenceError(f"Invalid viewBox {root.get('viewBox')!r}.", "svg_parse")
     no_reg = ("Cannot register the SVG onto the bitmap: there is no <image> placement frame, no "
               "<rect id=\"border\">, and neither width/height nor the viewBox equals the bitmap size "
-              f"{bw:g}x{bh:g} px. Keep the bitmap in the export (it is used only for alignment) or "
-              "start from the trace template.")
+              f"{bw:g}x{bh:g} px. Keep the image in the export (it is used only for alignment), or make "
+              "the SVG width/height/viewBox equal the bitmap's pixel size, with coordinates in pixels.")
     try:
         w_parts = _split_length(root.get("width"), "width")
         h_parts = _split_length(root.get("height"), "height")

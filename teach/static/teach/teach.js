@@ -3,8 +3,6 @@
   "use strict";
   var form = document.getElementById("case-form");
   var out = document.getElementById("result");
-  var tplForm = document.getElementById("template-form");
-  var tplStatus = document.getElementById("template-status");
 
   function el(tag, text, cls) {
     var e = document.createElement(tag);
@@ -152,30 +150,4 @@
     send("/teach/api/submissions", "Submitting");
   });
   form.addEventListener("submit", function (ev) { ev.preventDefault(); });
-
-  tplForm.addEventListener("submit", function (ev) {
-    ev.preventDefault();
-    var fd = new FormData(tplForm);
-    tplStatus.textContent = "Preparing template…";
-    fetch(tplForm.action, { method: "POST", body: fd, credentials: "same-origin" }).then(function (resp) {
-      var type = resp.headers.get("Content-Type") || "";
-      if (resp.ok && type.indexOf("application/zip") === 0) {
-        return resp.blob().then(function (blob) {
-          var cd = resp.headers.get("Content-Disposition") || "";
-          var m = /filename="([^"]+)"/.exec(cd);
-          var a = document.createElement("a");
-          a.href = URL.createObjectURL(blob);
-          a.download = m ? m[1] : "trace-template.zip";
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          tplStatus.textContent = "Template downloaded.";
-        });
-      }
-      return resp.json().then(function (body) {
-        tplStatus.textContent = "";
-        tplStatus.appendChild(problemList("Problems", body.errors, "error"));
-      });
-    }).catch(function () { tplStatus.textContent = "Network error; please try again."; });
-  });
 })();

@@ -150,7 +150,7 @@ def test_validate_response_shape(teach):
     assert r.status_code == 200 and set(body) == {"ok", "errors", "warnings", "result"}
     assert body["ok"] is True and body["result"]["outcome"] == "fail"
     assert body["result"]["overlay_png"].startswith("data:image/png;base64,")
-    assert body["result"]["trace_template_url"] == "/teach/api/trace-template"
+    assert "trace_template_url" not in body["result"]
     bad = post(teach.client, "/teach/api/validate", title="")
     assert bad.status_code == 200 and bad.get_json()["ok"] is False and _first_code(bad) == "field_missing"
 

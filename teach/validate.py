@@ -11,12 +11,11 @@ from dataclasses import dataclass, field
 from . import schema
 from .sanitize import clean_text
 
-TRACE_TEMPLATE_URL = "/teach/api/trace-template"
-
 _SVG_HINTS = {
-    "svg_no_registration": "Keep the traced image in the export, or start from " + TRACE_TEMPLATE_URL + ".",
+    "svg_no_registration": ("keep the image in the export, or make the SVG width/height/viewBox equal the bitmap's "
+                            "pixel size, with coordinates in pixels"),
     "svg_bitmap_mismatch": "The SVG was traced over a different picture; trace over this exact bitmap.",
-    "svg_image_unreadable": "Embed the bitmap as a base64 PNG or JPEG (not a link), or start from the trace template.",
+    "svg_image_unreadable": "Embed the bitmap as a base64 PNG or JPEG (not a link).",
     "svg_image_aspect": "Do not stretch or crop the bitmap in the editor.",
     "svg_image_rotated": "Place the bitmap upright (flips are fine) and re-export.",
     "svg_multiple_images": "Keep exactly one image: the bitmap being traced.",
@@ -168,7 +167,7 @@ def validate_reference(data: bytes, bitmap_size: tuple[int, int], fld: str = "re
 
     if not data:
         raise Problems([Problem(fld, "field_missing", "No reference SVG was uploaded.",
-                                "Send the traced SVG as 'reference', or start from " + TRACE_TEMPLATE_URL + ".")])
+                                "Send the traced SVG as 'reference', with the traced image kept in the export.")])
     try:
         ref = read_reference_svg(data, bitmap_size, max_bytes=schema.MAX_SVG_BYTES, strict_image=True)
     except SvgReferenceError as exc:

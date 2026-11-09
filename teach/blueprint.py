@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import io
 import logging
-import zipfile
 from pathlib import Path
 
 from flask import Blueprint, Response, abort, jsonify, render_template, request
@@ -14,7 +12,7 @@ from .limits import QuotaExceeded, RateLimited
 from .notify import Notifier
 from .scoring_worker import Busy, ScoringQueue
 from .service import TeachService, data_url, public_result
-from .validate import Problem, Problems, TRACE_TEMPLATE_URL, validate_bitmap, validate_submission
+from .validate import Problem, Problems, validate_submission
 
 log = logging.getLogger("teach")
 HERE = Path(__file__).resolve().parent
@@ -23,7 +21,6 @@ SPEC_PATH = HERE / "spec.md"
 
 CSP = "default-src 'self'; img-src 'self' data:; script-src 'self'; object-src 'none'; base-uri 'none'; " \
       "frame-ancestors 'none'; form-action 'self'"
-TEMPLATE_BODY_BYTES = schema.MAX_IMAGE_BYTES + 64 * 1024
 NOINDEX_ENDPOINTS = {"teach.queue_page", "teach.item_page", "teach.manage_page"}
 EXAMPLE_FILES = {"image.png": "image/png", "reference.svg": "image/svg+xml", "request.json": "application/json"}
 
@@ -69,8 +66,7 @@ def create_blueprint(cfg, storage, scorer=None, alert_sender=None, notifier=None
 
     @bp.before_request
     def _body_limit():
-        request.max_content_length = TEMPLATE_BODY_BYTES if request.endpoint == "teach.api_trace_template" \
-            else schema.MAX_BODY_BYTES
+        request.max_content_length = schema.MAX_BODY_BYTES
 
     @bp.after_request
     def _headers(resp):
@@ -177,32 +173,6 @@ def create_blueprint(cfg, storage, scorer=None, alert_sender=None, notifier=None
         if entry is None:
             return _problem(404, "number", "not_found", f"#{number} does not exist.")
         return jsonify(entry)
-
-    @bp.post("/api/trace-template")
-    def api_trace_template():
-        try:
-            windows.hit((f"validate:{ip()}",) + limits.VALIDATE_PER_IP, ("global:validate",) + limits.VALIDATE_GLOBAL)
-        except RateLimited as exc:
-            return _limited(exc)
-        img = request.files.get("image")
-        data = img.read() if img else b""
-        try:
-            bitmap = validate_bitmap(data)
-        except Problems as exc:
-            resp, _ = _response(False, exc.problems)
-            resp.status_code = 422
-            return resp
-        from lessonkit.trace_template import build_template_files
-
-        name = _safe_stem(img.filename if img else "")
-        files = build_template_files(bitmap.png, name)
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            for fname, content in files.items():
-                zf.writestr(fname, content)
-        resp = Response(buf.getvalue(), mimetype="application/zip")
-        resp.headers["Content-Disposition"] = f'attachment; filename="{name}-trace-template.zip"'
-        return resp
 
     @bp.post("/api/validate")
     def api_validate():
@@ -361,9 +331,3 @@ def create_blueprint(cfg, storage, scorer=None, alert_sender=None, notifier=None
         return request.form.get("note") or "", (ref.read() if ref else None)
 
     return bp
-
-
-def _safe_stem(filename: str) -> str:
-    stem = Path(filename or "bitmap").stem
-    cleaned = "".join(c if c.isalnum() or c in "-_" else "-" for c in stem)[:40].strip("-")
-    return cleaned or "bitmap"

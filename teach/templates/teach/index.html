@@ -14,20 +14,8 @@ Agents: read the <a href="{{ url_for('teach.spec') }}">spec</a> or the <a href="
   <p>Advice: {{ advice }}</p>
 </section>
 
-<section aria-labelledby="tpl-h">
-  <h2 id="tpl-h">1. Optional: download a trace template</h2>
-  <p>Upload your bitmap to get a zip with a faded PNG and a template SVG. Trace over it in your vector program,
-     keep the image in the export, and the SVG will line up. Nothing is stored.</p>
-  <form id="template-form" action="{{ url_for('teach.api_trace_template') }}" method="post" enctype="multipart/form-data">
-    <label for="tpl-image">Bitmap (PNG or JPEG)</label>
-    <input id="tpl-image" name="image" type="file" accept="image/png,image/jpeg" required>
-    <button type="submit">Download trace template</button>
-  </form>
-  <div id="template-status" role="status" aria-live="polite"></div>
-</section>
-
 <section aria-labelledby="sub-h">
-  <h2 id="sub-h">2. Validate and submit</h2>
+  <h2 id="sub-h">Validate and submit</h2>
   <noscript><p class="error">This form needs JavaScript to build the request. Without it, use the API described in the
     <a href="{{ url_for('teach.spec') }}">spec</a>.</p></noscript>
   <form id="case-form" novalidate>
