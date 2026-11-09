@@ -1061,8 +1061,11 @@ that file is authoritative and this copy is for reference. Action versions were 
 against the actions' release pages on 2026-11-09 (checkout v7, setup-python v7,
 upload-artifact v7, download-artifact v8). It runs the two new suites under
 Python 3.11 (pinned to `runtime.txt`) and 3.12, writes the lesson table as JSON for
-each, and then compares the two versions. The comparison only reports differences; it
-does not fail the job. It never runs `--mark-failing-as-baseline` or `--record`.
+each, and then compares the two versions. Lesson differences are only reported and do
+not fail the job, but the compare job fails if either run produced no `lessons.json`.
+The 3.11.13 job runs on `ubuntu-24.04` because setup-python has no 3.11.13 build for
+Ubuntu 26.04 (`ubuntu-latest`); revisit when that image is retired. It never runs
+`--mark-failing-as-baseline` or `--record`.
 
 ```yaml
 name: lessons
@@ -1082,12 +1085,19 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11.13", "3.12"]
+        include:
+          # 3.11.13 matches runtime.txt (the deployed runtime). setup-python has no 3.11.13
+          # build for Ubuntu 26.04 (ubuntu-latest), so this job is pinned to ubuntu-24.04.
+          # Revisit when the ubuntu-24.04 runner image is retired or runtime.txt changes.
+          - python-version: "3.11.13"
+            os: ubuntu-24.04
+          - python-version: "3.12"
+            os: ubuntu-latest
     env:
       PYTHONWARNINGS: "ignore::FutureWarning"
       TEACH_ENABLED: "0"
@@ -1141,8 +1151,9 @@ jobs:
               return round(x, 3) if isinstance(x, float) else x
           a, b = load("3.11.13"), load("3.12")
           out = ["## Lesson results: Python 3.11 vs 3.12", ""]
-          if a is None or b is None:
-              out.append("One of the runs produced no lessons.json; see the test job.")
+          missing = [v for v, r in (("3.11.13", a), ("3.12", b)) if r is None]
+          if missing:
+              out.append(f"No lessons.json from Python {', '.join(missing)}; see the test job.")
           else:
               diffs = [i for i in sorted(set(a) | set(b)) if norm(a.get(i)) != norm(b.get(i))]
               out.append(f"{len(a)} lessons compared; {len(diffs)} differ (timings ignored).")
@@ -1150,6 +1161,8 @@ jobs:
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
               f.write("\n".join(out) + "\n")
           print("\n".join(out))
+          if missing:
+              raise SystemExit(1)
           PY
       - name: Compare installed versions
         run: diff artifacts/lessons-py3.11.13/pip-freeze.txt artifacts/lessons-py3.12/pip-freeze.txt || true
