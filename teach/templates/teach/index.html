@@ -1,0 +1,97 @@
+{% extends "teach/base.html" %}
+{% block title %}Submit a hard case{% endblock %}
+{% block main %}
+<h1>Teach the tracer a hard case</h1>
+<p>Found an image the tracer gets wrong? Send the bitmap and a hand-traced SVG of the centerlines you expected.
+The case is scored against the live engine, reviewed, and may become a permanent test.
+Agents: read the <a href="{{ url_for('teach.spec') }}">spec</a> or the <a href="{{ url_for('teach.openapi') }}">OpenAPI document</a>.</p>
+
+<section aria-labelledby="rules-h">
+  <h2 id="rules-h">Rules</h2>
+  <ol>
+    {% for rule in rules %}<li>{{ rule }}</li>{% endfor %}
+  </ol>
+  <p>Advice: {{ advice }}</p>
+</section>
+
+<section aria-labelledby="tpl-h">
+  <h2 id="tpl-h">1. Optional: download a trace template</h2>
+  <p>Upload your bitmap to get a zip with a faded PNG and a template SVG. Trace over it in your vector program,
+     keep the image in the export, and the SVG will line up. Nothing is stored.</p>
+  <form id="template-form" action="{{ url_for('teach.api_trace_template') }}" method="post" enctype="multipart/form-data">
+    <label for="tpl-image">Bitmap (PNG or JPEG)</label>
+    <input id="tpl-image" name="image" type="file" accept="image/png,image/jpeg" required>
+    <button type="submit">Download trace template</button>
+  </form>
+  <div id="template-status" role="status" aria-live="polite"></div>
+</section>
+
+<section aria-labelledby="sub-h">
+  <h2 id="sub-h">2. Validate and submit</h2>
+  <noscript><p class="error">This form needs JavaScript to build the request. Without it, use the API described in the
+    <a href="{{ url_for('teach.spec') }}">spec</a>.</p></noscript>
+  <form id="case-form" novalidate>
+    <fieldset>
+      <legend>Files</legend>
+      <p><label for="image">Bitmap (PNG or JPEG, up to {{ (limits.MAX_IMAGE_BYTES // 1048576) }} MB, 32–2048 px per side)</label>
+        <input id="image" name="image" type="file" accept="image/png,image/jpeg" required></p>
+      <p><label for="reference">Reference SVG (up to {{ (limits.MAX_SVG_BYTES // 1024) }} KB including any embedded image)</label>
+        <input id="reference" name="reference" type="file" accept=".svg,image/svg+xml" required></p>
+    </fieldset>
+    <fieldset>
+      <legend>Description</legend>
+      <p><label for="title">Title (required, {{ text_fields.title[1] }} characters; a cleaned version up to 80 characters is public straight away)</label>
+        <input id="title" name="title" maxlength="{{ text_fields.title[1] }}" required></p>
+      <p><label for="what_is_wrong">What is wrong (required)</label>
+        <textarea id="what_is_wrong" name="what_is_wrong" maxlength="{{ text_fields.what_is_wrong[1] }}" rows="3" required></textarea></p>
+      <p><label for="what_is_expected">What you expected (required)</label>
+        <textarea id="what_is_expected" name="what_is_expected" maxlength="{{ text_fields.what_is_expected[1] }}" rows="3" required></textarea></p>
+      <p><label for="notes">Notes (optional)</label>
+        <textarea id="notes" name="notes" maxlength="{{ text_fields.notes[1] }}" rows="2"></textarea></p>
+    </fieldset>
+    <fieldset>
+      <legend>Focus box (optional, bitmap pixels; leave empty to score the whole image)</legend>
+      <p class="inline">
+        <label for="fx0">x0</label><input id="fx0" name="x0" type="number" step="any" inputmode="decimal">
+        <label for="fy0">y0</label><input id="fy0" name="y0" type="number" step="any" inputmode="decimal">
+        <label for="fx1">x1</label><input id="fx1" name="x1" type="number" step="any" inputmode="decimal">
+        <label for="fy1">y1</label><input id="fy1" name="y1" type="number" step="any" inputmode="decimal">
+      </p>
+    </fieldset>
+    <fieldset>
+      <legend>Engine settings (optional; defaults match the app)</legend>
+      <p><label for="dark_threshold">Dark threshold (0.05–0.8)</label>
+        <input id="dark_threshold" name="dark_threshold" type="number" min="0.05" max="0.8" step="0.01" placeholder="0.2"></p>
+      <p><label for="min_path_length">Minimum path length (1–20)</label>
+        <input id="min_path_length" name="min_path_length" type="number" min="1" max="20" step="1" placeholder="2"></p>
+      <p><input id="enable_pruning" name="enable_pruning" type="checkbox"> <label for="enable_pruning">Enable pruning</label></p>
+      <p><label for="normalization_mode">Normalisation</label>
+        <select id="normalization_mode" name="normalization_mode"><option value="">default (auto)</option><option>auto</option><option>on</option><option>off</option></select></p>
+      <p><label for="normalization_sensitivity">Normalisation sensitivity</label>
+        <select id="normalization_sensitivity" name="normalization_sensitivity"><option value="">default (medium)</option><option>low</option><option>medium</option><option>high</option></select></p>
+    </fieldset>
+    <fieldset>
+      <legend>Visibility and consent</legend>
+      <p><input id="public_thumbnail" name="public_thumbnail" type="checkbox"> <label for="public_thumbnail">Show the overlay thumbnail publicly after review</label></p>
+      <p><input id="share_bitmap" name="share_bitmap" type="checkbox"> <label for="share_bitmap">Allow the full bitmap to be public after review</label></p>
+      <p><label for="not_duplicate_reason">If a similar item was found: why yours is different (optional, one line)</label>
+        <input id="not_duplicate_reason" name="not_duplicate_reason" maxlength="{{ text_fields.not_duplicate_reason[1] }}"></p>
+      <p><input id="consent" name="consent" type="checkbox" required> <label for="consent">{{ consent }}</label></p>
+    </fieldset>
+    <p class="buttons">
+      <button type="button" id="btn-validate">Validate (stores nothing)</button>
+      <button type="button" id="btn-similar">Check for similar items</button>
+      <button type="button" id="btn-submit">Submit</button>
+    </p>
+  </form>
+  <div id="result" role="status" aria-live="polite"></div>
+</section>
+
+<section aria-labelledby="spec-h">
+  <h2 id="spec-h">Full spec</h2>
+  <details><summary>Show the spec (also at <a href="{{ url_for('teach.spec') }}">/teach/spec</a>)</summary>
+    <pre class="spec">{{ spec }}</pre>
+  </details>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('teach.static', filename='teach/teach.js') }}"></script>{% endblock %}

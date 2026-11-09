@@ -1,0 +1,29 @@
+{% extends "teach/base.html" %}
+{% block title %}Queue{% endblock %}
+{% block main %}
+<h1>Submitted cases</h1>
+<form method="get" action="{{ url_for('teach.queue_page') }}" role="search">
+  <label for="q">Search titles or a number</label>
+  <input id="q" name="q" value="{{ q }}" maxlength="100">
+  <button type="submit">Search</button>
+</form>
+{% if items %}
+<table>
+  <caption>{{ items|length }} item{{ '' if items|length == 1 else 's' }}{% if q %} matching “{{ q }}”{% endif %}</caption>
+  <thead><tr><th scope="col">#</th><th scope="col">Title</th><th scope="col">Status</th><th scope="col">Me too</th><th scope="col">Submitted</th></tr></thead>
+  <tbody>
+  {% for item in items %}
+    <tr>
+      <td><a href="{{ url_for('teach.item_page', number=item.number) }}">#{{ item.number }}</a></td>
+      <td>{% if item.title_hidden %}<em>(title hidden)</em>{% else %}{{ item.title }}{% endif %}</td>
+      <td>{{ item.status|replace('_', ' ') }}</td>
+      <td>{{ item.me_too_count }}</td>
+      <td>{{ (item.created_at or '')[:10] }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No items{% if q %} match “{{ q }}”{% endif %}.</p>
+{% endif %}
+{% endblock %}

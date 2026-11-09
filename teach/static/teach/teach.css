@@ -1,0 +1,21 @@
+body { font: 16px/1.5 system-ui, sans-serif; max-width: 52rem; margin: 0 auto; padding: 0 1rem 3rem; color: #111; }
+.skip { position: absolute; left: -999px; }
+.skip:focus { left: 1rem; top: 1rem; background: #fff; padding: .25rem; }
+header nav { display: flex; gap: 1rem; padding: 1rem 0; border-bottom: 1px solid #ccc; flex-wrap: wrap; }
+.banner { background: #fff4c2; border: 1px solid #b38f00; padding: .5rem; }
+fieldset { margin: 1rem 0; border: 1px solid #bbb; }
+label { display: block; font-weight: 600; }
+input[type=checkbox] + label, .inline label { display: inline; font-weight: normal; }
+.inline input { width: 6rem; margin-right: 1rem; }
+input:not([type=checkbox]):not([type=file]), textarea, select { width: 100%; max-width: 40rem; font: inherit; }
+button { font: inherit; padding: .4rem .9rem; margin-right: .5rem; }
+:focus-visible { outline: 3px solid #1a5fb4; outline-offset: 2px; }
+.pass { color: #1b5e20; font-weight: 700; }
+.fail, .error { color: #b00020; font-weight: 700; }
+.warn { color: #7a4f00; }
+.spec, .pre { white-space: pre-wrap; }
+.spec { background: #f6f6f6; padding: 1rem; overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border-bottom: 1px solid #ddd; padding: .3rem .5rem; text-align: left; }
+img { max-width: 100%; image-rendering: pixelated; border: 1px solid #ccc; }
+code.link { word-break: break-all; }

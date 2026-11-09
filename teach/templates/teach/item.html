@@ -1,0 +1,24 @@
+{% extends "teach/base.html" %}
+{% block title %}#{{ item.number }}{% endblock %}
+{% block main %}
+<h1>#{{ item.number }}{% if item.status != 'deleted' %}: {% if item.title_hidden %}<em>(title hidden)</em>{% else %}{{ item.title }}{% endif %}{% endif %}</h1>
+{% if item.status == 'deleted' %}
+<p>This item was deleted.</p>
+{% else %}
+<dl>
+  <dt>Status</dt><dd>{{ item.status|replace('_', ' ') }}</dd>
+  <dt>Submitted</dt><dd>{{ item.created_at }}</dd>
+  <dt>Me too</dt><dd>{{ item.me_too_count }}</dd>
+</dl>
+{% if item.reviewed %}
+  <h2>What is wrong</h2><p class="pre">{{ item.what_is_wrong }}</p>
+  <h2>What was expected</h2><p class="pre">{{ item.what_is_expected }}</p>
+  {% if item.notes %}<h2>Notes</h2><p class="pre">{{ item.notes }}</p>{% endif %}
+  {% if item.admin_note_public %}<h2>Maintainer note</h2><p class="pre">{{ item.admin_note_public }}</p>{% endif %}
+  {% if item.thumbnail_url %}<p><img src="{{ item.thumbnail_url }}" alt="Overlay of the engine's centerlines (red) and the reference (green) for #{{ item.number }}"></p>{% endif %}
+{% else %}
+  <p>Details are private until the maintainer has reviewed this item.</p>
+{% endif %}
+<p>Have the same problem? Use “me too” through the API: <code>POST /teach/api/submissions/{{ item.number }}/me-too</code> (see the <a href="{{ url_for('teach.spec') }}">spec</a>).</p>
+{% endif %}
+{% endblock %}

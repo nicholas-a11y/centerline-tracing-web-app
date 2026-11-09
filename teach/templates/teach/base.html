@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Teach{% endblock %} – Centerline tracer</title>
+<link rel="stylesheet" href="{{ url_for('teach.static', filename='teach/teach.css') }}">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header>
+  <nav aria-label="Teach">
+    <a href="{{ url_for('teach.index') }}">Teach</a>
+    <a href="{{ url_for('teach.queue_page') }}">Queue</a>
+    <a href="{{ url_for('teach.spec') }}">Spec</a>
+    <a href="/">Back to the tracer</a>
+  </nav>
+  {% if local_mode %}
+  <p class="banner" role="note"><strong>LOCAL MODE:</strong> submissions are stored in a local folder on this machine, not in the cloud.</p>
+  {% endif %}
+</header>
+<main id="main">
+{% block main %}{% endblock %}
+</main>
+{% block scripts %}{% endblock %}
+</body>
+</html>
