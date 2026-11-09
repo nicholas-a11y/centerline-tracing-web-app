@@ -11,6 +11,12 @@ from .storage import submission_key
 from .validate import validate_focus_box
 
 
+def history_label(results):
+    from .rescore import history_label as label
+
+    return label(results)
+
+
 def case_for_number(svc, number):
     sid = svc.id_for_number(number)
     meta = svc.load_meta(sid) if sid else None
@@ -34,6 +40,8 @@ def case_view(svc, meta):
     out["post_fit_overlay_png"] = data_url(svc.storage.get(submission_key(meta["id"], "overlay_post_fit.png")))
     out["bitmap_png"] = data_url(svc.storage.get(submission_key(meta["id"], "image.png")))
     out["me_too_count"] = len(meta.get("me_too") or [])
+    out["history_label"] = history_label(meta.get("results"))
+    out["app_centerline_available"] = svc.storage.get(submission_key(meta["id"], "app_centerline.svg")) is not None
     return out
 
 
@@ -90,9 +98,10 @@ def review_update(svc, number, data):
     return meta
 
 
-def register_review(bp, svc):
+def register_review(bp, svc, rescores, client_ip):
     @bp.get("/admin/cases/<int:number>")
     def admin_case_page(number):
+        case_for_number(svc, number)
         return render_template("teach/admin.html", local_mode=svc.cfg.local_mode)
 
     @bp.get("/api/admin/summary")
@@ -111,6 +120,7 @@ def register_review(bp, svc):
             items.append({"number": meta["number"], "title": meta.get("title", ""),
                           "title_hidden": meta.get("title_hidden", False), "status": meta["status"],
                           "outcome": last.get("outcome", "unknown"), "engine_commit": last.get("engine_commit"),
+                          "history_label": history_label(meta.get("results")),
                           "me_too_count": len(meta.get("me_too") or []), "merged": bool(meta.get("merged")),
                           "settings": settings_label(meta.get("params")), "created_at": meta.get("created_at")})
         status = request.args.get("status", "")
@@ -145,6 +155,27 @@ def register_review(bp, svc):
             abort(404)
         resp = Response(raw, content_type="text/plain; charset=utf-8")
         resp.headers["Content-Disposition"] = f'attachment; filename="hand_traced-{number}.svg"'
+        return resp
+
+    @bp.post("/api/admin/cases/<int:number>/rescore")
+    def admin_rescore_case(number):
+        case_for_number(svc, number)
+        job = rescores.start_one(number, client_ip())
+        if job is None:
+            return jsonify({"ok": False, "error": "A re-score job is already running."}), 409
+        return jsonify({"ok": True, "job": job}), 202
+
+    @bp.get("/api/admin/cases/<int:number>/app_centerline.svg")
+    def admin_centerline(number):
+        meta = case_for_number(svc, number)
+        raw = svc.storage.get(submission_key(meta["id"], "app_centerline.svg"))
+        if raw is None:
+            job = rescores.start_one(number, client_ip())
+            if job is None:
+                return jsonify({"ok": False, "error": "A re-score job is already running."}), 409
+            return jsonify({"ok": True, "job": job, "message": "Generating the app centerline; retry after scoring completes."}), 202
+        resp = Response(raw, content_type="text/plain; charset=utf-8")
+        resp.headers["Content-Disposition"] = f'attachment; filename="app_centerline-{number}.svg"'
         return resp
 
     @bp.post("/api/admin/rebuild-index")

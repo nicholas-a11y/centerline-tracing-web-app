@@ -36,6 +36,19 @@
     });
     return el;
   }
+  function delay(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
+  async function waitForJob(job, parent) {
+    var status = node("p", undefined, parent || content);
+    status.setAttribute("role", "status");
+    while (!job.done) {
+      status.textContent = job.message + " (" + job.processed + " of " + job.total + ")";
+      await delay(800);
+      job = (await call("jobs/" + encodeURIComponent(job.id))).job;
+    }
+    status.textContent = job.message + ": " + job.processed + " processed, " + job.skipped +
+      " skipped, " + job.failed + " failed.";
+    if (job.failed) throw new Error(job.failed + " case(s) could not be re-scored.");
+  }
   function facts(data, parent) {
     var dl = node("dl", undefined, parent);
     Object.keys(data).forEach(function (key) {
@@ -68,6 +81,11 @@
       button(labels[s] + ": " + data.counts[s], function () { return queue(s, query); }, cards);
     });
     button("All: " + data.total, function () { return queue("", query); }, cards);
+    button("Re-score all open cases", async function () {
+      var job = (await call("rescore-all", "POST")).job;
+      await waitForJob(job, content);
+      await queue(filter, query);
+    }, cards);
     var search = node("form", undefined, content);
     var searchLabel = node("label", "Search title or number", search); searchLabel.htmlFor = "admin-search";
     var input = node("input", undefined, search); input.id = "admin-search"; input.value = query || ""; input.maxLength = 120;
@@ -112,6 +130,11 @@
   }
   async function download(path, filename) {
     var resp = await fetch("/teach/api/admin/" + path, {headers: {Authorization: "Bearer " + token}, cache: "no-store"});
+    if (resp.status === 202) {
+      var pending = await resp.json();
+      await waitForJob(pending.job, content);
+      return download(path, filename);
+    }
     if (!resp.ok) throw new Error("Download failed (HTTP " + resp.status + ").");
     var url = URL.createObjectURL(await resp.blob());
     var a = node("a"); a.href = url; a.download = filename; a.click();
@@ -140,6 +163,14 @@
     node("h3", "Ten settings used", content); facts(r.params, content);
     node("h3", "Score history", content);
     node("p", r.history_label || "Not recorded", content); facts({entries: r.results}, content);
+    button("Re-score this case", async function () {
+      var job = (await call("cases/" + number + "/rescore", "POST")).job;
+      await waitForJob(job, content);
+      await casePage(number);
+    }, content);
+    button("Download app centerline (admin only)", function () {
+      return download("cases/" + number + "/app_centerline.svg", "app_centerline-" + number + ".svg");
+    }, content);
     var edit = node("form", undefined, content);
     var label = node("label", "Status", edit); label.htmlFor = "review-status";
     var select = node("select", undefined, edit); select.id = "review-status";

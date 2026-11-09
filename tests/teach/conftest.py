@@ -73,7 +73,8 @@ class FakeQueue:
         return {"outcome": self.outcome, "summary": summary, "variant": "prune_off", "engine_commit": "test",
                 "elapsed_ms": 12.0, "timed_out": False,
                 "variants": {"prune_off": {"summary": summary, "lines": []}, "prune_on": {"summary": summary}},
-                "overlay_png": THUMB, "thumb_png": THUMB}
+                "overlay_png": THUMB, "thumb_png": THUMB,
+                "app_centerline_svg": b'<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 8 8"><path d="M 1 1 L 7 7"/></svg>'}
 
 
 def base_env(tmp_path: Path, **extra) -> dict:

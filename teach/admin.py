@@ -102,12 +102,17 @@ def register_admin(bp, svc, windows, environment):
     cfg = svc.cfg
     auth = AdminAuth(cfg.admin_token, svc.quota)
     svc.admin_auth = auth
-    from .review import register_review
-
-    register_review(bp, svc)
 
     def client():
         return limits.client_ip(request.remote_addr, request.headers.get("X-Forwarded-For"), cfg.trusted_proxy_hops)
+
+    from .rescore import RescoreManager
+
+    rescores = RescoreManager(svc)
+    svc.rescores = rescores
+    from .review import register_review
+
+    register_review(bp, svc, rescores, client)
 
     @bp.before_request
     def protect_admin():
@@ -181,3 +186,17 @@ def register_admin(bp, svc, windows, environment):
             return jsonify({"ok": False, "error": "Alerts are not configured."}), 409
         svc.notifier.send_test()
         return jsonify({"ok": True, "message": "Test alert queued; check the topic and server logs for delivery."}), 202
+
+    @bp.post("/api/admin/rescore-all")
+    def admin_rescore_all():
+        job = rescores.start_all(client())
+        if job is None:
+            return jsonify({"ok": False, "error": "A re-score job is already running."}), 409
+        return jsonify({"ok": True, "job": job}), 202
+
+    @bp.get("/api/admin/jobs/<job_id>")
+    def admin_job(job_id):
+        job = rescores.get(job_id)
+        if job is None:
+            return jsonify({"ok": False, "error": "Job not found."}), 404
+        return jsonify({"ok": True, "job": job})

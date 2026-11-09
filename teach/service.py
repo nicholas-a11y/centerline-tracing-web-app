@@ -248,6 +248,41 @@ class TeachService:
     def score(self, ip: str, sub) -> dict:
         return self.queue.run(ip, sub.bitmap.png, sub.reference.as_json(), sub.params, sub.scoring)
 
+    def rescore(self, ip: str, number: int) -> dict:
+        """Re-run one stored case and atomically append its result and private artifacts."""
+        sub_id = self.id_for_number(number)
+        meta = self.load_meta(sub_id) if sub_id else None
+        if not meta or meta["status"] == "deleted":
+            raise ValueError("Case does not exist.")
+        image = self.storage.get(submission_key(sub_id, "image.png"))
+        reference = self.storage.get_json(submission_key(sub_id, "reference.json"), None)
+        if image is None or reference is None:
+            raise ValueError("Case files are unavailable.")
+        worker = self.queue.run(ip, image, reference, meta["params"], meta["scoring"])
+        overlay = worker.pop("overlay_png", None)
+        thumb = worker.pop("thumb_png", None)
+        post_overlay = worker.pop("post_fit_overlay_png", None)
+        app_centerline = worker.pop("app_centerline_svg", None)
+        with self._lock:
+            current = self.load_meta(sub_id)
+            if not current or current["status"] == "deleted":
+                raise ValueError("Case was deleted while scoring.")
+            if not current.get("results"):
+                current["results"] = []
+            current["results"].append(result_entry(worker))
+            if overlay is not None:
+                self.storage.put(submission_key(sub_id, "overlay.png"), overlay, "image/png")
+            if thumb is not None:
+                self.storage.put(submission_key(sub_id, "thumb.png"), thumb, "image/png")
+            if post_overlay is not None:
+                self.storage.put(submission_key(sub_id, "overlay_post_fit.png"), post_overlay, "image/png")
+            if app_centerline is not None:
+                self.storage.put(submission_key(sub_id, "app_centerline.svg"), app_centerline, "text/plain")
+            else:
+                self.storage.delete(submission_key(sub_id, "app_centerline.svg"))
+            self._save(current)
+        return current["results"][-1]
+
     # ------------------------------------------------------------------ submit (5, 6.2)
 
     def submit(self, ip: str, sub) -> dict:
@@ -262,8 +297,10 @@ class TeachService:
         worker = self.score(ip, sub)
         overlay, thumb = worker.pop("overlay_png", None), worker.pop("thumb_png", None)
         post_overlay = worker.pop("post_fit_overlay_png", None)
+        app_centerline = worker.pop("app_centerline_svg", None)
         ref_json = json.dumps(sub.reference.as_json()).encode("utf-8")
-        total = raw_bytes + len(ref_json) + len(overlay or b"") + len(thumb or b"") + len(post_overlay or b"")
+        total = raw_bytes + len(ref_json) + len(overlay or b"") + len(thumb or b"") + len(post_overlay or b"") \
+            + len(app_centerline or b"")
         token = secrets.token_urlsafe(32)
         now = utc_now()
         f = sub.fields
@@ -312,6 +349,8 @@ class TeachService:
                 put(submission_key(sub_id, "thumb.png"), thumb, "image/png")
             if post_overlay:
                 put(submission_key(sub_id, "overlay_post_fit.png"), post_overlay, "image/png")
+            if app_centerline:
+                put(submission_key(sub_id, "app_centerline.svg"), app_centerline, "text/plain")
             self._save(meta)
         entry = self.public_entry(meta)
         self.notifier.event(number, meta["status"], entry.get("title"))

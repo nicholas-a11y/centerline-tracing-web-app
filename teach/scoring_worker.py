@@ -151,11 +151,15 @@ def score_job(job: dict) -> tuple[dict, object, object, object]:
     if post_fit is not None:
         res, sc, graph = post_fit
         post_overlay = render_overlay(gray, res.paths, reference, graph, region)
+    out["_app_centerline_paths"] = [p.tolist() for p in (primary[0].paths if primary else [])]
     return out, overlay, thumb_src, post_overlay
 
 
 def worker_main(argv: list[str]) -> int:
     _limit_resources()
+    import numpy as np
+    from PIL import Image
+
     if len(argv) != 1:
         print("usage: python -m teach.scoring_worker <job.json>", file=sys.stderr)
         return 2
@@ -164,6 +168,13 @@ def worker_main(argv: list[str]) -> int:
     try:
         job = json.loads(job_path.read_text(encoding="utf-8"))
         result, overlay, thumb, post_overlay = score_job(job)
+        paths = result.pop("_app_centerline_paths", [])
+        from lessonkit.svg_reference import write_reference_svg
+
+        with Image.open(job["image"]) as image:
+            width, height = image.size
+        write_reference_svg(out_dir / "app_centerline.svg",
+                            [np.asarray(p, dtype=float) for p in paths], (width, height))
         overlay.save(out_dir / "overlay.png")
         thumb.save(out_dir / "thumb.png")
         if post_overlay is not None:
@@ -197,6 +208,7 @@ class ScoringQueue:
         self._running = False
         self._waiting = 0
         self._ips: set[str] = set()
+        self.pid: int | None = None
 
     @property
     def depth(self) -> int:
@@ -242,14 +254,23 @@ class ScoringQueue:
             job_path = job_dir / "job.json"
             job_path.write_text(json.dumps(job), encoding="utf-8")
             t0 = time.perf_counter()
+            proc = None
             try:
-                subprocess.run(self.command + [str(job_path)], cwd=str(REPO_ROOT), env=worker_env(),
-                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               timeout=self.timeout_s, check=False)
+                proc = subprocess.Popen(self.command + [str(job_path)], cwd=str(REPO_ROOT), env=worker_env(),
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL)
+                self.pid = proc.pid
+                proc.wait(timeout=self.timeout_s)
             except subprocess.TimeoutExpired:
+                if proc is not None:
+                    proc.kill()
+                    proc.wait()
                 return {"outcome": "timeout", "timed_out": True, "variants": {}, "engine_commit": engine_commit(),
                         "elapsed_ms": round((time.perf_counter() - t0) * 1000.0, 1),
-                        "overlay_png": None, "thumb_png": None, "post_fit_overlay_png": None}
+                        "overlay_png": None, "thumb_png": None, "post_fit_overlay_png": None,
+                        "app_centerline_svg": None}
+            finally:
+                self.pid = None
             result_path = job_dir / "result.json"
             if not result_path.exists():
                 result = {"outcome": "error", "error": "worker produced no result", "variants": {}}
@@ -258,7 +279,8 @@ class ScoringQueue:
             result.setdefault("timed_out", False)
             result.setdefault("engine_commit", engine_commit())
             for key, name in (("overlay_png", "overlay.png"), ("thumb_png", "thumb.png"),
-                              ("post_fit_overlay_png", "overlay_post_fit.png")):
+                              ("post_fit_overlay_png", "overlay_post_fit.png"),
+                              ("app_centerline_svg", "app_centerline.svg")):
                 p = job_dir / name
                 result[key] = p.read_bytes() if p.exists() else None
             return result

@@ -1,7 +1,10 @@
 import pytest
+import time
 
 from .conftest import submit
 from .test_admin import AUTH
+from teach.rescore import history_label
+from teach.storage import submission_key
 
 
 @pytest.mark.parametrize("status", ["pending", "accepted", "rejected"])
@@ -69,3 +72,63 @@ def test_raw_svg_download_never_inline(teach):
     assert r.content_type.startswith("text/plain")
     assert r.headers["Content-Disposition"].startswith("attachment;")
     assert r.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_scoring_stores_private_app_centerline_and_admin_can_rescore(teach):
+    body, sid, _ = submit(teach)
+    key = submission_key(sid, "app_centerline.svg")
+    first = teach.storage.get(key)
+    assert first and b"<svg" in first
+    public = teach.client.get(f"/teach/api/submissions/{body['number']}").get_json()
+    assert "app_centerline" not in str(public)
+    assert teach.client.get(
+        f"/teach/api/admin/cases/{body['number']}/app_centerline.svg"
+    ).status_code == 401
+
+    start = teach.client.post(f"/teach/api/admin/cases/{body['number']}/rescore", headers=AUTH)
+    assert start.status_code == 202
+    job = start.get_json()["job"]
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        status = teach.client.get(f"/teach/api/admin/jobs/{job['id']}", headers=AUTH)
+        assert status.status_code == 200
+        job = status.get_json()["job"]
+        if job["done"]:
+            break
+        time.sleep(0.01)
+    assert job["done"] and job["failed"] == 0
+    meta = teach.svc.load_meta(sid)
+    assert len(meta["results"]) == 2
+    assert teach.storage.get(key)
+
+    download = teach.client.get(
+        f"/teach/api/admin/cases/{body['number']}/app_centerline.svg", headers=AUTH
+    )
+    assert download.status_code == 200
+    assert download.data == teach.storage.get(key)
+    assert download.headers["Content-Disposition"].startswith("attachment;")
+
+
+def test_failing_since_and_now_passing_labels():
+    assert history_label([{"outcome": "fail", "engine_commit": "a"},
+                          {"outcome": "fail", "engine_commit": "b"}]) == "Failing since a"
+    assert history_label([{"outcome": "fail", "engine_commit": "a"},
+                          {"outcome": "pass", "engine_commit": "b"}]) == "Now passing"
+    assert history_label([{"outcome": "pass", "engine_commit": "a"}]) == "Passing"
+
+
+def test_rescore_all_skips_cases_scored_by_current_engine(teach, monkeypatch):
+    body, _, _ = submit(teach)
+    calls_before = len(teach.queue.calls)
+    monkeypatch.setattr("teach.rescore.engine_commit", lambda: "test")
+    response = teach.client.post("/teach/api/admin/rescore-all", headers=AUTH)
+    assert response.status_code == 202
+    job = response.get_json()["job"]
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        job = teach.client.get(f"/teach/api/admin/jobs/{job['id']}", headers=AUTH).get_json()["job"]
+        if job["done"]:
+            break
+        time.sleep(0.01)
+    assert job["done"] and job["total"] == 1 and job["skipped"] == 1
+    assert len(teach.queue.calls) == calls_before

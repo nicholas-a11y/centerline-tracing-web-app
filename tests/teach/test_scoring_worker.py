@@ -86,6 +86,8 @@ def test_real_worker_subprocess():
     assert Image.open(io.BytesIO(out["overlay_png"])).format == "PNG"
     assert out["thumb_png"] and out["engine_commit"]
     assert out["post_fit_overlay_png"] is None
+    assert out["app_centerline_svg"].startswith(b'<?xml version="1.0"')
+    assert b'<svg xmlns="http://www.w3.org/2000/svg"' in out["app_centerline_svg"]
 
 
 def test_real_worker_subprocess_post_fit():
