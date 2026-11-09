@@ -99,7 +99,7 @@ def test_submission_sends_title_only(make_teach):
     from .conftest import submit
 
     t.svc.notifier._background = False
-    submit(t, title="Visible title", what_is_wrong="PRIVATE-WRONG", notes="PRIVATE-NOTES")
+    submit(t, title="Visible title", description="PRIVATE-WRONG and PRIVATE-NOTES")
     assert len(s.sent) == 1
     body = s.sent[0][1].decode()
     assert "Visible title" in body and "PRIVATE" not in body and "base64" not in body

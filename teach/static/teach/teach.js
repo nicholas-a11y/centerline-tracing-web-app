@@ -14,24 +14,51 @@
   function val(id) { return document.getElementById(id).value.trim(); }
   function checked(id) { return document.getElementById(id).checked; }
 
+  var settingInputs = Array.prototype.slice.call(document.querySelectorAll("[data-setting]"));
+  var settingDefaults = {};
+  settingInputs.forEach(function (inp) {
+    settingDefaults[inp.dataset.setting] = inp.type === "checkbox" ? inp.defaultChecked :
+      inp.tagName === "SELECT" ? inp.querySelector("option[selected]").value : inp.defaultValue;
+  });
+
+  function settingLabel(inp) { return document.querySelector("label[for='" + inp.id + "']").textContent.replace(/\s*\(.*\)\s*$/, "").trim(); }
+
+  // Every setting is always sent explicitly: the server's own fallbacks differ from the app's defaults.
+  function readSettings() {
+    var s = {};
+    settingInputs.forEach(function (inp) {
+      var kind = inp.dataset.kind;
+      if (kind === "boolean") s[inp.dataset.setting] = inp.checked;
+      else if (kind === "string") s[inp.dataset.setting] = inp.value;
+      else s[inp.dataset.setting] = inp.value.trim() === "" ? NaN : Number(inp.value);
+    });
+    return s;
+  }
+
+  function writeSettings(values) {
+    settingInputs.forEach(function (inp) {
+      var v = values[inp.dataset.setting];
+      if (v === undefined) return;
+      if (inp.dataset.kind === "boolean") inp.checked = !!v; else inp.value = String(v);
+    });
+    updateSettingsLine();
+  }
+
+  function updateSettingsLine() {
+    var s = readSettings();
+    document.getElementById("settings-used").textContent = settingInputs.map(function (inp) {
+      var v = s[inp.dataset.setting];
+      return settingLabel(inp) + " " + (inp.dataset.kind === "boolean" ? (v ? "on" : "off") : String(v));
+    }).join("; ");
+  }
+
   function buildMeta() {
     var meta = {
-      title: val("title"), what_is_wrong: val("what_is_wrong"), what_is_expected: val("what_is_expected"),
-      consent: checked("consent"), public_thumbnail: checked("public_thumbnail"), share_bitmap: checked("share_bitmap")
+      title: val("title"), description: val("description"),
+      consent: checked("consent"), public_thumbnail: checked("public_thumbnail"), share_bitmap: checked("share_bitmap"),
+      settings: readSettings()
     };
-    if (val("notes")) meta.notes = val("notes");
     if (val("not_duplicate_reason")) meta.not_duplicate_reason = val("not_duplicate_reason");
-    var box = ["fx0", "fy0", "fx1", "fy1"].map(val);
-    if (box.some(function (v) { return v !== ""; })) {
-      meta.focus_box = { x0: Number(box[0]), y0: Number(box[1]), x1: Number(box[2]), y1: Number(box[3]) };
-    }
-    var settings = {};
-    if (val("dark_threshold")) settings.dark_threshold = Number(val("dark_threshold"));
-    if (val("min_path_length")) settings.min_path_length = Number(val("min_path_length"));
-    if (checked("enable_pruning")) settings.enable_pruning = true;
-    if (val("normalization_mode")) settings.normalization_mode = val("normalization_mode");
-    if (val("normalization_sensitivity")) settings.normalization_sensitivity = val("normalization_sensitivity");
-    if (Object.keys(settings).length) meta.settings = settings;
     return meta;
   }
 
@@ -150,4 +177,7 @@
     send("/teach/api/submissions", "Submitting");
   });
   form.addEventListener("submit", function (ev) { ev.preventDefault(); });
+  settingInputs.forEach(function (inp) { inp.addEventListener("change", updateSettingsLine); });
+  document.getElementById("settings-reset").addEventListener("click", function () { writeSettings(settingDefaults); });
+  updateSettingsLine();
 })();

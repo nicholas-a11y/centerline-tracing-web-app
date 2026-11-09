@@ -36,10 +36,8 @@ All `POST` endpoints take `multipart/form-data` with:
 | field | required | limit / values |
 |---|---|---|
 | `title` | yes | 120 characters. A sanitised version (no links, at most 80 characters) is public straight away. |
-| `what_is_wrong` | yes | 2000 characters |
-| `what_is_expected` | yes | 2000 characters |
-| `notes` | no | 4000 characters |
-| `focus_box` | no | `{"x0","y0","x1","y1"}` in bitmap pixels (x right, y down, pixel edges); the scoring region. Default: whole image. |
+| `description` | yes | 4000 characters: what's wrong, what you expected, and any notes |
+| `focus_box` | no | `{"x0","y0","x1","y1"}` in bitmap pixels (x right, y down, pixel edges); the initial scoring region. Default: whole image. Not on the web form; the maintainer sets the region at review. |
 | `settings` | no | `dark_threshold` 0.05–0.8 (0.2), `min_path_length` 1–20 (2), `enable_pruning` (false), `normalization_mode` auto/on/off (auto), `normalization_sensitivity` low/medium/high (medium) |
 | `public_thumbnail` | no | `true` lets the overlay thumbnail be public once reviewed (default false) |
 | `share_bitmap` | no | `true` lets the full bitmap be public once reviewed (default false) |
@@ -92,7 +90,7 @@ Files: `/teach/example/image.png`, `/teach/example/reference.svg`,
 ```bash
 curl -sS -X POST https://<host>/teach/api/validate \
   -F image=@image.png -F reference=@reference.svg \
-  -F 'meta={"title":"Thin line kinks where it crosses a thick line","what_is_wrong":"...","what_is_expected":"...","focus_box":{"x0":103.28,"y0":103.28,"x1":152.72,"y1":152.72},"consent":true}'
+  -F 'meta={"title":"Thin line kinks where it crosses a thick line","description":"...","focus_box":{"x0":103.28,"y0":103.28,"x1":152.72,"y1":152.72},"consent":true}'
 ```
 
 Expected response (abridged): the case is valid (`ok: true`) and the engine fails it,

@@ -6,8 +6,7 @@
   },
   "meta": {
     "title": "Thin line kinks where it crosses a thick line",
-    "what_is_wrong": "Where the 2 px line crosses the 8 px line at 35 degrees, both centerlines bend toward each other and are split into five paths joined by a short bridge.",
-    "what_is_expected": "Each line continues straight through the crossing as one path, on its own centre.",
+    "description": "Where the 2 px line crosses the 8 px line at 35 degrees, both centerlines bend toward each other and are split into five paths joined by a short bridge. Expected: each line continues straight through the crossing as one path, on its own centre.",
     "focus_box": {
       "x0": 103.28,
       "y0": 103.28,

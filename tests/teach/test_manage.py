@@ -23,10 +23,10 @@ def test_only_token_hash_is_stored(teach):
 
 
 def test_view(teach):
-    body, sub_id, token = submit(teach, what_is_wrong="Private detail")
+    body, sub_id, token = submit(teach, description="Private detail")
     r = teach.client.get(f"/teach/api/manage/{sub_id}", headers=_h(token))
     res = r.get_json()["result"]
-    assert r.status_code == 200 and res["number"] == body["number"] and res["what_is_wrong"] == "Private detail"
+    assert r.status_code == 200 and res["number"] == body["number"] and res["description"] == "Private detail"
     assert res["overlay_png"].startswith("data:image/png;base64,") and res["can_answer"] is False
     assert "manage_token_sha256" not in res
     assert r.headers["Cache-Control"] == "no-store"

@@ -162,9 +162,7 @@ class TeachService:
         }
         if meta.get("reviewed"):
             vis = meta.get("visibility") or {}
-            entry["what_is_wrong"] = meta.get("what_is_wrong", "")
-            entry["what_is_expected"] = meta.get("what_is_expected", "")
-            entry["notes"] = meta.get("notes", "")
+            entry["description"] = meta.get("description", "")
             entry["admin_note_public"] = meta.get("admin_note_public", "")
             if vis.get("thumbnail_opt_in") and vis.get("thumbnail_public"):
                 entry["thumbnail_url"] = f"/teach/q/{number}/thumb.png"
@@ -191,7 +189,7 @@ class TeachService:
     def _signature(self, sub) -> dict:
         return {"image_sha256": sub.bitmap.sha256, "geometry_sha256": sub.reference.sha256_geometry,
                 "phash": phash(sub.bitmap.gray), "width": sub.bitmap.width, "height": sub.bitmap.height,
-                "tokens": tokens(sub.fields.get("title", ""), sub.fields.get("what_is_wrong", "")),
+                "tokens": tokens(sub.fields.get("title", ""), sub.fields.get("description", "")),
                 "paths": sub.reference.paths}
 
     def _load_paths(self, entry: dict):
@@ -253,8 +251,8 @@ class TeachService:
                 "status_history": [{"status": "submitted", "at": now, "by": "server"},
                                    {"status": "pending_review", "at": utc_now(), "by": "server"}],
                 "reviewed": False,
-                "title": f["title"], "what_is_wrong": f["what_is_wrong"], "what_is_expected": f["what_is_expected"],
-                "notes": f.get("notes", ""), "not_duplicate_reason": f.get("not_duplicate_reason", ""),
+                "title": f["title"], "description": f["description"],
+                "not_duplicate_reason": f.get("not_duplicate_reason", ""),
                 "similar_at_submit": [{"number": m["number"], "signals": m["signals"]} for m in matches],
                 "title_public": sanitize_title(f["title"]), "title_hidden": False,
                 "admin_note_public": "", "admin_note_private": "",
@@ -357,7 +355,7 @@ class TeachService:
     def manage_view(self, meta: dict) -> dict:
         overlay = self.storage.get(submission_key(meta["id"], "overlay.png"))
         keys = ("number", "status", "created_at", "updated_at", "title", "title_public", "title_hidden",
-                "what_is_wrong", "what_is_expected", "notes", "admin_note_public", "visibility", "image",
+                "description", "admin_note_public", "visibility", "image",
                 "reference", "params", "scoring", "results", "status_history")
         out = {k: meta.get(k) for k in keys}
         out["me_too_count"] = len(meta.get("me_too") or [])

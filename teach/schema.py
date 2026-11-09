@@ -19,9 +19,7 @@ MAX_META_BYTES = 64 * 1024
 TEXT_FIELDS = {
     # name: (required, max characters, description)
     "title": (True, 120, "Short title. A sanitised version (<= 80 characters, no links) is public straight away."),
-    "what_is_wrong": (True, 2000, "What the traced centerline does wrong."),
-    "what_is_expected": (True, 2000, "What it should do instead."),
-    "notes": (False, 4000, "Anything else (optional)."),
+    "description": (True, 4000, "What's wrong, what you expected, and any notes."),
     "not_duplicate_reason": (False, 200, "One line on why this is not a duplicate of a similar item (optional)."),
 }
 
@@ -33,6 +31,29 @@ SETTINGS = {
     "normalization_mode": {"type": "string", "enum": ["auto", "on", "off"], "default": "auto"},
     "normalization_sensitivity": {"type": "string", "enum": ["low", "medium", "high"], "default": "medium"},
 }
+
+SETTING_UI = {
+    # name: (label on the Teach page, HTML step for numbers); labels follow the main app
+    "dark_threshold": ("Dark threshold", 0.05),
+    "min_path_length": ("Minimum path length", 1),
+    "enable_pruning": ("Pruning", None),
+    "normalization_mode": ("Normalisation", None),
+    "normalization_sensitivity": ("Normalisation sensitivity", None),
+}
+
+
+def default_settings() -> dict:
+    return {name: spec["default"] for name, spec in SETTINGS.items()}
+
+
+def settings_summary(values: dict) -> str:
+    """One readable line, e.g. 'Dark threshold 0.2; Pruning off; ...'."""
+    parts = []
+    for name, spec in SETTINGS.items():
+        v = values.get(name, spec["default"])
+        text = ("on" if v else "off") if spec["type"] == "boolean" else f"{v:g}" if spec["type"] == "number" else str(v)
+        parts.append(f"{SETTING_UI[name][0]} {text}")
+    return "; ".join(parts)
 
 BOOL_FIELDS = {
     "public_thumbnail": "Allow the overlay thumbnail to be public once reviewed (default off).",
@@ -86,7 +107,8 @@ def _focus_box_schema() -> dict:
     return {
         "type": ["object", "null"],
         "description": "Optional box around the problem, in bitmap pixel units (x right, y down, pixel edges). "
-                       "Used as the initial scoring region; otherwise the whole image is scored.",
+                       "Used as the initial scoring region; otherwise the whole image is scored. Not on the web "
+                       "form: the maintainer sets the region at review.",
         "properties": {k: num for k in ("x0", "y0", "x1", "y1")},
         "required": ["x0", "y0", "x1", "y1"],
         "additionalProperties": False,

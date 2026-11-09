@@ -42,7 +42,7 @@ def test_clean_text_keeps_newlines():
 
 def test_unreviewed_item_is_title_only(teach):
     body, sub_id, _ = submit(teach, title="Kink at https://x.example crossing",
-                             what_is_wrong="SECRET-DESCRIPTION", notes="SECRET-NOTES", public_thumbnail=True)
+                             description="SECRET-DESCRIPTION SECRET-NOTES", public_thumbnail=True)
     n = body["number"]
     item = teach.client.get(f"/teach/api/submissions/{n}").get_json()
     assert item["title"] == "Kink at [link removed] crossing" and item["status"] == "pending_review"
@@ -62,11 +62,11 @@ def _review(t, sub_id, **changes):
 
 
 def test_reviewed_item_shows_details_and_opted_in_thumbnail(teach):
-    body, sub_id, _ = submit(teach, what_is_wrong="Visible after review", public_thumbnail=True)
+    body, sub_id, _ = submit(teach, description="Visible after review", public_thumbnail=True)
     _review(teach, sub_id, reviewed=True, status="accepted")
     n = body["number"]
     item = teach.client.get(f"/teach/api/submissions/{n}").get_json()
-    assert item["what_is_wrong"] == "Visible after review" and item["thumbnail_url"] == f"/teach/q/{n}/thumb.png"
+    assert item["description"] == "Visible after review" and item["thumbnail_url"] == f"/teach/q/{n}/thumb.png"
     r = teach.client.get(f"/teach/q/{n}/thumb.png")
     assert r.status_code == 200 and r.mimetype == "image/png"
 
@@ -109,7 +109,7 @@ def test_deleted_items_leave_a_tombstone(teach):
 
 
 def test_similar_exposes_public_fields_only(teach):
-    submit(teach, what_is_wrong="PRIVATE-WRONG")
+    submit(teach, description="PRIVATE-WRONG")
     r = post(teach.client, "/teach/api/similar")
     body = r.get_json()
     assert r.status_code == 200 and body["result"]["exact_duplicate"] is True
@@ -150,6 +150,6 @@ def test_similarity_signals():
 
 def test_public_entry_is_the_only_builder():
     meta = {"number": 3, "status": "pending_review", "title_public": "T", "reviewed": False,
-            "what_is_wrong": "W", "notes": "N", "visibility": {"thumbnail_opt_in": True, "thumbnail_public": True}}
+            "description": "W", "visibility": {"thumbnail_opt_in": True, "thumbnail_public": True}}
     entry = TeachService.public_entry(meta)
-    assert "what_is_wrong" not in entry and "notes" not in entry and "thumbnail_url" not in entry
+    assert "description" not in entry and "thumbnail_url" not in entry

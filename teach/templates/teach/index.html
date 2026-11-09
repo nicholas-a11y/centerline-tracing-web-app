@@ -30,33 +30,29 @@ Agents: read the <a href="{{ url_for('teach.spec') }}">spec</a> or the <a href="
       <legend>Description</legend>
       <p><label for="title">Title (required, {{ text_fields.title[1] }} characters; a cleaned version up to 80 characters is public straight away)</label>
         <input id="title" name="title" maxlength="{{ text_fields.title[1] }}" required></p>
-      <p><label for="what_is_wrong">What is wrong (required)</label>
-        <textarea id="what_is_wrong" name="what_is_wrong" maxlength="{{ text_fields.what_is_wrong[1] }}" rows="3" required></textarea></p>
-      <p><label for="what_is_expected">What you expected (required)</label>
-        <textarea id="what_is_expected" name="what_is_expected" maxlength="{{ text_fields.what_is_expected[1] }}" rows="3" required></textarea></p>
-      <p><label for="notes">Notes (optional)</label>
-        <textarea id="notes" name="notes" maxlength="{{ text_fields.notes[1] }}" rows="2"></textarea></p>
+      <p><label for="description">What's wrong, what you expected, and any notes (required, up to {{ text_fields.description[1] }} characters)</label>
+        <textarea id="description" name="description" maxlength="{{ text_fields.description[1] }}" rows="6" required></textarea></p>
     </fieldset>
     <fieldset>
-      <legend>Focus box (optional, bitmap pixels; leave empty to score the whole image)</legend>
-      <p class="inline">
-        <label for="fx0">x0</label><input id="fx0" name="x0" type="number" step="any" inputmode="decimal">
-        <label for="fy0">y0</label><input id="fy0" name="y0" type="number" step="any" inputmode="decimal">
-        <label for="fx1">x1</label><input id="fx1" name="x1" type="number" step="any" inputmode="decimal">
-        <label for="fy1">y1</label><input id="fy1" name="y1" type="number" step="any" inputmode="decimal">
-      </p>
-    </fieldset>
-    <fieldset>
-      <legend>Engine settings (optional; defaults match the app)</legend>
-      <p><label for="dark_threshold">Dark threshold (0.05–0.8)</label>
-        <input id="dark_threshold" name="dark_threshold" type="number" min="0.05" max="0.8" step="0.01" placeholder="0.2"></p>
-      <p><label for="min_path_length">Minimum path length (1–20)</label>
-        <input id="min_path_length" name="min_path_length" type="number" min="1" max="20" step="1" placeholder="2"></p>
-      <p><input id="enable_pruning" name="enable_pruning" type="checkbox"> <label for="enable_pruning">Enable pruning</label></p>
-      <p><label for="normalization_mode">Normalisation</label>
-        <select id="normalization_mode" name="normalization_mode"><option value="">default (auto)</option><option>auto</option><option>on</option><option>off</option></select></p>
-      <p><label for="normalization_sensitivity">Normalisation sensitivity</label>
-        <select id="normalization_sensitivity" name="normalization_sensitivity"><option value="">default (medium)</option><option>low</option><option>medium</option><option>high</option></select></p>
+      <legend>Settings</legend>
+      <p>Settings used: <span id="settings-used">{{ settings_line }}</span></p>
+      <details id="advanced">
+        <summary>Advanced: change the settings</summary>
+        <p>These default to the main app's defaults. Use the same values you used in the app.</p>
+        {% for name, spec in settings.items() %}{% set ui = setting_ui[name] %}
+        {% if spec.type == 'boolean' %}
+        <p><input id="s-{{ name }}" data-setting="{{ name }}" data-kind="boolean" type="checkbox"{% if spec.default %} checked{% endif %}>
+          <label for="s-{{ name }}">{{ ui[0] }}</label></p>
+        {% elif spec.type == 'string' %}
+        <p><label for="s-{{ name }}">{{ ui[0] }}</label>
+          <select id="s-{{ name }}" data-setting="{{ name }}" data-kind="string">{% for v in spec.enum %}<option{% if v == spec.default %} selected{% endif %}>{{ v }}</option>{% endfor %}</select></p>
+        {% else %}
+        <p><label for="s-{{ name }}">{{ ui[0] }} ({{ spec.minimum }}–{{ spec.maximum }})</label>
+          <input id="s-{{ name }}" data-setting="{{ name }}" data-kind="{{ spec.type }}" type="number" min="{{ spec.minimum }}" max="{{ spec.maximum }}" step="{{ ui[1] }}" value="{{ spec.default }}" inputmode="decimal"></p>
+        {% endif %}
+        {% endfor %}
+        <p><button type="button" id="settings-reset">Reset to the app defaults</button></p>
+      </details>
     </fieldset>
     <fieldset>
       <legend>Visibility and consent</legend>

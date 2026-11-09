@@ -111,7 +111,9 @@ def create_blueprint(cfg, storage, scorer=None, alert_sender=None, notifier=None
     @bp.get("/")
     def index():
         return render_template("teach/index.html", rules=schema.RULES, consent=schema.CONSENT_TEXT,
-                               advice=schema.ADVICE_TEXT, settings=schema.SETTINGS, text_fields=schema.TEXT_FIELDS,
+                               advice=schema.ADVICE_TEXT, settings=schema.SETTINGS, setting_ui=schema.SETTING_UI,
+                               settings_line=schema.settings_summary(schema.default_settings()),
+                               text_fields=schema.TEXT_FIELDS,
                                spec=SPEC_PATH.read_text(encoding="utf-8"), local_mode=cfg.local_mode,
                                limits=schema)
 
