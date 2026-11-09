@@ -1,9 +1,25 @@
 # Teach: design (Stage 4)
 
-Status: **design approved (revision 2)**, with the owner's decisions applied. No code
-has been written for Teach. Items marked **[unverified]** are assumptions that Stage 5
-must check first. Decisions and everything still uncertain are collected in
+Status: **design approved (revision 3)**, with the owner's decisions applied. Items
+marked **[unverified]** are assumptions that Stage 5 must check first. Decisions and
+everything still uncertain are collected in
 [§19](#19-uncertainties-and-decisions-needed).
+
+**Revision 3 (Stage 5c), approved by the owner:**
+* The trace template is removed entirely (endpoint, CLI, `lessonkit/trace_template.py`,
+  spec entries and tests). Users trace over the original (cropped) image and keep it
+  in the exported SVG. LightBurn keeps the image in the export even when its layer
+  output is disabled (confirmed by the owner).
+* The form has one required text field, `description` ("What's wrong, what you
+  expected, and any notes", ≤ 4000), instead of three. The focus box is no longer on
+  the form; the API still accepts `focus_box` and the admin sets the region at review.
+* The settings whitelist grows from five to ten, matching the main UI, and Teach
+  always passes all ten explicitly (§5, §8).
+* With `enable_post_fit_export` on, the worker also scores a `post_fit` variant from
+  the fitted SVG that the Download button produces (§8).
+* The main app shows a Teach checkbox **only when Teach is enabled**. It offers a
+  cropped-image download and a "Send this to Teach" link carrying the settings in a
+  URL fragment (§5.1). With Teach off the main page is byte-identical.
 
 ## 0. Summary
 
@@ -31,9 +47,9 @@ Goals:
 Non-goals:
 * No accounts, no captchas (Turnstile is a documented fallback only, see §12.3), and
   no comments or discussion threads.
-* No changes to engine behaviour, defaults, existing routes, the main UI or
-  `templates/index.html`. Adding a link to Teach from the main UI would be a UI
-  change and needs separate approval.
+* No changes to engine behaviour, defaults or existing routes. The only main-UI
+  change is the Teach checkbox approved in revision 3 (§5.1), rendered only when
+  Teach is enabled; with Teach off `templates/index.html` renders exactly as before.
 * No automatic commits from the server. The server never holds GitHub credentials.
 
 ## 2. Facts about the current app that shape this design
@@ -73,11 +89,14 @@ teach/
   templates/teach/*.html, static/teach/*   # blueprint-local; templates/ is not touched
   spec.md              # served at /teach/spec (§14.1)
 lessonkit/             # shared, non-test code moved out of tests/pipeline (decided: option A)
-  svg_reference.py, scoring.py, overlay.py, lesson.py, runner.py, trace_template.py
+  svg_reference.py, scoring.py, overlay.py, lesson.py, runner.py
 ```
 
-**Decided: option A.** Teach needs the SVG reader, scoring, overlay, live-runner and
-trace-template code that lives in `tests/pipeline/` today. Those modules move to a new
+`teach/crop.py` (revision 3) holds the main-app crop rule and the read-only session
+lookup (§5.1).
+
+**Decided: option A.** Teach needs the SVG reader, scoring, overlay and live-runner
+code that lived in `tests/pipeline/`. Those modules move to a new
 top-level `lessonkit/` package, and one-line re-export shims stay in `tests/pipeline/`
 so every existing command and test keeps working unchanged. Shipped code never imports
 from the test tree.
@@ -134,11 +153,11 @@ The Stage 5 tests (§18) include:
 | `.env.example` | add the approved optional names: `TEACH_ALERT_WEBHOOK_URL`, `TEACH_LOCAL_DIR`, `TEACH_TRUSTED_PROXY_HOPS`, `TEACH_PUBLIC_BASE_URL`, `TEACH_LLMS_TXT` (§4). Names only, empty values. |
 | `.gitignore` | one `!tests/teach/**/test*.py` exception, like the existing ones |
 | `README.md` | short Teach section |
-| `tests/pipeline/{svg_reference,scoring,overlay,lesson,runner,trace_template}.py` | re-export shims (option A, §3.1), in the first Stage 5 commit |
+| `tests/pipeline/{svg_reference,scoring,overlay,lesson,runner}.py` | re-export shims (option A, §3.1), in the first Stage 5 commit |
+| `templates/index.html` | revision 3 only: two `{% if teach_main_ui %}` blocks (the Teach panel and two script tags). `teach_main_ui` exists only when the blueprint is registered, so with Teach off the page renders byte-identically (tested by hash). |
 
 Not touched: `centerline_engine*.py`, `centerline_core.py`, `test_ui_backend.py`,
-`templates/index.html` and other templates, `static/`, existing tests, fixtures and
-goldens.
+other templates, `static/`, existing tests, fixtures and goldens.
 
 ## 4. Configuration
 
@@ -212,49 +231,100 @@ and the page shows a "LOCAL MODE" banner.
 
    | field | required | notes |
    |---|---|---|
-   | bitmap | yes | PNG or JPEG (§9.1) |
+   | bitmap | yes | PNG or JPEG (§9.1). Ideally the cropped image downloaded from the main app (§5.1). |
    | reference SVG | yes | registered to the bitmap by an embedded `<image>`, a size match or a border rect (§9.2) |
    | title | yes | ≤ 120 characters (a sanitised ≤ 80-character version is public straight away, §11) |
-   | what is wrong | yes | ≤ 2000 characters |
-   | what is expected | yes | ≤ 2000 characters |
-   | notes | no | ≤ 4000 characters |
-   | focus box | no | x0, y0, x1, y1 around the problem; used as the initial scoring region |
-   | settings used | no | `dark_threshold`, `enable_pruning`, `normalization_mode`, `normalization_sensitivity`, `min_path_length`. Same whitelist and ranges as the UI; UI defaults otherwise. |
+   | description | yes | "What's wrong, what you expected, and any notes", ≤ 4000 characters |
+   | settings used | no | shown as a read-only "Settings used" line with an **Advanced** section to change them. The ten settings and ranges are those of the main UI (below); the page always sends all ten. |
    | public thumbnail | no (off) | allow the overlay thumbnail to be public once reviewed |
    | share full bitmap | no (off) | allow the full bitmap to be public once reviewed |
    | consent and licence | yes | checkbox with the text in §13 |
 
-   **Scoring tolerance is never a field.** The submitter cannot set it.
-3. **Download trace template** (optional, stateless): as soon as a bitmap has been
-   chosen (or after a validate call), the page offers **"Download trace template"**.
-   The browser posts only the bitmap to `POST /teach/api/trace-template`. The server
-   validates it with the same bitmap rules (§9.1) and returns a zip generated in
-   memory:
-   * `<name>-faded.png`: the bitmap faded towards white (default fade 0.35), at its
-     exact pixel size, with 96 dpi metadata;
-   * `<name>-template.svg`: `width`/`height` in px equal to the bitmap,
-     `viewBox="0 0 W H"`, the faded PNG embedded at `0,0 W×H`, and no other shapes;
-   * `<name>-README.txt`: draw one open path per stroke along the centre; keep the
-     image in the export (do not hide or delete it); export SVG.
+   **Scoring tolerance is never a field.** The submitter cannot set it. The focus
+   box is not on the form. The API still accepts an optional `focus_box` in `meta`,
+   and the admin sets the scoring region at review (Stage 6).
 
-   **Nothing is stored**, no ID is issued and nothing is logged except the request
-   count. It counts against the validate rate limit (§12.2), does not use the scoring
-   queue (it is a resize-free fade and re-encode only), and the request body cap is
-   the bitmap cap. It is the same code as the Stage 2c CLI
-   (`python -m tests.pipeline.trace_template`, moved to `lessonkit` in Stage 5).
-4. **Check** (optional, no storage): the browser calls `/teach/api/validate`. This
+   **Settings whitelist** (the same ranges and defaults as `templates/index.html`;
+   `teach/schema.py` `SETTINGS`):
+
+   | setting | range | UI default |
+   |---|---|---|
+   | `dark_threshold` | 0.05–0.8 | 0.2 |
+   | `min_path_length` | integer 1–20 | 2 |
+   | `enable_pruning` | boolean | false |
+   | `normalization_mode` | auto / on / off | auto |
+   | `normalization_sensitivity` | low / medium / high | medium |
+   | `enable_post_fit_export` | boolean | false |
+   | `source_smoothing` | 0–100 | 70 |
+   | `enable_curve_fitting` | boolean, **effective** value (post-fit on AND ticked) | false |
+   | `cubic_fit_tolerance` | 0.35–4.0 | 0.35 |
+   | `force_orthogonal_as_lines` | boolean | false |
+
+   When a setting is absent, the server's own fallbacks differ from the UI
+   (`source_smoothing` 0, `cubic_fit_tolerance` 1.0, curve fitting off), so Teach
+   always fills in and passes all ten explicitly. The old merge/overlap optimisation
+   settings (`enable_optimization`, `merge_gap`, `rdp_tolerance`, ...) are not
+   accepted; the UI forces them off.
+
+   The page tells users: crop to the problem area with the main app's crop tools and
+   leave a little context around it; trace over the original (cropped) image (the
+   image layer's output can be disabled); keep the image in the exported SVG.
+3. **Check** (optional, no storage): the browser calls `/teach/api/validate`. This
    returns precise, fixable errors, or the pass/fail result with an overlay preview.
    It also calls `/teach/api/similar`, which may say "looks similar to #N" (§10).
-   The validate result repeats the "Download trace template" link, so a user whose
-   SVG fails registration can start again from a template that is known to work.
-5. **Submit:** the server validates again (it never trusts the client), stores the
+4. **Submit:** the server validates again (it never trusts the client), stores the
    files, runs the scoring worker, and stores the result and overlay. The status moves
    to `pending_review`. The response shows the overlay with pass/fail, the submission
    number, the queue URL and a **manage link** (§13.3).
-6. **Queue:** the case appears in the public queue under the visibility rules in §11.
+5. **Queue:** the case appears in the public queue under the visibility rules in §11.
 
 If scoring times out or errors, the submission is still stored with outcome `timeout`
 or `error`. This is useful information for the owner.
+
+### 5.1 Hand-off from the main app (revision 3)
+
+* **Visibility.** `templates/index.html` has two blocks guarded by `teach_main_ui`, a
+  context flag added by the Teach blueprint's context processor, so it exists only
+  when Teach is registered. With Teach off the rendered page is byte-identical to
+  before. With Teach on, `static/teach/main_teach.js` first calls
+  `GET /teach/api/status` (`{"teach":"enabled"}`, or 404 when Teach is off). Only on a
+  200 does it show an **unchecked** "Teach" checkbox. Unticked, nothing else happens.
+* **Ticked:** a "Download the cropped image" button and, after a run, a
+  "Send this to Teach" link (opened by the user in a new tab; no pop-ups). The script
+  only wraps the page's `processImage`, `displayImmediateResults` and `clearResults`
+  to remember the last run's session, crop and settings. It sends GET requests only
+  and never changes results.
+* **Cropped image.** The crop is applied on the server in `/process_immediate` from
+  fractional `crop_region` values. `GET /teach/api/crop/<sid>/image.png?top=&bottom=&left=&right=`
+  applies the same rounding rule (`teach/crop.py`, `crop_box`) to the session's
+  stored pixels and returns exactly the region the engine processed, as an 8-bit
+  greyscale PNG (no crop → the processed bitmap unchanged). The route is read-only:
+  it never creates, touches or modifies a session (no `last_accessed` update), and it
+  is rate-limited (120/hour per IP). After a run, the download uses that run's crop.
+* **Equivalence guard.** `GET /teach/api/crop/<sid>` returns size, sha-256 and
+  whether the crop traces the same on its own. It is equivalent when:
+  * the engine's `resolve_parameter_scale` is the same for the full image and the crop;
+  * reloading the PNG through the app's loader gives the same extraction profile; and
+  * the reload gives the same pixels.
+
+  If equivalent, the Send link is built. If not, the link is withheld and a note
+  says how to continue. For a large image the note reads: "This image is large, so the app sizes its
+  settings from the whole picture and the cropped piece may trace differently on its
+  own. To teach with it: download the cropped image, upload it to the app as a new
+  image, check that the problem still shows, then tick Teach again." If the reload
+  changes the pixels (for example an RGB or JPEG source converted on upload), a
+  second note says "The app adjusted this image when it loaded it, …" with the same
+  remedy. The download is still offered.
+* **Fragment.** The link is `/teach#s=<base64url JSON>` with
+  `{"v":1,"settings":{…ten…},"image_sha256":"…"}`. The Teach page parses it
+  client-side (`static/teach/fragment.js`): unknown keys, malformed or oversized
+  input (> 2048 characters) or out-of-range values make it ignore the whole fragment
+  silently and use the defaults. The fragment is never sent to the server, and the
+  server re-validates every setting.
+* **Mix-up check.** If the fragment has an image hash, the page hashes the attached
+  bitmap with SubtleCrypto and, if it differs, shows the warning "This doesn't look
+  like the cropped image from the app." It never blocks submission. (SubtleCrypto
+  needs https or localhost; otherwise the check is skipped.)
 
 ## 6. Data model
 
@@ -291,7 +361,7 @@ SVG). This moves the case back to `pending_review` and keeps the history.
   "status": "pending_review",
   "status_history": [{"status": "submitted", "at": "...", "by": "server"}],
   "reviewed": false,              // true once the admin has set any status (§11)
-  "title": "...", "what_is_wrong": "...", "what_is_expected": "...", "notes": "...",
+  "title": "...", "description": "...",   // one text field since revision 3
   "title_public": "...",          // sanitised title (§11), computed at submit time
   "title_hidden": false,          // admin one-click hide (§11)
   "admin_note_public": "", "admin_note_private": "",
@@ -301,7 +371,7 @@ SVG). This moves the case back to `pending_review` and keeps the history.
   "image": {"width": 256, "height": 256, "sha256": "...", "phash": "c3a1..."},
   "reference": {"paths": 2, "points": 812, "sha256_geometry": "...",
                 "registration": "image_frame"},   // image_frame | size_match | border_rect (§9.2)
-  "params": {"dark_threshold": 0.2},
+  "params": {"dark_threshold": 0.2, ...},          // all ten settings, always explicit (§5)
   "scoring": {"region": null, "tolerance_px": 1.0, "set_by": "default"},
   "results": [{"engine_commit": "de89229", "at": "...", "outcome": "fail",
                "variant": "prune_off", "summary": "...", "metrics": {},
@@ -408,12 +478,24 @@ scikit-image.
   Beyond that, return `503 busy` with `Retry-After: 30`. Validate and submit share this
   queue.
 * **Variants:** `prune_off` (the primary variant, as in the UI) and `prune_on` are both
-  scored. `/process` is not run for Teach.
+  scored. `/process` is not run for Teach. All ten settings (§5) are passed to
+  `/process_immediate` explicitly.
+* **`post_fit` variant (revision 3), only when `enable_post_fit_export` is true.**
+  `/process_immediate` returns the raw extracted paths; smoothing and curve fitting
+  happen only when the SVG is rendered (`create_svg_output` with
+  `fit_optimized_paths`). `lessonkit.runner.run_post_fit` therefore runs `/upload` →
+  `/process_immediate` (all ten settings) → `GET /download_svg/<sid>?include_image=0`,
+  the same route as the Download button. It reads the fitted path data back with the
+  safe reader, sampling curves every 0.25 px, and scores the result as an extra
+  variant `post_fit`. The scoring rules, result record shape and overlay
+  (`overlay_post_fit.png`) are the same as for the other variants. `prune_off` stays the
+  primary variant. With post-fit off nothing changes: the lesson JSON before and
+  after revision 3 is identical for all 29 lessons.
 * **Scoring:**
   * Uses `lessonkit.scoring.score_paths` with the submission's `scoring` block.
   * The tolerance defaults to **1.0 px** and only the admin can change it.
-  * The region is the submitter's focus box if one was given, otherwise the whole
-    image. The admin can replace it.
+  * The region is the whole image unless a `focus_box` was sent through the API.
+    The admin sets or replaces it at review.
 * **Overlay:** rendered server-side to PNG by `lessonkit.overlay`, with the
   reference, engine paths, junctions and endpoints. The user's SVG is never rendered
   by a browser.
@@ -477,13 +559,16 @@ scikit-image.
   2. **Border rectangle:** a `rect` with `id`, `class` or `data-role` = `border`
      spanning the image.
   3. **Size match:** `width`/`height`/`viewBox` equal to the bitmap's pixel size.
-  4. Otherwise `svg_no_registration`, with a hint to keep the image in the export or
-     to start from the trace template (§5 step 3).
+  4. Otherwise `svg_no_registration`, with the hint: "keep the image in the export,
+     or make the SVG width/height/viewBox equal the bitmap's pixel size, with
+     coordinates in pixels".
 * **Pixel convention:** SVG coordinates are pixel-edge based; the engine and scoring
   use pixel centres, so the reader subtracts 0.5 px after registration.
 * **LightBurn exports** (the owner's tool) must keep the image in the export, with
-  the traced paths ungrouped; document units mm or px are both fine. The rules are in
-  `docs/migration/lesson-format.md` and are repeated in the spec (§14.1).
+  the traced paths ungrouped; document units mm or px are both fine. Trace over the
+  original (cropped) image. Its layer output can be disabled, because LightBurn
+  keeps the image in the exported SVG anyway (confirmed by the owner). The rules are
+  in `docs/migration/lesson-format.md` and are repeated in the spec (§14.1).
 * The raw upload is stored privately for the admin's audit and is never served
   inline. If the admin downloads it, it is sent as `Content-Type: text/plain` and
   `Content-Disposition: attachment`.
@@ -504,7 +589,7 @@ new case with every non-deleted submission:
 | exact | SHA-256 of the re-encoded PNG **and** of the canonical geometry | equal → **blocked**, offered "me too" |
 | image | 64-bit DCT perceptual hash (numpy + scipy.fft) on a 32×32 downscale | Hamming ≤ **10** |
 | geometry | when sizes are equal: symmetric mean chamfer distance between reference paths | ≤ **2 px** |
-| text | token Jaccard on title + what is wrong (lower-cased, stop words removed) | ≥ **0.6** |
+| text | token Jaccard on title + description (lower-cased, stop words removed) | ≥ **0.6** |
 
 A match is shown if:
 * the image signal matches; or
@@ -579,7 +664,7 @@ The submitter always sees their own full case through the manage link.
 |---|---|
 | bitmap | ≤ 4 MB, 32–2048 px per side, ≤ 4 MP |
 | SVG | ≤ 512 KB, ≤ 200 elements, ≤ 200k points |
-| text | title 120, what is wrong / what is expected 2000 each, notes 4000 characters |
+| text | title 120, description 4000 characters |
 | request body (Teach routes) | ≤ 5 MB, checked from `Content-Length` and while streaming |
 | scoring | 30 s wall clock, 1 concurrent, queue ≤ 3, `RLIMIT_AS` 1.5 GB |
 
@@ -594,8 +679,9 @@ admin token, which is used only for the startup check until Stage 6.
 
 | action | per IP | global |
 |---|---|---|
-| `/teach/api/validate` (and `/teach/api/trace-template`, which shares this counter) | **60 / hour** | **600 / hour** |
+| `/teach/api/validate` | **60 / hour** | **600 / hour** |
 | `/teach/api/similar` | 60 / hour | – |
+| `/teach/api/crop/...` (main-app hand-off, §5.1; read-only) | 120 / hour | – |
 | submissions + me-too | 5 / hour, 20 / day | **200 / day** |
 | stored bytes | **20 MB / day** | **500 MB / day** |
 | manage-link actions | 30 / hour | – |
@@ -703,13 +789,11 @@ truncated hash of the IP.
   on the Teach page, from one source file, `teach/spec.md`. It contains the rules,
   field list, limits, SVG requirements (including the LightBurn export rules, §9.2),
   the worked example and the error codes.
-* The spec has a **"Trace template"** section for agents: when you have a bitmap but
-  no SVG yet, `POST` the bitmap alone to `/teach/api/trace-template`; the zip contains
-  a faded PNG and a template SVG already registered to the bitmap
-  (`viewBox="0 0 W H"`, image at `0,0 W×H`). Add one open `<path>` per stroke, in the
-  template's pixel coordinates (pixel edges, so the centre of pixel column 10 is
-  x = 10.5), keep the `<image>`, and submit that file as `reference`. This is the
-  most reliable way for an agent to produce a correctly registered SVG.
+* For agents producing an SVG by script: add one open `<path>` per stroke in the
+  bitmap's pixel coordinates (pixel edges, so the centre of pixel column 10 is
+  x = 10.5), and set `width`/`height` in px and `viewBox="0 0 W H"` equal to the
+  bitmap's pixel size (size-match registration, §9.2). Embedding the bitmap as one
+  `<image>` at `0,0 W×H` also works.
 * Optionally, `GET /llms.txt` (only if `TEACH_LLMS_TXT=1`) returns a short pointer:
   the app name, one line on what Teach is, and links to `/teach/spec` and
   `/teach/openapi.json`.
@@ -729,7 +813,9 @@ truncated hash of the IP.
 | `GET /teach/spec`, `/teach/openapi.json`, `/teach/schema/submission.json` | docs |
 | `GET /teach/example/{image.png,reference.svg,request.json}` | worked example files (§14.5) |
 | `POST /teach/api/validate` | **dry run**: validate and score; stores nothing |
-| `POST /teach/api/trace-template` | bitmap only → zip of faded PNG, template SVG and README (§5 step 3); stateless, stores nothing |
+| `GET /teach/api/status` | `{"teach":"enabled"}`; with Teach off the route does not exist (404). Used by the main page (§5.1). |
+| `GET /teach/api/crop/<sid>?top=&bottom=&left=&right=` | read-only: crop size, sha-256 and equivalence verdict for a main-app session (§5.1) |
+| `GET /teach/api/crop/<sid>/image.png?...` | read-only: the exact pixels the engine processed, as PNG (§5.1) |
 | `POST /teach/api/similar` | duplicate check only |
 | `POST /teach/api/submissions` | submit |
 | `POST /teach/api/submissions/<number>/me-too` | add to an existing item |
@@ -749,7 +835,7 @@ Requests are `multipart/form-data`, with the files `image` and `reference` and a
   "errors": [
     {"field": "reference", "code": "svg_no_registration",
      "message": "Cannot register the SVG to the 256x256 bitmap: it has no <image>, no border rect, and its size is 67.7x67.7 mm.",
-     "hint": "Keep the traced image in the export, or start from /teach/api/trace-template."}
+     "hint": "Keep the image in the export, or make the SVG width/height/viewBox equal the bitmap's pixel size, with coordinates in pixels."}
   ],
   "warnings": [{"code": "image_large", "message": "...", "hint": "Crop to the problem area."}],
   "result": null
@@ -757,9 +843,10 @@ Requests are `multipart/form-data`, with the files `image` and `reference` and a
 ```
 
 On success, `result` contains the outcome, per-line coverage and p95, path, junction
-and endpoint counts, the engine commit, the registration method used (§9.2), a
-`trace_template_url` hint, and an `overlay_png` (a data URL for validate, a URL for
-submit).
+and endpoint counts, the engine commit, the registration method used (§9.2), and an
+`overlay_png` (a data URL for validate, a URL for submit). With
+`enable_post_fit_export` on, the `post_fit` variant record is included with the
+others, and the submit response adds `post_fit_overlay_png`.
 
 Error codes include:
 * bitmap: `image_too_large`, `image_dimensions`, `image_format`, `image_multiframe`;
@@ -788,7 +875,7 @@ two-path `reference.svg` and `request.json`. The spec shows the exact `curl` cal
 ```bash
 curl -sS -X POST https://<host>/teach/api/validate \
   -F image=@image.png -F reference=@reference.svg \
-  -F 'meta={"title":"Thin line kinks where it crosses a thick line","what_is_wrong":"...","what_is_expected":"...","consent":true}'
+  -F 'meta={"title":"Thin line kinks where it crosses a thick line","description":"...","consent":true}'
 ```
 
 It also shows the expected response, including the failing result.
@@ -797,10 +884,11 @@ It also shows the expected response, including the failing result.
 
 1. One problem per submission.
 2. Search the queue first. If your case is already there, use "me too".
-3. The SVG must be registered to the bitmap. Best: keep the traced image in the export
-   (LightBurn does this as long as the image is not hidden or deleted), or start from
-   the trace template. Otherwise match the bitmap's pixel size or include a border
-   rect. Draw one open path per stroke, along the ideal centre.
+3. The SVG must be registered to the bitmap. Best: trace over the original (cropped)
+   image and keep the image in the exported SVG (in LightBurn you may disable the
+   image layer's output; the image stays in the export). Otherwise make the SVG
+   width/height/viewBox equal the bitmap's pixel size, with coordinates in pixels.
+   Draw one open path per stroke, along the ideal centre.
 4. Crop to the problem area with some context. No confidential or personal content.
 5. You cannot set the scoring tolerance; the maintainer does.
 6. Run `/teach/api/validate` first and fix every error before submitting.
@@ -911,9 +999,9 @@ lower-case ASCII, at most 40 characters. It is a standard lesson folder
   |---|---|
   | `category` | `"user"` |
   | `title` | the submission title |
-  | `description` | what is wrong |
-  | `expected_behaviour` | what is expected |
-  | `notes` | the submitter's notes + me-too summary + public admin note |
+  | `description` | the submitter's single text field ("What's wrong, what you expected, and any notes") |
+  | `expected_behaviour` | completed by the admin at export (Stage 6) |
+  | `notes` | me-too summary + public admin note |
   | `source` | `{"kind": "teach", "submission": 42, "queue_url": "..."}` |
   | `licence` | e.g. `"CC0-1.0 (submitted via Teach)"` |
   | `consent` | `{"public": true, "by": "submitter via Teach form, consent text v1, <date>"}`. No personal data. |
@@ -989,9 +1077,30 @@ New folder `tests/teach/`, with a `.gitignore` exception like the others:
   border rect, size match, none), a rotated or wrong-aspect `<image>`, a
   decompression-bomb header, multi-frame images, and PNG metadata being stripped. The
   LightBurn sample from Stage 2b is a fixed test case.
-* **Trace template:** the endpoint returns the three files, stores nothing (storage
-  is unchanged before and after), and its SVG registers back onto the bitmap through
-  the reader.
+* **Trace template (removed in revision 3):** `POST /teach/api/trace-template`
+  returns 404, and the spec, OpenAPI and page no longer mention it.
+* **Form and settings (revision 3):** the single `description` field (required,
+  ≤ 4000) and the old three fields being rejected as unknown. The ten-setting
+  whitelist, with bounds and defaults equal to `templates/index.html`. All ten are
+  passed explicitly, and omitting them would have given different server defaults.
+  The second LightBurn sample (image frame moved elsewhere on the canvas) stays a
+  reader test.
+* **Fragment (revision 3):** parsing and bounds in `fragment.js`, run under Node.
+  Malformed, oversized, out-of-range input or extra keys are ignored. The encoder
+  round-trips and matches the Python encoding.
+* **post_fit (revision 3):** the variant is present when post-fit is on and absent
+  when it is off; with post-fit off, results equal the pre-revision results.
+* **Main-app hand-off (revision 3):**
+  * with Teach off, the rendered main page equals the pre-change hash and
+    `/teach/api/status` is 404;
+  * with Teach on, the panel starts hidden and unticked, and `main_teach.js` only
+    sends GETs under `/teach/api/`;
+  * the cropped download equals the engine's processed region (pixels and size, using
+    the engine's rounding rule), and no crop gives the bitmap unchanged;
+  * the crop routes are read-only (no session created or touched);
+  * equivalence: a small image cropped gives identical paths (after the offset) to
+    the full image with `crop_region`; a large image and an RGB source get the
+    guard notes.
 * **Scoring:** a submission built from `tests/lessons/cross-t2-w8-a35` gives the same
   outcome and metrics as `run_lessons` (using the Stage 2 runner); timeout handling
   with a forced sleep.
@@ -1034,8 +1143,9 @@ New folder `tests/teach/`, with a `.gitignore` exception like the others:
 8. Alerts go to ntfy, debounced, with title, status and link only (§15.5).
 9. Registration from the `<image>` placement frame, and transforms and units, are
    required before Stage 5 starts (§9.2; implemented in Stage 2b).
-10. A stateless "Download trace template" is offered after a bitmap is chosen or
-    validated (§5, §14).
+10. ~~A stateless "Download trace template" is offered after a bitmap is chosen or
+    validated.~~ Withdrawn in revision 3: the trace template is removed; users trace
+    over the original (cropped) image and keep it in the export.
 
 **Unverified (check first in Stage 5):**
 11. **[unverified]** Railway sets `X-Forwarded-Proto` and appends exactly one
@@ -1047,8 +1157,8 @@ New folder `tests/teach/`, with a `.gitignore` exception like the others:
     The fallback is in-process locking only, which is safe with one worker.
 14. **[unverified]** ntfy's `auth` query parameter for protected topics (§15.5). It is
     not needed if the topic is an unguessable ntfy.sh topic.
-15. **[unverified]** How LightBurn imports the trace template SVG (embedded image) and
-    the faded PNG; the owner tests this by hand (Stage 2c).
+15. Resolved: LightBurn keeps the traced image in the exported SVG, even with the
+    image layer's output disabled (owner, revision 3). The trace template is gone.
 
 **Assumptions and other notes:**
 16. **Single process:** the design assumes one gunicorn worker and one instance, as in
@@ -1070,8 +1180,9 @@ New folder `tests/teach/`, with a `.gitignore` exception like the others:
 
 ## 20. Rollout
 
-0. Before Stage 5: Stage 2b (SVG transforms, units, `<image>` registration) and
-   Stage 2c (trace template) are merged, and the `lessonkit/` move is its own commit.
+0. Before Stage 5: Stage 2b (SVG transforms, units, `<image>` registration) is
+   merged, and the `lessonkit/` move is its own commit. (Stage 2c's trace template
+   was removed in revision 3.)
 1. Stage 5 lands with `TEACH_ENABLED` unset. Deploy, and confirm the url_map is
    unchanged and `/teach` returns 404.
 2. Create a separate Railway environment (staging) with its own R2 bucket and

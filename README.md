@@ -142,6 +142,14 @@ With no `R2_*` variables set, data is stored in a local folder: `TEACH_LOCAL_DIR
 `~/.centerline-teach` (outside the repo). The page shows a "LOCAL MODE" banner. Delete that folder to
 start again. The Teach tests run with `pytest tests/teach`.
 
+When Teach is enabled, the main page also shows an unchecked **Teach** checkbox (with Teach off the
+main page is unchanged). Ticking it offers **Download the cropped image**, which gives exactly the
+pixels the engine processed, and after a run a **Send this to Teach** link. The link opens `/teach` with
+the run's settings filled in. To prepare a case: crop to the problem area with the app's crop tools,
+leaving a little context, then trace over the cropped image in your vector program. Keep the image in
+the exported SVG (in LightBurn you can disable the image layer's output and it still stays in the
+export). Details are in [docs/teach/design.md](docs/teach/design.md) §5.1.
+
 ## Deployment
 
 ### Heroku

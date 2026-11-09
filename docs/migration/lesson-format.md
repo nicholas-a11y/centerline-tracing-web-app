@@ -27,7 +27,7 @@ tests/lessons/<id>/
 | `licence`, `consent` | licence text and `{public, by}` |
 | `image` | `{file, width, height}`; width/height are checked against the PNG |
 | `reference` | `{file}` |
-| `params` | pinned `/process_immediate` parameters. Defaults equal the UI defaults: `dark_threshold 0.2`, `min_path_length 2`, `enable_pruning false`, `normalization_mode auto`, `normalization_sensitivity medium`. Both pruning off and on are always run; `prune_off` is the scored variant. |
+| `params` | pinned `/process_immediate` parameters. Defaults equal the UI defaults: `dark_threshold 0.2`, `min_path_length 2`, `enable_pruning false`, `normalization_mode auto`, `normalization_sensitivity medium`. Both pruning off and on are always run; `prune_off` is the scored variant. **Optional** (added for Teach exports; `lessonkit.lesson.OPTIONAL_PARAMS`): `enable_post_fit_export false`, `source_smoothing 70`, `enable_curve_fitting false`, `cubic_fit_tolerance 0.35`, `force_orthogonal_as_lines false`, with the main UI's defaults. The extension is additive: existing lessons do not set them and their params and results are unchanged. Any other key is rejected. |
 | `scoring.region` | `{x0,y0,x1,y1}` in SVG/pixel-edge coordinates, or `null` for the whole image |
 | `scoring.tolerance_px` | max lateral error (p95) inside the region |
 | `scoring.min_single_path_coverage` | fraction of each reference line that one single output path must cover within tolerance |
@@ -113,8 +113,9 @@ stdlib + numpy only. It never calls `extract_manual_centerlines_from_svg`.
   3. `size-match`: root `width`/`height` in px (or unitless), or the `viewBox`
      size, equal to the bitmap. A `mm`/`in`/`pt` size alone is never trusted,
      because it equals pixels only through an assumed dpi.
-  4. Otherwise `svg_no_registration` with a hint to keep the image in the export
-     or start from the [trace template](#trace-template).
+  4. Otherwise `svg_no_registration`, with the hint: "keep the image in the export,
+     or make the SVG width/height/viewBox equal the bitmap's pixel size, with
+     coordinates in pixels".
 * Ignores styles, `<text>` and non-rendered subtrees (`defs`, `clipPath`,
   `mask`, `pattern`, `marker`, `symbol`, `metadata`, ...).
 * **Rejects** `<!DOCTYPE`/`<!ENTITY`, `<use>` and nested `<svg>`, each with a
@@ -125,14 +126,18 @@ stdlib + numpy only. It never calls `extract_manual_centerlines_from_svg`.
 
 Tested with `tests/pipeline/samples/lightburn-cross-t2-w8-a35.svg` (lesson
 `user-lightburn-cross-t2-w8-a35`, traced over the lesson `image.png`) and
-`tests/pipeline/samples/lightburn-faded-cross-t2-w8-a35.svg` (traced over the
-faded trace-template PNG, with the image placed elsewhere on the canvas). Both
-recover the same two lines within 0.1 px (measured: 0.013 px thick, 0.074 px thin):
+`tests/pipeline/samples/lightburn-faded-cross-t2-w8-a35.svg` (traced over a
+lightened copy of the same image, with the image placed elsewhere on the canvas,
+so registration comes from a moved image frame). Both recover the same two lines
+within 0.1 px (measured: 0.013 px thick, 0.074 px thin):
 
-* **Keep the image in the export.** Do not hide or delete the traced bitmap
-  before exporting; its placement is how the reader aligns your lines. LightBurn
-  writes it with `matrix(1,0,0,-1,…)` and stores the PNG upside down so it renders
-  upright; only the rendered rectangle matters.
+* **Trace over the original (cropped) image**, cropped to the problem area with the
+  main app's crop tools and a little context left around it.
+* **Keep the image in the export.** Do not delete the traced bitmap before
+  exporting; its placement is how the reader aligns your lines. You may disable the
+  image layer's output: LightBurn still keeps the image in the exported SVG
+  (confirmed by the owner). LightBurn writes it with `matrix(1,0,0,-1,…)` and stores
+  the PNG upside down so it renders upright; only the rendered rectangle matters.
 * **Ungrouped paths**: draw one open path per stroke along the stroke centre.
   (Groups and transforms are read correctly, but ungrouped is what has been
   tested.)
@@ -142,44 +147,6 @@ recover the same two lines within 0.1 px (measured: 0.013 px thick, 0.074 px thi
 
 Inspect any export with
 `.venv\Scripts\python.exe -m tests.pipeline.inspect_svg <file.svg> --bitmap <image.png>`.
-
-## Trace template
-
-To hand-trace a reference in a CAD/vector program (LightBurn, Inkscape, ...), start
-from a template so the exported SVG registers onto the bitmap:
-
-```powershell
-.venv\Scripts\python.exe -m tests.pipeline.trace_template path\to\image.png [--fade 0.35] [--out <folder>]
-```
-
-Default output folder: `%TEMP%\centerline-trace-templates` (outside the repo).
-
-| file | content |
-|---|---|
-| `<name>-faded.png` | the bitmap moved towards white by `--fade` (`v + (255 − v)·fade`), so black traced lines stand out. Exact original pixel size, 96 dpi metadata (PNG stores 3780 px/m, read back as 96.012 dpi, the same as the LightBurn export) |
-| `<name>-template.svg` | `width`/`height` = bitmap px, `viewBox="0 0 W H"`, the faded PNG embedded as one `<image>` at 0,0 W×H, no other shapes |
-| `<name>-README.txt` | draw one open path per stroke along the centre; keep the image in the export; export SVG |
-
-Import either the faded PNG or the template SVG, trace, and export **with the
-image still in the drawing**. The reader then uses the image's placed rectangle
-as the frame, so document units, import dpi, origin and Y-axis direction do not
-matter. `build_template_files()` is stateless (bytes in, bytes out) for the
-planned Teach "Download trace template" endpoint.
-
-Round-trip tests (`tests/pipeline/test_trace_template.py`) add traced paths to
-the template in px and in a LightBurn-style mm/Y-up variant (at 96 and 72 dpi
-import) and check the reader recovers them exactly.
-
-Verified in LightBurn by hand:
-
-* **Faded PNG route: verified.** Importing `<name>-faded.png` into LightBurn,
-  tracing, and exporting SVG with the image kept works
-  (`samples/lightburn-faded-cross-t2-w8-a35.svg`). LightBurn embeds the faded PNG
-  unchanged except for being stored vertically flipped, places it at 256 px →
-  67.725 mm (96 dpi), and the reader registers it from the image frame wherever
-  it sits on the canvas.
-* **Template SVG route: untested.** How LightBurn imports `<name>-template.svg`
-  (embedded image, px size) has not been checked yet.
 
 ## Commands
 
