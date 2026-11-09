@@ -396,7 +396,7 @@ class TeachService:
                                     "Only items with status needs_info can be answered.", "")])
         note = clean_text(note or "")
         if not note and not reference:
-            raise Problems([Problem("note", "field_missing", "Add a note or a replacement reference SVG.", "")])
+            raise Problems([Problem("note", "field_missing", "Add a note or a replacement hand traced SVG.", "")])
         if len(note) > schema.MANAGE_ANSWER_MAX:
             raise Problems([Problem("note", "field_too_long",
                                     f"'note' is limited to {schema.MANAGE_ANSWER_MAX} characters.", "")])

@@ -13,7 +13,7 @@
 {% if item.reviewed %}
   <h2>What's wrong, what was expected, and notes</h2><p class="pre">{{ item.description }}</p>
   {% if item.admin_note_public %}<h2>Maintainer note</h2><p class="pre">{{ item.admin_note_public }}</p>{% endif %}
-  {% if item.thumbnail_url %}<p><img src="{{ item.thumbnail_url }}" alt="Overlay of the engine's centerlines (red) and the reference (green) for #{{ item.number }}"></p>{% endif %}
+  {% if item.thumbnail_url %}<p><img src="{{ item.thumbnail_url }}" alt="Overlay of the engine's centerlines (red) and the hand traced SVG (green) for #{{ item.number }}"></p>{% endif %}
 {% else %}
   <p>Details are private until the maintainer has reviewed this item.</p>
 {% endif %}

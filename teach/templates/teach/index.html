@@ -2,7 +2,7 @@
 {% block title %}Submit a hard case{% endblock %}
 {% block main %}
 <h1>Teach the tracer a hard case</h1>
-<p>Found an image the tracer gets wrong? Send the bitmap and a hand-traced SVG of the centerlines you expected.
+<p>Found an image the tracer gets wrong? Send the bitmap and a hand traced SVG of the centerlines you expected.
 The case is scored against the live engine, reviewed, and may become a permanent test.
 Agents: read the <a href="{{ url_for('teach.spec') }}">spec</a> or the <a href="{{ url_for('teach.openapi') }}">OpenAPI document</a>.</p>
 
@@ -40,8 +40,9 @@ Agents: read the <a href="{{ url_for('teach.spec') }}">spec</a> or the <a href="
       </div>
       <p id="preattach-status" role="status" hidden></p>
       <p id="mixup-warning" class="warn" role="status" hidden>This doesn't look like the cropped image from the app.</p>
-      <p><label for="reference">Reference SVG (up to {{ (limits.MAX_SVG_BYTES // 1024) }} KB including any embedded image)</label>
-        <input id="reference" name="reference" type="file" accept=".svg,image/svg+xml" required></p>
+      <p><label for="reference">Hand traced SVG</label>
+        <span id="reference-help" class="help">Attach the SVG you drew by hand over the bitmap. Up to {{ (limits.MAX_SVG_BYTES // 1024) }} KB including any embedded image.</span>
+        <input id="reference" name="reference" type="file" accept=".svg,image/svg+xml" aria-describedby="reference-help" required></p>
     </fieldset>
     <fieldset>
       <legend>Description</legend>

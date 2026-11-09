@@ -94,7 +94,7 @@ ADVICE_TEXT = (
 RULES = (
     "One problem per submission.",
     "Search the queue first. If your case is already there, use \"me too\".",
-    "The SVG must be registered to the bitmap. Best: trace over the original (cropped) image and keep "
+    "The hand traced SVG must be registered to the bitmap. Best: trace over the original (cropped) image and keep "
     "the image in the exported SVG (in LightBurn you may disable the image layer's output; the image "
     "stays in the export). Otherwise make the SVG width/height/viewBox equal the bitmap's pixel size, "
     "with coordinates in pixels. Draw one open path per stroke, along the ideal centre.",
@@ -157,7 +157,7 @@ def me_too_meta_schema() -> dict:
         "type": "object",
         "properties": {
             "note": {"type": "string", "maxLength": ME_TOO_NOTE_MAX},
-            "consent": {"type": "boolean", "description": "Required (true) when a variant image and reference are sent."},
+            "consent": {"type": "boolean", "description": "Required (true) when a variant image and hand traced SVG are sent."},
         },
         "additionalProperties": False,
     }
@@ -187,7 +187,7 @@ def openapi() -> dict:
                               "description": f"PNG or JPEG, <= {MAX_IMAGE_BYTES} bytes, {MIN_SIDE_PX}-{MAX_SIDE_PX} px "
                                              f"per side, <= {MAX_PIXELS} pixels"},
                     "reference": {"type": "string", "format": "binary",
-                                  "description": f"SVG registered to the bitmap, <= {MAX_SVG_BYTES} bytes"},
+                                  "description": f"The hand traced SVG, registered to the bitmap, <= {MAX_SVG_BYTES} bytes"},
                     "meta": {"type": "string", "description": "JSON; see /teach/schema/submission.json"},
                 },
                 "required": ["image", "reference", "meta"],
@@ -219,7 +219,7 @@ def openapi() -> dict:
             "/teach/api/submissions/{number}": {"get": {"summary": "Public data for one item", "parameters": number,
                                                         "responses": {"200": {"description": "public entry"}}}},
             "/teach/api/submissions/{number}/me-too": {"post": {
-                "summary": "Add a note (and optionally a variant image + reference) to an existing item",
+                "summary": "Add a note (and optionally a variant image + hand traced SVG) to an existing item",
                 "parameters": number, "requestBody": {"content": {"multipart/form-data": {"schema": {
                     "type": "object", "properties": {
                         "meta": {"type": "string", "description": "JSON: {note, consent}"},
@@ -229,7 +229,7 @@ def openapi() -> dict:
             "/teach/api/queue": {"get": {"summary": "Public queue", "responses": {"200": {"description": "items"}}}},
             "/teach/api/manage/{id}": {
                 "get": {"summary": "Your own item (full)", "parameters": manage, "responses": {"200": {"description": "item"}}},
-                "patch": {"summary": "Answer a needs_info question (note and/or replacement reference SVG)",
+                "patch": {"summary": "Answer a needs_info question (note and/or replacement hand traced SVG)",
                           "parameters": manage, "responses": {"200": {"description": "updated"}}},
                 "delete": {"summary": "Delete your item (leaves a tombstone)", "parameters": manage,
                            "responses": {"200": {"description": "deleted"}}},

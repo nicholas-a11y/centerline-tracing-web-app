@@ -43,7 +43,7 @@ def _problem(status: int, field: str, code: str, message: str, hint: str = "", r
 def llms_txt_view():
     base = request.url_root.rstrip("/")
     text = ("# Centerline tracing web app\n\n"
-            "Teach collects hard tracing cases (a bitmap plus a hand-traced reference SVG) to improve the engine.\n\n"
+            "Teach collects hard tracing cases (a bitmap plus a hand traced SVG) to improve the engine.\n\n"
             f"- Spec: {base}/teach/spec\n- OpenAPI: {base}/teach/openapi.json\n")
     return Response(text, mimetype="text/plain")
 

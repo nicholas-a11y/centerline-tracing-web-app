@@ -1,7 +1,7 @@
 # Teach: submitting a hard tracing case
 
 Teach collects cases where the centerline tracer gets it wrong: a **bitmap** plus a
-**reference SVG** with the centerlines you expected, drawn by hand. Each case is scored
+**hand traced SVG** with the centerlines you expected, drawn by hand over the bitmap. Each case is scored
 against the live pipeline. Cases are reviewed by the maintainer and may become
 permanent regression tests in the project's repository.
 
@@ -12,7 +12,7 @@ Machine-readable versions: `/teach/openapi.json` (OpenAPI 3.1) and
 
 1. One problem per submission.
 2. Search the queue first (`/teach/queue`). If your case is already there, use "me too".
-3. The SVG must be registered to the bitmap. Best: trace over the original (cropped)
+3. The hand traced SVG must be registered to the bitmap. Best: trace over the original (cropped)
    image and keep the image in the exported SVG (in LightBurn you may disable the image
    layer's output; the image stays in the export). Otherwise make the SVG
    width/height/viewBox equal the bitmap's pixel size, with coordinates in pixels.
@@ -28,7 +28,7 @@ All `POST` endpoints take `multipart/form-data` with:
 | part | required | notes |
 |---|---|---|
 | `image` | yes | PNG or JPEG, at most 4 MB, 32–2048 px per side, at most 4 megapixels, single frame |
-| `reference` | yes | SVG, at most 512 KB **including any embedded image**, at most 200 shapes |
+| `reference` | yes | The hand traced SVG (the field keeps the name `reference`), at most 512 KB **including any embedded image**, at most 200 shapes |
 | `meta` | yes | JSON object, fields below |
 
 `meta` fields:
@@ -59,11 +59,11 @@ manage link.*
 | `POST /teach/api/validate` | dry run: validate and score; stores nothing |
 | `POST /teach/api/similar` | duplicate check only |
 | `POST /teach/api/submissions` | submit (201) |
-| `POST /teach/api/submissions/<number>/me-too` | `meta` = `{"note": "...", "consent": true}`, optionally with a variant `image` and `reference` |
+| `POST /teach/api/submissions/<number>/me-too` | `meta` = `{"note": "...", "consent": true}`, optionally with a variant `image` and hand traced SVG (`reference`) |
 | `GET /teach/api/queue`, `GET /teach/api/submissions/<number>` | public data |
 | `GET`/`PATCH`/`DELETE /teach/api/manage/<id>` | your own item; send the token from your manage link in `X-Teach-Manage-Token` |
 
-## The SVG
+## The hand traced SVG
 
 * SVG coordinates are **pixel edges**: the centre of pixel column 10 is x = 10.5.
 * Registration (how the SVG is placed on the bitmap), in order:

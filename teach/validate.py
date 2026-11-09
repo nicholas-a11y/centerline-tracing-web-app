@@ -1,4 +1,4 @@
-"""Teach validation: bitmap, reference SVG and form fields -> structured problems (design 9, 14.4)."""
+"""Teach validation: bitmap, hand traced SVG (field "reference") and form fields -> structured problems (design 9, 14.4)."""
 
 from __future__ import annotations
 
@@ -166,8 +166,8 @@ def validate_reference(data: bytes, bitmap_size: tuple[int, int], fld: str = "re
     from lessonkit.svg_reference import SvgReferenceError, read_reference_svg
 
     if not data:
-        raise Problems([Problem(fld, "field_missing", "No reference SVG was uploaded.",
-                                "Send the traced SVG as 'reference', with the traced image kept in the export.")])
+        raise Problems([Problem(fld, "field_missing",         "No hand traced SVG was uploaded.",
+                                        "Send the hand traced SVG as 'reference', with the traced image kept in the export.")])
     try:
         ref = read_reference_svg(data, bitmap_size, max_bytes=schema.MAX_SVG_BYTES, strict_image=True)
     except SvgReferenceError as exc:
@@ -374,7 +374,7 @@ def validate_submission(image: bytes | None, reference: bytes | None, meta_raw) 
         region, box_problems = validate_focus_box(fields.get("focus_box"), bitmap.width, bitmap.height)
         problems.extend(box_problems)
     elif not reference:
-        problems.append(Problem("reference", "field_missing", "No reference SVG was uploaded.", ""))
+        problems.append(Problem("reference", "field_missing", "No hand traced SVG was uploaded.", ""))
     if problems:
         raise Problems(problems)
     return Submission(fields=fields, bitmap=bitmap, reference=ref, region=region,

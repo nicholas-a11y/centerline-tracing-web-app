@@ -138,7 +138,7 @@
       if (r.overlay_png && r.overlay_png.indexOf("data:image/png;base64,") === 0) {
         var img = el("img");
         img.src = r.overlay_png;
-        img.alt = "Overlay: engine centerlines in red, your reference in green";
+        img.alt = "Overlay: engine centerlines in red, your hand traced SVG in green";
         out.appendChild(img);
       }
       if (r.post_fit_overlay_png && r.post_fit_overlay_png.indexOf("data:image/png;base64,") === 0) {
@@ -148,7 +148,7 @@
           ", worst p95 error " + pf.max_p95_px + " px" + (pf.passed === undefined ? "" : pf.passed ? " (pass)" : " (fail)")));
         var pimg = el("img");
         pimg.src = r.post_fit_overlay_png;
-        pimg.alt = "Overlay of the optimised SVG paths in red, your reference in green";
+        pimg.alt = "Overlay of the optimised SVG paths in red, your hand traced SVG in green";
         out.appendChild(pimg);
       }
     }
