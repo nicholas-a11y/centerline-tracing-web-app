@@ -4271,6 +4271,8 @@ def download_svg(session_id):
     except Exception as e:
         return f"Error generating download: {str(e)}", 500
 
+from teach import register_teach; register_teach(app)  # Teach (docs/teach/design.md); off unless TEACH_ENABLED
+
 if __name__ == '__main__':
     # Create templates directory if it doesn't exist
     os.makedirs('templates', exist_ok=True)
