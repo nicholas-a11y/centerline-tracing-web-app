@@ -1,0 +1,92 @@
+# Runs the lesson suite (tests/pipeline) and the light-engine port (tests/light_port)
+# under Python 3.11 (runtime.txt) and 3.12, then reports lesson differences between them.
+# Report-only comparison; never runs --record or --mark-failing-as-baseline.
+# Design reference: docs/teach/design.md, Appendix A.
+name: lessons
+
+on:
+  push:
+    branches: [main, test-suite-migration]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lessons-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11.13", "3.12"]
+    env:
+      PYTHONWARNINGS: "ignore::FutureWarning"
+      TEACH_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt "pytest>=8,<10"
+          pip freeze > pip-freeze.txt
+      - name: pytest tests/pipeline tests/light_port
+        run: >
+          python -m pytest tests/pipeline tests/light_port -q -rxX -p no:cacheprovider
+          --junitxml=junit.xml
+      - name: Lesson table
+        # exits 1 only if an *active* lesson fails; baseline lessons are reported, not failed
+        run: python -m tests.pipeline.run_lessons --json lessons.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: lessons-py${{ matrix.python-version }}
+          path: |
+            lessons.json
+            junit.xml
+            pip-freeze.txt
+
+  compare-python-versions:
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - name: Compare lesson results 3.11 vs 3.12 (report only)
+        run: |
+          python - <<'PY'
+          import json, pathlib, os
+          def load(v):
+              p = pathlib.Path(f"artifacts/lessons-py{v}/lessons.json")
+              return {r["id"]: r for r in json.loads(p.read_text())} if p.exists() else None
+          def norm(x):
+              if isinstance(x, dict):
+                  return {k: norm(v) for k, v in x.items() if k != "elapsed_ms"}
+              if isinstance(x, list):
+                  return [norm(v) for v in x]
+              return round(x, 3) if isinstance(x, float) else x
+          a, b = load("3.11.13"), load("3.12")
+          out = ["## Lesson results: Python 3.11 vs 3.12", ""]
+          if a is None or b is None:
+              out.append("One of the runs produced no lessons.json; see the test job.")
+          else:
+              diffs = [i for i in sorted(set(a) | set(b)) if norm(a.get(i)) != norm(b.get(i))]
+              out.append(f"{len(a)} lessons compared; {len(diffs)} differ (timings ignored).")
+              out += [f"- `{i}`: {a.get(i, {}).get('outcome')} vs {b.get(i, {}).get('outcome')}" for i in diffs]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n".join(out) + "\n")
+          print("\n".join(out))
+          PY
+      - name: Compare installed versions
+        run: diff artifacts/lessons-py3.11.13/pip-freeze.txt artifacts/lessons-py3.12/pip-freeze.txt || true
