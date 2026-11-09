@@ -313,10 +313,16 @@ def validate_focus_box(box, width: int, height: int) -> tuple[dict | None, list[
 
 
 def effective_params(settings: dict) -> dict:
-    from lessonkit.lesson import DEFAULT_PARAMS
+    """All ten whitelisted settings, explicitly, as the main UI's getParameters() sends them.
 
-    params = dict(DEFAULT_PARAMS)
-    params.update(settings or {})
+    Never rely on the app's own fallbacks: when a key is absent the server uses
+    source_smoothing 0, cubic_fit_tolerance 1.0 and curve fitting off, which differ
+    from the UI defaults. enable_curve_fitting is sent as its effective value
+    (post-fit enabled AND curve fitting ticked), like the UI.
+    """
+    params = schema.default_settings()
+    params.update({k: v for k, v in (settings or {}).items() if k in schema.SETTINGS})
+    params["enable_curve_fitting"] = bool(params["enable_post_fit_export"] and params["enable_curve_fitting"])
     return params
 
 

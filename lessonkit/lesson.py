@@ -29,6 +29,17 @@ DEFAULT_PARAMS = {
     "normalization_sensitivity": "medium",
 }
 
+# Allowed in lesson.json "params" but never injected into Lesson.params, so existing
+# lessons run exactly as before; values match the main UI defaults (templates/index.html).
+OPTIONAL_PARAMS = {
+    "enable_post_fit_export": False,
+    "source_smoothing": 70,
+    "enable_curve_fitting": False,
+    "cubic_fit_tolerance": 0.35,
+    "force_orthogonal_as_lines": False,
+}
+ALLOWED_PARAMS = (*DEFAULT_PARAMS, *OPTIONAL_PARAMS)
+
 DEFAULT_SCORING = {
     "region": None,                 # {"x0","y0","x1","y1"} in SVG pixel units, or null = whole image
     "tolerance_px": 1.0,            # p95 lateral error limit inside the region
@@ -102,9 +113,9 @@ def validate_meta(meta: dict, folder: Path | None = None) -> list[str]:
         errors.append(f"category must be one of {CATEGORIES}")
     if folder is not None and meta["id"] != folder.name:
         errors.append(f"id {meta['id']!r} must equal folder name {folder.name!r}")
-    unknown = set(meta.get("params") or {}) - set(DEFAULT_PARAMS)
+    unknown = set(meta.get("params") or {}) - set(ALLOWED_PARAMS)
     if unknown:
-        errors.append(f"unknown params {sorted(unknown)}; pinned params are {sorted(DEFAULT_PARAMS)}")
+        errors.append(f"unknown params {sorted(unknown)}; allowed params are {sorted(ALLOWED_PARAMS)}")
     region = (meta.get("scoring") or {}).get("region")
     if region is not None and not all(k in region for k in ("x0", "y0", "x1", "y1")):
         errors.append("scoring.region needs x0, y0, x1, y1")

@@ -177,6 +177,64 @@ def run_live(image, params: dict | None = None) -> PipelineResult:
     return result
 
 
+POST_FIT_SAMPLE_STEP_PX = 0.25
+
+
+def run_post_fit(image, params: dict | None = None) -> PipelineResult:
+    """Fitted geometry exactly as the Download SVG button produces it.
+
+    /upload -> /process_immediate (same settings as ``run_live``) -> GET /download_svg/<sid>
+    with include_image=0. With enable_post_fit_export on, /download_svg renders
+    ``session.initial_paths`` through create_svg_output with fit_optimized_paths=True
+    (source smoothing, optional cubic fitting). The SVG is read back with the safe reader
+    (curves sampled every 0.25 px into polylines); the writer's +0.5 pixel-centre offset
+    is undone by the reader.
+    """
+    from .svg_reference import read_reference_svg
+
+    mod = _app_module()
+    p = _merged_params(params)
+    p["enable_optimization"] = False
+    p["include_image"] = False
+    data, name = _read_bytes(image)
+    result = PipelineResult(route="download_svg")
+    client = mod.app.test_client()
+    sid = None
+    t0 = time.perf_counter()
+    try:
+        with _quiet():
+            sid, shape = _upload(client, data, name, p)
+            result.image_shape = shape[:2] if shape else None
+            body_params = {k: v for k, v in p.items() if k not in _UPLOAD_ONLY}
+            resp = client.post("/process_immediate", json={"session_id": sid, "parameters": body_params})
+            body = resp.get_json(silent=True) or {}
+            if not body.get("success"):
+                result.error = body.get("error") or f"HTTP {resp.status_code}"
+                return result
+            svg = client.get(f"/download_svg/{sid}?include_image=0")
+        if svg.status_code != 200:
+            result.error = f"/download_svg HTTP {svg.status_code}"
+            return result
+        h, w = result.image_shape
+        ref = read_reference_svg(svg.data, (w, h), max_bytes=len(svg.data) + 1,
+                                 max_elements=1_000_000, max_points=50_000_000,
+                                 sample_step_px=POST_FIT_SAMPLE_STEP_PX)
+        result.paths = [np.asarray(x, dtype=float) for x in ref.paths]
+        result.response_paths = result.paths
+        result.counts = {k: body.get(k) for k in ("initial_paths_count", "merged_paths_count", "valid_paths_count")}
+        result.counts["median_stroke_width_px"] = body.get("median_stroke_width_px")
+        result.counts["extraction_profile"] = body.get("extraction_profile")
+        result.counts["svg_paths"] = len(ref.paths)
+        result.counts["svg_bytes"] = len(svg.data)
+    except Exception as exc:
+        result.error = f"{type(exc).__name__}: {exc}"
+    finally:
+        result.elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        if sid:
+            _release(mod, sid)
+    return result
+
+
 def run_live_both(image, params: dict | None = None) -> dict[str, PipelineResult]:
     """Live path with pruning off and on."""
     base = dict(params or {})

@@ -32,6 +32,8 @@
       else if (kind === "string") s[inp.dataset.setting] = inp.value;
       else s[inp.dataset.setting] = inp.value.trim() === "" ? NaN : Number(inp.value);
     });
+    // Effective value, as the main app sends it: curve fitting only applies with path optimisation on.
+    if ("enable_curve_fitting" in s) s.enable_curve_fitting = !!(s.enable_curve_fitting && s.enable_post_fit_export);
     return s;
   }
 
@@ -138,6 +140,16 @@
         img.alt = "Overlay: engine centerlines in red, your reference in green";
         out.appendChild(img);
       }
+      if (r.post_fit_overlay_png && r.post_fit_overlay_png.indexOf("data:image/png;base64,") === 0) {
+        var pf = (r.other_variants || {}).post_fit || {};
+        out.appendChild(el("h3", "With path optimisation (the downloaded SVG)"));
+        out.appendChild(el("p", "Paths " + pf.path_count + ", lowest single-path coverage " + pf.min_single_coverage +
+          ", worst p95 error " + pf.max_p95_px + " px" + (pf.passed === undefined ? "" : pf.passed ? " (pass)" : " (fail)")));
+        var pimg = el("img");
+        pimg.src = r.post_fit_overlay_png;
+        pimg.alt = "Overlay of the optimised SVG paths in red, your reference in green";
+        out.appendChild(pimg);
+      }
     }
     if (body.result && body.result.matches) {
       out.appendChild(el("h3", body.result.matches.length ? "Similar items" : "No similar items found"));
@@ -179,5 +191,41 @@
   form.addEventListener("submit", function (ev) { ev.preventDefault(); });
   settingInputs.forEach(function (inp) { inp.addEventListener("change", updateSettingsLine); });
   document.getElementById("settings-reset").addEventListener("click", function () { writeSettings(settingDefaults); });
+
+  // Settings and image hash handed over from the main app in "#s=..." (read only here, never sent).
+  function settingSpecs() {
+    var specs = {};
+    settingInputs.forEach(function (inp) {
+      var kind = inp.dataset.kind;
+      specs[inp.dataset.setting] = kind === "string" ?
+        { kind: kind, options: Array.prototype.map.call(inp.options, function (o) { return o.value; }) } :
+        { kind: kind, min: Number(inp.min), max: Number(inp.max) };
+    });
+    return specs;
+  }
+
+  var handover = window.TeachFragment ? window.TeachFragment.parseSettingsFragment(window.location.hash, settingSpecs()) : null;
+  var expectedSha = null;
+  if (handover) {
+    writeSettings(handover.settings);
+    expectedSha = handover.imageSha256;
+    document.getElementById("settings-source").hidden = false;
+  }
+
+  function hex(buf) {
+    return Array.prototype.map.call(new Uint8Array(buf), function (b) { return ("0" + b.toString(16)).slice(-2); }).join("");
+  }
+
+  // A friendly warning only; never blocks submission.
+  document.getElementById("image").addEventListener("change", function () {
+    var warn = document.getElementById("mixup-warning");
+    warn.hidden = true;
+    var file = this.files[0];
+    if (!expectedSha || !file || !window.crypto || !window.crypto.subtle || !file.arrayBuffer) return;
+    file.arrayBuffer()
+      .then(function (buf) { return window.crypto.subtle.digest("SHA-256", buf); })
+      .then(function (digest) { warn.hidden = hex(digest) === expectedSha; })
+      .catch(function () { warn.hidden = true; });
+  });
   updateSettingsLine();
 })();

@@ -49,11 +49,16 @@ def data_url(png: bytes | None) -> str | None:
     return "data:image/png;base64," + base64.b64encode(png).decode("ascii") if png else None
 
 
-def public_result(worker: dict, registration: str | None, overlay_url: str | None) -> dict:
-    """The ``result`` block of a validate/submit response (design 14.4)."""
+def public_result(worker: dict, registration: str | None, overlay_url: str | None,
+                  post_fit_overlay_url: str | None = None) -> dict:
+    """The ``result`` block of a validate/submit response (design 14.4).
+
+    ``post_fit`` (only present when enable_post_fit_export was on) is reported under
+    ``other_variants`` with its own overlay; the outcome stays the prune_off variant.
+    """
     primary = (worker.get("variants") or {}).get(worker.get("variant") or "prune_off") or {}
     others = {k: v.get("summary") for k, v in (worker.get("variants") or {}).items() if k != "prune_off"}
-    return {
+    out = {
         "outcome": worker.get("outcome"),
         "passed": worker.get("outcome") == "pass",
         "variant": "prune_off",
@@ -69,6 +74,9 @@ def public_result(worker: dict, registration: str | None, overlay_url: str | Non
         "registration": registration,
         "overlay_png": overlay_url,
     }
+    if post_fit_overlay_url:
+        out["post_fit_overlay_png"] = post_fit_overlay_url
+    return out
 
 
 def result_entry(worker: dict) -> dict:
@@ -235,8 +243,9 @@ class TeachService:
         self.quota.check(ip, raw_bytes)
         worker = self.score(ip, sub)
         overlay, thumb = worker.pop("overlay_png", None), worker.pop("thumb_png", None)
+        post_overlay = worker.pop("post_fit_overlay_png", None)
         ref_json = json.dumps(sub.reference.as_json()).encode("utf-8")
-        total = raw_bytes + len(ref_json) + len(overlay or b"") + len(thumb or b"")
+        total = raw_bytes + len(ref_json) + len(overlay or b"") + len(thumb or b"") + len(post_overlay or b"")
         token = secrets.token_urlsafe(32)
         now = utc_now()
         f = sub.fields
@@ -284,13 +293,16 @@ class TeachService:
                 put(submission_key(sub_id, "overlay.png"), overlay, "image/png")
             if thumb:
                 put(submission_key(sub_id, "thumb.png"), thumb, "image/png")
+            if post_overlay:
+                put(submission_key(sub_id, "overlay_post_fit.png"), post_overlay, "image/png")
             self._save(meta)
         entry = self.public_entry(meta)
         self.notifier.event(number, meta["status"], entry.get("title"))
         if counts["submissions"] >= _global_cap() or self.quota.global_closed():
             self.notifier.urgent("global_cap")
         return {"number": number, "id": sub_id, "token": token, "status": meta["status"],
-                "result": public_result(worker, sub.reference.registration, data_url(overlay)),
+                "result": public_result(worker, sub.reference.registration, data_url(overlay),
+                                        data_url(post_overlay)),
                 "similar": matches}
 
     # ------------------------------------------------------------------ me too (10)
@@ -361,6 +373,9 @@ class TeachService:
         out["me_too_count"] = len(meta.get("me_too") or [])
         out["queue_url"] = f"/teach/q/{meta['number']}"
         out["overlay_png"] = data_url(overlay)
+        post_overlay = self.storage.get(submission_key(meta["id"], "overlay_post_fit.png"))
+        if post_overlay:
+            out["post_fit_overlay_png"] = data_url(post_overlay)
         out["can_answer"] = meta["status"] == "needs_info"
         return out
 
@@ -397,12 +412,15 @@ class TeachService:
             meta.setdefault("answers", []).append({"at": now, "note": note, "replaced_reference": bool(ref)})
             if ref is not None:
                 overlay, thumb = worker.pop("overlay_png", None), worker.pop("thumb_png", None)
+                post_overlay = worker.pop("post_fit_overlay_png", None)
                 self.storage.put(submission_key(meta["id"], "reference.raw.svg"), ref.raw, "text/plain")
                 self.storage.put_json(submission_key(meta["id"], "reference.json"), ref.as_json())
                 if overlay:
                     self.storage.put(submission_key(meta["id"], "overlay.png"), overlay, "image/png")
                 if thumb:
                     self.storage.put(submission_key(meta["id"], "thumb.png"), thumb, "image/png")
+                if post_overlay:
+                    self.storage.put(submission_key(meta["id"], "overlay_post_fit.png"), post_overlay, "image/png")
                 meta["reference"] = {"paths": len(ref.paths), "points": ref.points,
                                      "sha256_geometry": ref.sha256_geometry, "registration": ref.registration}
                 meta["results"].append(result_entry(worker))

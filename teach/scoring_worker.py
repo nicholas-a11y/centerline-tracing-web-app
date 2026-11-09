@@ -4,6 +4,8 @@ Worker: ``python -m teach.scoring_worker <job.json>`` (cwd = repo root, TEACH_EN
 It drives the live pipeline through ``lessonkit.runner.run_live_both`` and scores with
 ``lessonkit.scoring.score_paths``, the same steps as ``tests/pipeline/evaluate.py``,
 then writes ``result.json`` and ``overlay.png``/``thumb.png`` next to the job file.
+With ``enable_post_fit_export`` on it also scores a ``post_fit`` variant from
+``lessonkit.runner.run_post_fit`` (the Download SVG output) and writes ``overlay_post_fit.png``.
 
 Parent: ``ScoringQueue`` runs one job at a time with at most 3 waiting, at most one
 active-or-waiting job per client IP, and kills a worker after 30 s.
@@ -27,6 +29,7 @@ MAX_WAITING = 3
 RLIMIT_AS_BYTES = int(1.5 * 1024 ** 3)
 NICE = 10
 PRIMARY_VARIANT = "prune_off"
+POST_FIT_VARIANT = "post_fit"
 THUMB_MAX_PX = 256
 # Never hand secrets to the worker; it needs none of them.
 _SECRET_ENV = ("TEACH_ADMIN_TOKEN", "TEACH_ALERT_WEBHOOK_URL", "R2_ENDPOINT", "R2_BUCKET", "R2_ACCESS_KEY_ID",
@@ -90,13 +93,19 @@ def _record(name: str, res, score, graph: dict) -> dict:
     return rec
 
 
-def score_job(job: dict) -> tuple[dict, object, object]:
-    """Run the pipeline and score. Returns (result dict, overlay image, thumbnail image)."""
+def score_job(job: dict) -> tuple[dict, object, object, object]:
+    """Run the pipeline and score.
+
+    Returns (result dict, overlay image, thumbnail image, post-fit overlay image or None).
+    Variants prune_off and prune_on are always scored. ``post_fit`` is added only when
+    ``params["enable_post_fit_export"]`` is true: the SVG the Download button would
+    produce, read back with the safe reader and scored with the same rules.
+    """
     import numpy as np
     from PIL import Image
 
     from lessonkit.overlay import render_overlay
-    from lessonkit.runner import run_live_both
+    from lessonkit.runner import run_live_both, run_post_fit
     from lessonkit.scoring import graph_metrics, score_paths
 
     image_path = Path(job["image"])
@@ -105,7 +114,9 @@ def score_job(job: dict) -> tuple[dict, object, object]:
     scoring = job["scoring"]
     t0 = time.perf_counter()
     runs = run_live_both(image_path, job["params"])
-    variants, primary = {}, None
+    if (job.get("params") or {}).get("enable_post_fit_export"):
+        runs[POST_FIT_VARIANT] = run_post_fit(image_path, job["params"])
+    variants, primary, post_fit = {}, None, None
     for name, res in runs.items():
         if res.error:
             variants[name] = _record(name, res, None, {})
@@ -115,6 +126,8 @@ def score_job(job: dict) -> tuple[dict, object, object]:
         variants[name] = _record(name, res, sc, graph)
         if name == PRIMARY_VARIANT:
             primary = (res, sc, graph)
+        elif name == POST_FIT_VARIANT:
+            post_fit = (res, sc, graph)
     out = {"variants": variants, "engine_commit": engine_commit(),
            "elapsed_ms": round((time.perf_counter() - t0) * 1000.0, 1), "variant": PRIMARY_VARIANT}
     gray = np.asarray(Image.open(image_path).convert("L"), dtype=np.uint8)
@@ -134,7 +147,11 @@ def score_job(job: dict) -> tuple[dict, object, object]:
     else:
         thumb_src = overlay.copy()
     thumb_src.thumbnail((THUMB_MAX_PX, THUMB_MAX_PX))
-    return out, overlay, thumb_src
+    post_overlay = None
+    if post_fit is not None:
+        res, sc, graph = post_fit
+        post_overlay = render_overlay(gray, res.paths, reference, graph, region)
+    return out, overlay, thumb_src, post_overlay
 
 
 def worker_main(argv: list[str]) -> int:
@@ -146,9 +163,11 @@ def worker_main(argv: list[str]) -> int:
     out_dir = job_path.parent
     try:
         job = json.loads(job_path.read_text(encoding="utf-8"))
-        result, overlay, thumb = score_job(job)
+        result, overlay, thumb, post_overlay = score_job(job)
         overlay.save(out_dir / "overlay.png")
         thumb.save(out_dir / "thumb.png")
+        if post_overlay is not None:
+            post_overlay.save(out_dir / "overlay_post_fit.png")
     except Exception as exc:
         result = {"outcome": "error", "error": f"{type(exc).__name__}", "variants": {}}
     tmp = out_dir / "result.json.tmp"
@@ -230,7 +249,7 @@ class ScoringQueue:
             except subprocess.TimeoutExpired:
                 return {"outcome": "timeout", "timed_out": True, "variants": {}, "engine_commit": engine_commit(),
                         "elapsed_ms": round((time.perf_counter() - t0) * 1000.0, 1),
-                        "overlay_png": None, "thumb_png": None}
+                        "overlay_png": None, "thumb_png": None, "post_fit_overlay_png": None}
             result_path = job_dir / "result.json"
             if not result_path.exists():
                 result = {"outcome": "error", "error": "worker produced no result", "variants": {}}
@@ -238,7 +257,8 @@ class ScoringQueue:
                 result = json.loads(result_path.read_text(encoding="utf-8"))
             result.setdefault("timed_out", False)
             result.setdefault("engine_commit", engine_commit())
-            for key, name in (("overlay_png", "overlay.png"), ("thumb_png", "thumb.png")):
+            for key, name in (("overlay_png", "overlay.png"), ("thumb_png", "thumb.png"),
+                              ("post_fit_overlay_png", "overlay_post_fit.png")):
                 p = job_dir / name
                 result[key] = p.read_bytes() if p.exists() else None
             return result

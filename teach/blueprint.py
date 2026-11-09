@@ -194,12 +194,14 @@ def create_blueprint(cfg, storage, scorer=None, alert_sender=None, notifier=None
             return _busy(exc)
         overlay = worker.pop("overlay_png", None)
         worker.pop("thumb_png", None)
+        post_overlay = worker.pop("post_fit_overlay_png", None)
         warnings = list(sub.warnings)
         if worker.get("outcome") == "timeout":
             warnings.append(Problem("request", "scoring_timeout", "Scoring did not finish within 30 s.",
                                     "Crop to the problem area."))
         return _response(True, warnings=warnings,
-                         result=public_result(worker, sub.reference.registration, data_url(overlay)))
+                         result=public_result(worker, sub.reference.registration, data_url(overlay),
+                                              data_url(post_overlay)))
 
     @bp.post("/api/similar")
     def api_similar():

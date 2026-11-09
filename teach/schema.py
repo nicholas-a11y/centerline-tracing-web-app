@@ -24,12 +24,20 @@ TEXT_FIELDS = {
 }
 
 SETTINGS = {
-    # name: JSON-schema fragment; same whitelist and ranges as the main UI
+    # name: JSON-schema fragment; same whitelist, ranges and defaults as the main UI
+    # (templates/index.html). Teach always passes all ten explicitly, because the app's
+    # server-side fallbacks differ from the UI defaults (validate.effective_params).
     "dark_threshold": {"type": "number", "minimum": 0.05, "maximum": 0.8, "default": 0.2},
     "min_path_length": {"type": "integer", "minimum": 1, "maximum": 20, "default": 2},
     "enable_pruning": {"type": "boolean", "default": False},
     "normalization_mode": {"type": "string", "enum": ["auto", "on", "off"], "default": "auto"},
     "normalization_sensitivity": {"type": "string", "enum": ["low", "medium", "high"], "default": "medium"},
+    "enable_post_fit_export": {"type": "boolean", "default": False},
+    "source_smoothing": {"type": "number", "minimum": 0, "maximum": 100, "default": 70},
+    "enable_curve_fitting": {"type": "boolean", "default": False,
+                             "description": "Effective value: only applies when enable_post_fit_export is true."},
+    "cubic_fit_tolerance": {"type": "number", "minimum": 0.35, "maximum": 4.0, "default": 0.35},
+    "force_orthogonal_as_lines": {"type": "boolean", "default": False},
 }
 
 SETTING_UI = {
@@ -39,6 +47,11 @@ SETTING_UI = {
     "enable_pruning": ("Pruning", None),
     "normalization_mode": ("Normalisation", None),
     "normalization_sensitivity": ("Normalisation sensitivity", None),
+    "enable_post_fit_export": ("Path optimisation", None),
+    "source_smoothing": ("Source smoothing", 1),
+    "enable_curve_fitting": ("Curve fitting", None),
+    "cubic_fit_tolerance": ("Cubic fit tolerance", 0.05),
+    "force_orthogonal_as_lines": ("Orthogonal paths as lines", None),
 }
 
 

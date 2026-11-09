@@ -6,6 +6,16 @@
 The case is scored against the live engine, reviewed, and may become a permanent test.
 Agents: read the <a href="{{ url_for('teach.spec') }}">spec</a> or the <a href="{{ url_for('teach.openapi') }}">OpenAPI document</a>.</p>
 
+<section aria-labelledby="how-h">
+  <h2 id="how-h">How to prepare a case</h2>
+  <ol>
+    <li>In the main app, use the crop tools to crop to the problem area, leaving a little context around it.</li>
+    <li>Tick "Teach" in the app and download the cropped image.</li>
+    <li>In your drawing program, trace over that original (cropped) image: one open path per stroke, along its centre.</li>
+    <li>Keep the image in the exported SVG (you can turn off the image layer's output, but do not hide or delete it).</li>
+  </ol>
+</section>
+
 <section aria-labelledby="rules-h">
   <h2 id="rules-h">Rules</h2>
   <ol>
@@ -23,6 +33,7 @@ Agents: read the <a href="{{ url_for('teach.spec') }}">spec</a> or the <a href="
       <legend>Files</legend>
       <p><label for="image">Bitmap (PNG or JPEG, up to {{ (limits.MAX_IMAGE_BYTES // 1048576) }} MB, 32–2048 px per side)</label>
         <input id="image" name="image" type="file" accept="image/png,image/jpeg" required></p>
+      <p id="mixup-warning" class="warn" role="status" hidden>This doesn't look like the cropped image from the app.</p>
       <p><label for="reference">Reference SVG (up to {{ (limits.MAX_SVG_BYTES // 1024) }} KB including any embedded image)</label>
         <input id="reference" name="reference" type="file" accept=".svg,image/svg+xml" required></p>
     </fieldset>
@@ -36,6 +47,7 @@ Agents: read the <a href="{{ url_for('teach.spec') }}">spec</a> or the <a href="
     <fieldset>
       <legend>Settings</legend>
       <p>Settings used: <span id="settings-used">{{ settings_line }}</span></p>
+      <p id="settings-source" hidden>These settings came from the app.</p>
       <details id="advanced">
         <summary>Advanced: change the settings</summary>
         <p>These default to the main app's defaults. Use the same values you used in the app.</p>
@@ -78,4 +90,5 @@ Agents: read the <a href="{{ url_for('teach.spec') }}">spec</a> or the <a href="
   </details>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('teach.static', filename='teach/teach.js') }}"></script>{% endblock %}
+{% block scripts %}<script src="{{ url_for('teach.static', filename='teach/fragment.js') }}"></script>
+<script src="{{ url_for('teach.static', filename='teach/teach.js') }}"></script>{% endblock %}
