@@ -1,5 +1,5 @@
-# Runs the lesson suite (tests/pipeline) and the light-engine port (tests/light_port)
-# under Python 3.11 (runtime.txt) and 3.12, then reports lesson differences between them.
+# Runs the lesson suite (tests/pipeline), the light-engine port (tests/light_port) and the Teach
+# tests (tests/teach) under Python 3.11 (runtime.txt) and 3.12, then reports lesson differences.
 # Report-only comparison; never runs --record or --mark-failing-as-baseline.
 # Design reference: docs/teach/design.md, Appendix A.
 name: lessons
@@ -50,6 +50,8 @@ jobs:
         run: >
           python -m pytest tests/pipeline tests/light_port -q -rxX -p no:cacheprovider
           --junitxml=junit.xml
+      - name: pytest tests/teach (Teach feature; flag off in the app, enabled per test)
+        run: python -m pytest tests/teach -q -rs -p no:cacheprovider
       - name: Lesson table
         # exits 1 only if an *active* lesson fails; baseline lessons are reported, not failed
         run: python -m tests.pipeline.run_lessons --json lessons.json
