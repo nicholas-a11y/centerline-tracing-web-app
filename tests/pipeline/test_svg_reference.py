@@ -303,9 +303,31 @@ def test_stored_aspect_mismatch_rejected():
     assert exc.value.code == "svg_bitmap_mismatch"
 
 
-def test_stored_aspect_within_one_percent_warns_only():
+def test_stored_height_within_one_px_warns_only():
+    """1000x995 scaled to a 100 px width is 99.5 px tall: within 1 px of 100."""
     ref = read_reference_svg(_framed(_png_bytes(1000, 995)), (100, 100))
     assert ref.frame["stored_size"] == [1000, 995] and len(ref.warnings) == 1
+
+
+@pytest.mark.parametrize("stored, bitmap, ok", [
+    ((256, 256), (300, 300), True),     # same aspect, different pixel size: warning only
+    ((300, 300), (256, 256), True),
+    ((1000, 985), (50, 50), True),      # 1.5% aspect difference but scaled height 49.25 px: within 1 px
+    ((500, 496), (1000, 1000), False),  # 0.8% aspect difference but scaled height 992 px: 8 px off
+    ((100, 39), (256, 100), True),      # scaled height 99.84 px
+    ((256, 255), (256, 256), True),     # exactly 1 px off
+    ((256, 254), (256, 256), False),    # 2 px off
+])
+def test_stored_size_scaled_height_rule(stored, bitmap, ok):
+    svg = _framed(_png_bytes(*stored), frame=bitmap)
+    if ok:
+        ref = read_reference_svg(svg, bitmap)
+        assert ref.frame["stored_size"] == list(stored)
+        assert len(ref.warnings) == (0 if stored == bitmap else 1)
+    else:
+        with pytest.raises(SvgReferenceError) as exc:
+            read_reference_svg(svg, bitmap)
+        assert exc.value.code == "svg_bitmap_mismatch"
 
 
 def test_stored_size_read_from_header_only():
@@ -351,6 +373,33 @@ def test_unreadable_stored_size_warns(href, reason):
     ref = read_reference_svg(raw, (100, 100))
     assert ref.frame["stored_size"] is None
     assert any("Could not check" in w and reason in w for w in ref.warnings)
+
+
+@pytest.mark.parametrize("href, reason", [
+    (_PNG_STUB, "malformed"),
+    ("x.png", "linked"),
+    ("data:image/png,%89PNG", "not base64"),
+    ("data:image/gif;base64,R0lGODlhAQABAAAAACw=", "readable header"),
+])
+def test_strict_image_unreadable_is_error(href, reason):
+    raw = (f'<svg xmlns="http://www.w3.org/2000/svg" {_XLINK} width="100" height="100">'
+           f'<image width="100" height="100" xlink:href="{href}"/><path d="M0 5 L10 5"/></svg>').encode()
+    with pytest.raises(SvgReferenceError, match=reason) as exc:
+        read_reference_svg(raw, (100, 100), strict_image=True)
+    assert exc.value.code == "svg_image_unreadable"
+
+
+def test_strict_image_accepts_readable_png_and_jpeg():
+    ref = read_reference_svg(_framed(_png_bytes(100, 100)), (100, 100), strict_image=True)
+    assert ref.frame["stored_format"] == "png" and ref.warnings == []
+    ref = read_reference_svg(_framed(_jpeg_bytes(100, 100), "image/jpeg"), (100, 100), strict_image=True)
+    assert ref.frame["stored_format"] == "jpeg"
+
+
+def test_strict_image_does_not_require_an_image():
+    """Strict mode applies to an <image> that is present; border-rect and size-match still work."""
+    ref = read_reference_svg(_svg('<path d="M0 5 L10 5"/>'), (100, 100), strict_image=True)
+    assert ref.alignment == "size-match"
 
 
 def test_border_rect_through_transform():

@@ -99,13 +99,16 @@ stdlib + numpy only. It never calls `extract_manual_centerlines_from_svg`.
      * **Stored-size check:** the embedded image's own width/height is read from
        its header only (PNG `IHDR`, or JPEG `SOF` within the first 256 KB of
        decoded base64). Each side must be 1..16384 px
-       (`svg_image_dimensions`). If its aspect ratio differs from the bitmap's
-       by more than 1 % the SVG was traced over a different picture
-       (`svg_bitmap_mismatch`). The same aspect ratio but a different pixel size
+       (`svg_image_dimensions`). The stored size is scaled to the bitmap's
+       width; if the resulting height differs from the bitmap's height by more
+       than 1 px, the SVG was traced over a different picture
+       (`svg_bitmap_mismatch`). A different pixel size that passes this check
        (e.g. a 256×256 trace checked against a 300×300 bitmap) is a **warning**,
        because the frame alone would fit any bitmap of that shape. A linked,
        non-base64, non-PNG/JPEG or unreadable image gives a "could not check"
-       warning and registration still uses the frame.
+       warning and registration still uses the frame. With
+       `read_reference_svg(..., strict_image=True)` (what Teach uses) it is the
+       error `svg_image_unreadable` instead; local tooling keeps the warning.
   2. `border-rect`: a `rect` marked `border` (through its transforms).
   3. `size-match`: root `width`/`height` in px (or unitless), or the `viewBox`
      size, equal to the bitmap. A `mm`/`in`/`pt` size alone is never trusted,

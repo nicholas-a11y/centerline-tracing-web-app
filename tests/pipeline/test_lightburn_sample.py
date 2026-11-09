@@ -45,6 +45,15 @@ def test_registered_by_image_frame():
     assert ref.warnings == []
 
 
+@pytest.mark.parametrize("sample", [SAMPLE, FADED_SAMPLE], ids=["original", "faded"])
+def test_samples_pass_strict_image_mode(sample):
+    """Teach reads SVGs with strict_image=True; both real LightBurn exports must pass it unchanged."""
+    strict = read_reference_svg(sample, (256, 256), strict_image=True)
+    loose = read_reference_svg(sample, (256, 256))
+    assert strict.warnings == [] and strict.frame == loose.frame
+    assert all(np.array_equal(a, b) for a, b in zip(strict.paths, loose.paths))
+
+
 def test_wrong_bitmap_same_aspect_warns():
     """The frame alone fits any square bitmap; the PNG header (256x256) flags a 300x300 bitmap."""
     ref = read_reference_svg(SAMPLE, (300, 300))

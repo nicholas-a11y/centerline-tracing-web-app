@@ -462,16 +462,18 @@ scikit-image.
      * **Stored-size check (header only):** the image's stored width/height is read
        from the PNG `IHDR` or JPEG `SOF` header (at most the first 256 KB of the
        base64 payload is decoded to find it; pixels are never decoded), with each
-       side capped at 16384 px (`svg_image_dimensions`). An aspect ratio more than
-       1 % off the bitmap's is an error (`svg_bitmap_mismatch`: traced over a
-       different picture). The same aspect ratio with a different pixel size is a
-       **warning** shown to the submitter, because the frame alone fits any bitmap
-       of the same shape. Linked, non-base64 or non-PNG/JPEG images give a "could
-       not check" warning.
+       side capped at 16384 px (`svg_image_dimensions`). The stored size is scaled
+       to the bitmap's width; a resulting height more than 1 px off the bitmap's
+       height is an error (`svg_bitmap_mismatch`: traced over a different picture).
+       A different pixel size that passes this check is a **warning** shown to the
+       submitter, because the frame alone fits any bitmap of the same shape.
+       Linked, non-base64, non-PNG/JPEG or unreadable images give a "could not
+       check" warning in local tooling; Teach reads with `strict_image=True`, which
+       makes them the error `svg_image_unreadable`.
      * Errors: `svg_image_rotated` (the rectangle is not axis-aligned after
        transforms), `svg_image_aspect` (its aspect ratio differs from the bitmap's by
        more than 1 %), `svg_multiple_images`, `svg_bitmap_mismatch`,
-       `svg_image_dimensions`.
+       `svg_image_dimensions`, `svg_image_unreadable` (strict mode only).
   2. **Border rectangle:** a `rect` with `id`, `class` or `data-role` = `border`
      spanning the image.
   3. **Size match:** `width`/`height`/`viewBox` equal to the bitmap's pixel size.
@@ -750,7 +752,7 @@ Error codes include:
 * SVG: `svg_too_large`, `svg_doctype`, `svg_parse`, `svg_use_unsupported`,
   `svg_transform_invalid`, `svg_units_unsupported`, `svg_no_registration`,
   `svg_multiple_images`, `svg_image_rotated`, `svg_image_aspect`, `svg_bitmap_mismatch`,
-  `svg_image_dimensions`, `svg_no_geometry`,
+  `svg_image_dimensions`, `svg_image_unreadable`, `svg_no_geometry`,
   `svg_too_many_elements`;
 * fields: `field_missing`, `field_too_long`, `param_out_of_range`, `consent_required`;
 * limits and duplicates: `duplicate_exact`, `rate_limited` (with `retry_after_s`),

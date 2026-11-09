@@ -15,9 +15,12 @@ Supported:
          transforms, is the bitmap's full pixel frame in the bitmap's upright
          orientation (LightBurn exports). Root width/height units and the
          viewBox are not used. The embedded pixel data is never decoded; only
-         the PNG IHDR / JPEG SOF header is read for its stored width/height. An
-         aspect ratio more than 1% off the bitmap's is ``svg_bitmap_mismatch``;
-         a different pixel size with the same aspect ratio is a warning.
+         the PNG IHDR / JPEG SOF header is read for its stored width/height.
+         Scaled to the bitmap's width, a stored height more than 1 px off the
+         bitmap's is ``svg_bitmap_mismatch``; a different pixel size that passes
+         that check is a warning. An image whose size cannot be read (linked,
+         not base64, not PNG/JPEG, malformed) is a warning, or the error
+         ``svg_image_unreadable`` with ``strict_image=True`` (used by Teach).
       2. ``border-rect``: a <rect> marked id/class/data-role="border".
       3. ``size-match``: width/height in CSS px, or the viewBox, equal to the
          bitmap's pixel size.
@@ -45,6 +48,7 @@ MAX_SAMPLED_POINTS = 200_000
 MAX_TREE_DEPTH = 64
 SAMPLE_STEP_PX = 0.5
 FRAME_ASPECT_TOLERANCE = 0.01
+STORED_HEIGHT_TOLERANCE_PX = 1.0  # embedded image scaled to the bitmap's width must match its height to 1 px
 MAX_EMBEDDED_IMAGE_DIM = 16384    # cap on the width/height an embedded image header may declare
 EMBEDDED_HEADER_BYTES = 256 * 1024  # bytes of an embedded image decoded from base64 to find its header
 
@@ -569,10 +573,15 @@ def _embedded_image_size(elem: ET.Element) -> tuple[str, int, int] | str:
     return dims
 
 
-def _check_stored_size(img: ET.Element, bw: float, bh: float, warnings: list[str]) -> dict:
+def _check_stored_size(img: ET.Element, bw: float, bh: float, warnings: list[str],
+                       strict_image: bool = False) -> dict:
     """Compare the embedded image's stored pixel size with the bitmap's (header only)."""
     info = _embedded_image_size(img)
     if isinstance(info, str):
+        if strict_image:
+            raise SvgReferenceError(
+                f"Could not check the embedded image against the bitmap: {info}. Keep the bitmap embedded "
+                "in the export as a PNG or JPEG (base64), not linked.", "svg_image_unreadable")
         warnings.append(f"Could not check the embedded image against the bitmap: {info}.")
         return {"stored_format": None, "stored_size": None}
     fmt, sw, sh = info
@@ -580,14 +589,15 @@ def _check_stored_size(img: ET.Element, bw: float, bh: float, warnings: list[str
         raise SvgReferenceError(
             f"The embedded {fmt.upper()} declares {sw}x{sh} px; each side must be 1..{MAX_EMBEDDED_IMAGE_DIM}.",
             "svg_image_dimensions")
-    off = abs((sw / sh) / (bw / bh) - 1.0)
-    if off > FRAME_ASPECT_TOLERANCE:
+    scaled_h = sh * bw / sw
+    if abs(scaled_h - bh) > STORED_HEIGHT_TOLERANCE_PX:
         raise SvgReferenceError(
-            f"The embedded image is {sw}x{sh} px but the bitmap is {bw:g}x{bh:g} px (aspect ratio differs "
-            f"by {off:.1%}); the SVG was traced over a different image.", "svg_bitmap_mismatch")
+            f"The embedded image is {sw}x{sh} px but the bitmap is {bw:g}x{bh:g} px: scaled to the bitmap's "
+            f"width it would be {scaled_h:.1f} px tall, not {bh:g}; the SVG was traced over a different image.",
+            "svg_bitmap_mismatch")
     if (sw, sh) != (int(bw), int(bh)):
         warnings.append(f"The embedded image is {sw}x{sh} px but the bitmap is {bw:g}x{bh:g} px (same aspect "
-                        "ratio); check that the SVG was traced over this bitmap.")
+                        "ratio to within 1 px); check that the SVG was traced over this bitmap.")
     return {"stored_format": fmt, "stored_size": [sw, sh]}
 
 
@@ -645,12 +655,14 @@ def read_reference_svg(
     max_elements: int = MAX_GEOMETRY_ELEMENTS,
     max_points: int = MAX_SAMPLED_POINTS,
     sample_step_px: float = SAMPLE_STEP_PX,
+    strict_image: bool = False,
 ) -> SvgReference:
     """Parse reference centerlines from an SVG that is registered to a bitmap.
 
     ``bitmap_size`` is (width, height) in pixels. Registration order: exactly one
     ``<image>`` (its rendered rectangle is the bitmap frame), a border rect, or a
-    size match (see the module docstring).
+    size match (see the module docstring). With ``strict_image`` an ``<image>``
+    whose stored size cannot be read from its header is an error, not a warning.
     """
     if isinstance(source, (bytes, bytearray)):
         raw = bytes(source)
@@ -717,7 +729,7 @@ def read_reference_svg(
         frame = {"x0": float(lo[0]), "y0": float(lo[1]), "x1": float(hi[0]), "y1": float(hi[1]),
                  "flip_x": bool(ctm.m[0, 0] < 0), "flip_y": bool(ctm.m[1, 1] < 0),
                  "href": _href_kind(img)}
-        frame.update(_check_stored_size(img, bw, bh, warnings))
+        frame.update(_check_stored_size(img, bw, bh, warnings, strict_image))
         if border:
             warnings.append("Border rectangle ignored: the <image> placement frame is used for registration.")
     elif border:
